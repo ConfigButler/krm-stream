@@ -13,3 +13,7 @@ packages/*/dist/
 
 # Editor scratch
 *.local.*
+
+# Playwright (examples/vanilla-browser) — the browser rung of the e2e ladder
+test-results/
+playwright-report/

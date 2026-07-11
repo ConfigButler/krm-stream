@@ -36,7 +36,9 @@ import (
 func main() {
 	addr := flag.String("addr", "127.0.0.1:8080", "address to listen on")
 	corpusDir := flag.String("corpus", filepath.Join("..", "conformance"), "path to the conformance/ directory")
-	pace := flag.Duration("pace", 0, "delay between events — a human watching a status roll out wants >0")
+	pace := flag.Duration("pace", 0, "default delay between events (override per request with ?pace=400ms)")
+	static := flag.String("static", "", "directory to serve at / — the browser example")
+	dist := flag.String("dist", "", "directory to serve at /krm-stream/ — the built, dependency-free ESM")
 	flag.Parse()
 
 	corpus, err := gateway.LoadCorpus(*corpusDir)
@@ -48,6 +50,23 @@ func main() {
 	mux.HandleFunc("/resource-stream/v1", stream(corpus, *pace))
 	mux.HandleFunc("/fixtures", list(corpus))
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { _, _ = fmt.Fprintln(w, "ok") })
+
+	// The example and the library are served from the SAME ORIGIN as the stream, deliberately.
+	//
+	// Not for convenience: same-origin is the deployment the protocol is specified around (spec §7 —
+	// native EventSource cannot send an Authorization header, so a v1 gateway MUST support same-origin
+	// session cookies as its baseline). Serving the demo from a second port would mean CORS, which
+	// would mean the demo proves something we do not ship.
+	//
+	// /krm-stream/ is the BUILT output, unbundled. The browser fetches index.js, which imports
+	// ./store.js, which imports ./merge.js… If any of that needed a bundler, this page would be blank —
+	// which makes the example the only real test of the constraint the whole library is designed around.
+	if *dist != "" {
+		mux.Handle("/krm-stream/", http.StripPrefix("/krm-stream/", http.FileServer(http.Dir(*dist))))
+	}
+	if *static != "" {
+		mux.Handle("/", http.FileServer(http.Dir(*static)))
+	}
 
 	srv := &http.Server{
 		Addr:    *addr,
@@ -97,11 +116,21 @@ func stream(corpus gateway.Corpus, pace time.Duration) http.HandlerFunc {
 			return
 		}
 
+		// Per-request pacing. The automated suites want the stream as fast as the socket will carry it;
+		// a human — and a browser test that needs to type into a field BEFORE the server changes it
+		// underneath them — wants it slow. Same server, both.
+		delay := pace
+		if v := r.URL.Query().Get("pace"); v != "" {
+			if d, err := time.ParseDuration(v); err == nil && d >= 0 && d < 10*time.Second {
+				delay = d
+			}
+		}
+
 		gw := &gateway.Gateway{
 			Auth:       gateway.AllowAll{},
 			Projection: f.Projection,
 			Clients: func(string, gateway.Principal) (gateway.Backend, error) {
-				return paced{backend, pace}, nil
+				return paced{backend, delay}, nil
 			},
 		}
 

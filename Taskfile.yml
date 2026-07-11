@@ -104,6 +104,28 @@ tasks:
 
         cd {{.CLIENT_DIR}} && REPLAY_URL=http://{{.REPLAY_ADDR}} node e2e/wire.ts
 
+  e2e-browser:
+    desc: "End to end in a REAL browser: native EventSource, unbundled ESM, no cluster."
+    deps: [fixtures]
+    dir: examples/vanilla-browser
+    cmds:
+      # The only place the library's central promise is actually tested: that the published ESM
+      # imports in a browser with no bundler. Node importing it proves nothing — Node is not a browser.
+      # Playwright lives in the EXAMPLE's package, so the library keeps its three devDependencies.
+      - npm install --no-audit --no-fund
+      - npx playwright install chromium --with-deps
+      - npx playwright test {{.CLI_ARGS}}
+
+  demo:
+    desc: "Serve the browser demo — watch a status reconcile while you edit spec. No cluster."
+    deps: [build-client]
+    cmds:
+      - |
+        echo "→ http://127.0.0.1:8100/?fixture=status-only-churn&pace=800ms"
+        echo "  (also: conflict-and-converge, secret-redaction, edit-vs-unrelated-change — /fixtures lists them)"
+        cd gateway && go run ./cmd/replay --addr 127.0.0.1:8100 --corpus ../conformance \
+          --static ../examples/vanilla-browser --dist ../packages/krm-stream/dist
+
   # -------------------------------------------------------------------- lint --
   lint:
     desc: "Vet + lint both languages."

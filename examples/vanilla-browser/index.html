@@ -1,0 +1,217 @@
+<!doctype html>
+<!--
+  examples/vanilla-browser — watch `status` reconcile, live, while you edit `spec`.
+
+  No framework. No bundler. No build step for THIS page. One <script type="module"> that imports the
+  library's built ESM straight off the server:
+
+      import { LiveResourceStore, connectWithEventSource } from "/krm-stream/index.js";
+
+  That import is the whole constraint the library is designed around, and this page is the only place
+  it is really tested: the browser fetches index.js, which imports ./store.js, which imports
+  ./merge.js, and so on. If any of it needed a bundler, this page would simply be blank.
+
+  It uses NATIVE EventSource — not fetch — because that is the same-origin session-cookie path a v1
+  gateway must support (spec §7), and because EventSource's automatic reconnect is a behaviour no
+  in-process test can exercise.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>krm-stream — live KRM</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body {
+        font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+        margin: 0; padding: 2rem; max-width: 60rem;
+      }
+      h1 { font-size: 1rem; margin: 0 0 .25rem; }
+      .sub { opacity: .6; margin: 0 0 1.5rem; }
+      section { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; padding: 1rem; margin-bottom: 1rem; }
+      h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; opacity: .6; margin: 0 0 .75rem; }
+      table { border-collapse: collapse; width: 100%; }
+      td { padding: .25rem .5rem; vertical-align: top; }
+      td.k { opacity: .6; white-space: nowrap; width: 1%; }
+      input { font: inherit; padding: .2rem .4rem; border-radius: 4px; border: 1px solid color-mix(in srgb, currentColor 30%, transparent); background: transparent; color: inherit; width: 12rem; }
+      input:disabled { opacity: .5; cursor: not-allowed; }
+      pre { margin: 0; white-space: pre-wrap; }
+
+      /* The point of the whole exercise: read-only regions are NOT ignored — they follow the server
+         live and highlight what moved. */
+      @keyframes flash { from { background: #fde68a; color: #000; } to { background: transparent; } }
+      .flash { animation: flash 1.2s ease-out; }
+
+      .badge { font-size: .7rem; padding: .1rem .4rem; border-radius: 999px; margin-left: .4rem; }
+      .dirty { background: #2563eb; color: #fff; }
+      .conflict { background: #dc2626; color: #fff; }
+      .readonly { background: color-mix(in srgb, currentColor 15%, transparent); }
+      #status-line { opacity: .6; }
+    </style>
+  </head>
+  <body>
+    <h1>krm-stream</h1>
+    <p class="sub">
+      A live, honest window onto Kubernetes resources. <span id="status-line">connecting…</span>
+    </p>
+
+    <section>
+      <h2>status <span class="badge readonly">read-only · follows the server · flashes</span></h2>
+      <table id="status"><tbody data-testid="status-body"></tbody></table>
+    </section>
+
+    <section>
+      <h2>spec / data <span class="badge readonly">editable · three-way merged</span></h2>
+      <table id="editable"><tbody data-testid="editable-body"></tbody></table>
+    </section>
+
+    <section>
+      <h2>patch — RFC 7386, editable changes only</h2>
+      <pre data-testid="patch">null</pre>
+    </section>
+
+    <script type="module">
+      // THE import under test. Unbundled, multi-file, straight from the server.
+      import { LiveResourceStore, connectWithEventSource } from "/krm-stream/index.js";
+
+      const params = new URLSearchParams(location.search);
+      const fixture = params.get("fixture") ?? "status-only-churn";
+      const pace = params.get("pace") ?? "600ms";
+
+      const store = new LiveResourceStore();
+      const statusBody = document.querySelector('[data-testid="status-body"]');
+      const editableBody = document.querySelector('[data-testid="editable-body"]');
+      const patchOut = document.querySelector('[data-testid="patch"]');
+      const statusLine = document.getElementById("status-line");
+
+      // A path is a segment ARRAY. Encode it structurally for a DOM id — never by joining with a
+      // separator, which is the R-ID bug this library exists to have already fixed.
+      const key = (path) => JSON.stringify(path);
+
+      // Paths the server just moved. `flashed` is an OUTPUT of applying an event, not stored state:
+      // the host highlights them and forgets them.
+      let pending = new Set();
+
+      connectWithEventSource(`/resource-stream/v1?fixture=${fixture}&pace=${pace}`, store, {
+        onChange: (flashed) => {
+          for (const p of flashed) pending.add(key(p));
+          render();
+        },
+        onSynced: () => { statusLine.textContent = "synced — live"; },
+        onError: (code, message, terminal) => {
+          statusLine.textContent = `${code}${terminal ? " (terminal)" : ""}: ${message}`;
+        },
+      });
+
+      store.subscribe(render);
+
+      function render() {
+        const id = store.ids()[0];
+        if (!id) {
+          statusBody.replaceChildren();
+          editableBody.replaceChildren();
+          patchOut.textContent = "null";
+          return;
+        }
+
+        const server = store.server(id);
+        const draft = store.draft(id);
+        const conflicts = new Map(store.conflicts(id).map((c) => [key(c.path), c.theirs]));
+
+        // ---- status: whatever the object actually has. A ConfigMap has none, and that is fine.
+        statusBody.replaceChildren(
+          ...leaves(server.status ?? {}, ["status"]).map(([path, value]) =>
+            row(path, String(value), { editable: false }),
+          ),
+        );
+        if (!server.status) {
+          const tr = document.createElement("tr");
+          tr.append(cell("this kind has no status — and that is not an error", "k"));
+          statusBody.replaceChildren(tr);
+        }
+
+        // ---- editable: spec (nested) and/or data (a root map — the ConfigMap/Secret exception).
+        const regions = [];
+        if (draft.spec) regions.push(...leaves(draft.spec, ["spec"]));
+        if (draft.data) regions.push(...leaves(draft.data, ["data"]));
+
+        editableBody.replaceChildren(
+          ...regions.map(([path, value]) =>
+            row(path, value, {
+              editable: store.isEditable(id, path),
+              dirty: store.isDirty(id, path),
+              conflict: conflicts.has(key(path)) ? conflicts.get(key(path)) : undefined,
+              onInput: (v) => {
+                // Numbers stay numbers: `replicas: "4"` is not the same object as `replicas: 4`, and
+                // the API server will tell you so.
+                const next = typeof value === "number" && v !== "" && !Number.isNaN(Number(v)) ? Number(v) : v;
+                store.setValue(id, path, next);
+              },
+            }),
+          ),
+        );
+
+        const patch = store.patch(id);
+        patchOut.textContent = patch === null ? "null" : JSON.stringify(patch, null, 2);
+        pending = new Set();
+      }
+
+      /** Every scalar leaf of a subtree, as [segment-array path, value]. Arrays are one value (§4.1). */
+      function leaves(value, path) {
+        if (value === null || typeof value !== "object" || Array.isArray(value)) return [[path, value]];
+        return Object.entries(value).flatMap(([k, v]) => leaves(v, [...path, k]));
+      }
+
+      function row(path, value, { editable, dirty, conflict, onInput }) {
+        const tr = document.createElement("tr");
+        tr.dataset.path = key(path);
+
+        const k = cell(path.join(" ▸ "), "k");
+        tr.append(k);
+
+        const td = document.createElement("td");
+        td.dataset.testid = `value:${key(path)}`;
+
+        if (editable) {
+          const input = document.createElement("input");
+          input.value = Array.isArray(value) || (value && typeof value === "object") ? JSON.stringify(value) : String(value ?? "");
+          input.dataset.testid = `input:${key(path)}`;
+          input.addEventListener("input", (e) => onInput(e.target.value));
+          td.append(input);
+        } else {
+          td.textContent = Array.isArray(value) ? JSON.stringify(value) : String(value ?? "");
+          // A redacted value is read-only for the same reason status is: it is not the user's to
+          // change — and here, they never even saw it.
+          if (!editable && onInput) td.append(badge("read-only", "readonly"));
+        }
+
+        if (dirty) td.append(badge("dirty", "dirty"));
+        if (conflict !== undefined) {
+          td.append(badge(`conflict · server says ${JSON.stringify(conflict)}`, "conflict"));
+        }
+
+        // The flash. It is why read-only is not the same as ignored.
+        if (pending.has(key(path))) {
+          td.classList.add("flash");
+          td.dataset.flashed = "true";
+        }
+        tr.append(td);
+        return tr;
+      }
+
+      function cell(text, cls) {
+        const td = document.createElement("td");
+        td.className = cls ?? "";
+        td.textContent = text;
+        return td;
+      }
+
+      function badge(text, cls) {
+        const s = document.createElement("span");
+        s.className = `badge ${cls}`;
+        s.textContent = text;
+        s.dataset.testid = `badge:${cls}`;
+        return s;
+      }
+    </script>
+  </body>
+</html>
