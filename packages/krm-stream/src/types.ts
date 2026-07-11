@@ -107,4 +107,12 @@ export interface Conflict {
  * entire live-status-watch use case. */
 export interface EditabilityPolicy {
   isEditable(obj: KRMObject, path: Path): boolean;
+  /** True for a path that is not editable itself but that an editable region lives UNDER — `[]` and
+   * `["metadata"]` under the default policy.
+   *
+   * The merge needs both questions answered, and they are not each other's negation. `metadata` is
+   * not editable, but replacing it wholesale from the server would clobber the label the user is
+   * editing inside it; `status` is not editable either, and replacing it wholesale is exactly right.
+   * Without this second predicate a store cannot tell those two apart. */
+  containsEditable(obj: KRMObject, path: Path): boolean;
 }
