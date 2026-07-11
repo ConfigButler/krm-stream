@@ -5,7 +5,7 @@
   // bundler. Formatting is not a matter of taste here for the same reason gofmt is not — a review of
   // this package should be an argument about the merge algorithm, never about where a line broke.
   "files": {
-    "includes": ["src/**/*.ts", "test/**/*.ts", "*.json", "*.jsonc"]
+    "includes": ["src/**/*.ts", "test/**/*.ts", "e2e/**/*.ts", "*.json", "*.jsonc"]
   },
   "formatter": {
     "enabled": true,

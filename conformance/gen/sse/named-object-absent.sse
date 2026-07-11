@@ -1,0 +1,6 @@
+: connection 1
+
+data: {"type":"reset","target":"demo","scope":{"target":"demo","version":"v1","resource":"configmaps","namespace":"app","name":"app-config"},"projection":"krm-editor/v1"}
+
+data: {"type":"synced"}
+

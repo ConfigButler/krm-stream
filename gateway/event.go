@@ -127,27 +127,48 @@ type Event struct {
 	RetryAfterMs *int      `json:"retryAfterMs,omitempty"`
 }
 
-// MarshalJSON exists for one field: `redactedPaths` is REQUIRED on every added/modified — present,
-// not merely optional — and `omitempty` would silently drop the empty array, which is precisely the
-// case the requirement is about ("nothing is redacted in this object" must be SAID, not inferred).
-// It stays omitted on the events that have no business carrying it.
+// MarshalJSON exists for two fields, and for one reason: a consumer must never have to INFER
+// something the protocol makes it responsible for.
 //
-// The conformance suite caught this the first time it ran. That is the corpus doing its job.
+//   - `redactedPaths` is REQUIRED on every added/modified. `omitempty` would silently drop the empty
+//     array — which is exactly the case the requirement is about: "nothing is redacted in this
+//     object" must be SAID, not inferred from a value that happens to look like a placeholder.
+//     (The conformance suite caught this the first time it ran. That is the corpus doing its job.)
+//
+//   - `terminal` is REQUIRED on every error. `omitempty` drops it when false, so a consumer would be
+//     reading "do I give up, or do I retry?" out of a field that is not there. It is the same rule,
+//     and the failure it prevents is worse: a browser's EventSource reconnects on its own, so a
+//     misread terminal error means every open tab hammering a forbidden scope forever.
+//     (The byte-level wire suite caught this one — the client and the gateway disagreed about the
+//     shape of an event they had both been "passing" tests on for a week.)
+//
+// Both stay omitted on the events that have no business carrying them.
 func (e Event) MarshalJSON() ([]byte, error) {
 	type base Event // sheds this method, so json doesn't recurse
-	if e.Type != EventAdded && e.Type != EventModified {
-		return json.Marshal(base(e))
-	}
-	paths := e.RedactedPaths
-	if paths == nil {
-		paths = []string{}
-	}
 	inner := base(e)
-	inner.RedactedPaths = nil // the outer, non-omitempty field carries it (shallower field wins)
-	return json.Marshal(struct {
-		base
-		RedactedPaths []string `json:"redactedPaths"`
-	}{inner, paths})
+
+	switch e.Type {
+	case EventAdded, EventModified:
+		paths := e.RedactedPaths
+		if paths == nil {
+			paths = []string{}
+		}
+		inner.RedactedPaths = nil // the outer, non-omitempty field carries it (shallower field wins)
+		return json.Marshal(struct {
+			base
+			RedactedPaths []string `json:"redactedPaths"`
+		}{inner, paths})
+
+	case EventError:
+		inner.Terminal = false // ditto: the outer field is the one that gets marshalled
+		return json.Marshal(struct {
+			base
+			Terminal bool `json:"terminal"`
+		}{inner, e.Terminal})
+
+	default:
+		return json.Marshal(inner)
+	}
 }
 
 // UID reads metadata.uid out of an object. The empty string means "this object has no usable

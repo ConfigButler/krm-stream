@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 // The gateway's half of the corpus, actually asserted.
@@ -58,42 +59,50 @@ func TestGatewayConformance(t *testing.T) {
 // has to keep them apart or the fixture proves nothing.
 func replayFixture(t *testing.T, c Corpus, f Fixture) []Event {
 	t.Helper()
-
-	gw := &Gateway{
-		Auth:       AllowAll{},
-		Projection: f.Projection,
-	}
-
 	var got []Event
-	for _, conn := range splitConnections(f.Watch) {
+	replay(t, c, f, func(int) Sink { return &recordingSink{} }, func(s Sink) {
+		got = append(got, s.(*recordingSink).events...)
+	})
+	return got
+}
+
+// replay is the driver both the event assertion and the SSE goldens share. Sharing it is the point:
+// the golden transcripts are the bytes THIS gateway wrote, through its real SSE sink, rather than a
+// second encoding of the same events written for the benefit of the test.
+func replay(t *testing.T, c Corpus, f Fixture, newSink func(conn int) Sink, done func(Sink)) {
+	t.Helper()
+
+	gw := &Gateway{Auth: AllowAll{}, Projection: f.Projection}
+
+	for i, conn := range splitConnections(f.Watch) {
 		backend, err := NewScriptedBackend(c, conn)
 		if err != nil {
 			t.Fatalf("scripted backend: %v", err)
 		}
 		gw.Clients = func(_ string, _ Principal) (Backend, error) { return backend, nil }
 
-		ctx, cancel := context.WithCancel(t.Context())
-		sink := &recordingSink{}
+		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+		sink := newSink(i)
 
-		done := make(chan error, 1)
-		go func() { done <- gw.Stream(ctx, nil, *f.Scope, sink) }()
+		finished := make(chan error, 1)
+		go func() { finished <- gw.Stream(ctx, nil, *f.Scope, sink) }()
 
 		// The script is exhausted the moment the gateway comes BACK for another event having been
 		// given the last one — which is proof it finished processing it. No sleeps, no polling: a
 		// pull-based upstream makes the handoff a synchronisation point for free.
 		select {
 		case <-backend.Exhausted():
-		case err := <-done:
+		case err := <-finished:
 			t.Fatalf("the gateway stopped before the script did: %v", err)
+		case <-ctx.Done():
+			t.Fatal("the gateway never consumed the whole watch script")
 		}
 		cancel()
-		if err := <-done; err != nil && !isCanceled(err) {
+		if err := <-finished; err != nil && !isCanceled(err) {
 			t.Fatalf("stream: %v", err)
 		}
-
-		got = append(got, sink.events...)
+		done(sink)
 	}
-	return got
 }
 
 // splitConnections cuts the watch script at each `disconnect`.

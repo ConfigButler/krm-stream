@@ -18,6 +18,8 @@ export { clone, deepEqual } from "./deep.ts";
 export { get, has, isPrefix, parsePointer, pathKey } from "./path.ts";
 
 export { DEFAULT_EDITABLE_REGIONS, defaultPolicy, readOnlyPolicy, regionPolicy } from "./policy.ts";
+export type { StreamHandle, StreamOptions } from "./sse.ts";
+export { applyStreamEvent, connectResourceStream, connectWithEventSource, SSEDecoder } from "./sse.ts";
 export type { ApplyOptions, ApplyResult } from "./store.ts";
 export { LiveResourceStore } from "./store.ts";
 
