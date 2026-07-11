@@ -2,11 +2,27 @@
 
 **A live, honest window onto Kubernetes resources, in the browser.**
 
-A language-neutral protocol for streaming **KRM** (Kubernetes Resource Model) objects, a **Go gateway**
-that produces the stream, and a **JavaScript library** that reconciles it against local edits.
+**A Go library** that turns a Kubernetes watch into a browser-friendly stream of complete **KRM**
+(Kubernetes Resource Model) objects — absorbing every watch mechanic (`resourceVersion` arithmetic,
+`410 Gone`, relists, bookmarks, partial objects, reconnects) behind a small, stable wire contract —
+**and a small JavaScript client that ships with it**, so the browser end is solved too rather than left
+as an exercise.
 
-Watch `status` reconcile in real time. Edit `spec` with a real three-way merge. Real RBAC, real
-attribution — the browser sees exactly what the API server sees, and never more.
+Go is the product. The npm package is the helper you would otherwise have had to write.
+
+```go
+import "github.com/ConfigButler/krm-stream/gateway"
+
+// Your app answers the two questions the library must never assume:
+//   who is this caller, and what may they see?
+h := gateway.Handler(gateway.Options{
+    Authorizer: myAuthz,                 // may this principal watch this scope?
+    ClientFor:  myClientForIdentity,     // a client acting AS them — their RBAC, their attribution
+})
+mux.Handle("/resource-stream/v1", h)
+```
+
+...and the browser end, for free:
 
 ```js
 import { LiveResourceStore, connectResourceStream } from "krm-stream";
@@ -18,6 +34,9 @@ store.subscribe(() => render(store));       // live status, live conflicts
 store.setValue(uid, ["data", "log-level"], "debug");
 await save(store.patch(uid));               // a merge patch of only what you changed
 ```
+
+Watch `status` reconcile in real time. Edit `spec` with a real three-way merge. Real RBAC, real
+attribution — the browser sees exactly what the API server sees, and never more.
 
 ---
 
@@ -43,9 +62,9 @@ sides run.
 
 | | what | where |
 |---|---|---|
-| **Protocol** | the wire contract: `reset` · `added` · `modified` · `deleted` · `synced` · `error`, over SSE | [`spec/v1.md`](spec/v1.md) |
-| **Gateway** (Go) | *produces* the stream from a Kubernetes watch; absorbs every watch mechanic; applies saves as a guarded patch | [`gateway/`](gateway/) |
-| **Client** (TS/JS) | *consumes* it: `LiveResourceStore` — three-way merge, derived dirtiness, conflicts, merge-patch builder | [`packages/krm-stream/`](packages/krm-stream/) |
+| **Gateway** (Go) — *the library* | `go get github.com/ConfigButler/krm-stream/gateway`. Produces the stream from a Kubernetes watch; absorbs every watch mechanic; applies saves as a guarded patch (it will refuse one that touches a redacted path). Your app injects the two things it must never assume: **who the caller is**, and **what they may see** | [`gateway/`](gateway/) |
+| **Protocol** — *the contract* | the wire: `reset` · `added` · `modified` · `deleted` · `synced` · `error`, over SSE. Language-neutral on purpose: a Rust or Python gateway is a legitimate thing to write | [`spec/v1.md`](spec/v1.md) |
+| **Client** (TS/JS) — *the helper* | `npm i krm-stream`. `LiveResourceStore`: three-way merge, derived dirtiness, conflicts, merge-patch builder. Optional — any conforming consumer works — but you would only reimplement it | [`packages/krm-stream/`](packages/krm-stream/) |
 
 They are joined by one thing, and it is the reason they live in one repo:
 

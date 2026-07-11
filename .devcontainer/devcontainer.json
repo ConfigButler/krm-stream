@@ -45,16 +45,27 @@
     }
   },
   "postCreateCommand": "bash .devcontainer/post-create.sh '${containerWorkspaceFolder}'",
+  "postStartCommand": "bash .devcontainer/post-start.sh '${containerWorkspaceFolder}'",
   "remoteUser": "vscode",
   // Anything under /home/vscode that is NOT a named volume lives in the container's writable
   // layer and is DESTROYED on rebuild (which editing this file triggers). Pin the things whose
-  // loss is confusing: the gh token, the kubeconfig, and the Go caches.
+  // loss is confusing: the gh token, the kubeconfig, the Go caches — and Claude's login.
+  //
+  // TWO THINGS ABOUT CLAUDE, both learned the hard way:
+  //   1. Its credentials live in ~/.claude.json — a FILE at the home root, NOT inside ~/.claude/ —
+  //      so mounting ~/.claude alone does NOT persist a login. post-create.sh symlinks it into
+  //      persisted-home, which is why that volume exists.
+  //   2. A named volume whose path does not exist in the image is created ROOT-owned, so `vscode`
+  //      cannot write to it at all. post-create.sh chowns /home/vscode for exactly this reason.
+  //      Without it: `claude` cannot log in, `gh auth login` cannot store a token, and the symptom
+  //      gives you no clue why.
   "mounts": [
     "source=krm-stream-gomodcache,target=/go/pkg/mod,type=volume",
     "source=krm-stream-gobuildcache,target=/home/vscode/.cache/go-build,type=volume",
     "source=krm-stream-dotkube,target=/home/vscode/.kube,type=volume",
     "source=krm-stream-ghconfig,target=/home/vscode/.config/gh,type=volume",
-    "source=krm-stream-claudeconfig,target=/home/vscode/.claude,type=volume"
+    "source=krm-stream-claudeconfig,target=/home/vscode/.claude,type=volume",
+    "source=krm-stream-persisted-home,target=/home/vscode/persisted-home,type=volume"
   ],
   "containerEnv": {
     "HOST_PROJECT_PATH": "${localWorkspaceFolder}",

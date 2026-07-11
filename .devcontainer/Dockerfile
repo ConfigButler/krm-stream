@@ -8,14 +8,16 @@
 # Stage 1 (ci): everything the test suites and CI need.
 # Stage 2 (dev): editor tooling + the non-root `vscode` user.
 
-FROM golang:1.26.5-bookworm AS ci
+# Base pinned by digest — the SAME image gitops-api builds on, so this repo's Go behaves
+# identically to the one that consumes it.
+FROM golang:1.26.5-bookworm@sha256:18aedc16aa19b3fd7ded7245fc14b109e054d65d22ed53c355c899582bbb2113 AS ci
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 RUN apt-get update \
     && apt-get -y install --no-install-recommends \
-    git curl ca-certificates vim less jq sudo acl gnupg unzip \
+    git curl ca-certificates vim less jq sudo acl gnupg unzip openssh-client \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
