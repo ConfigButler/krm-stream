@@ -47,6 +47,32 @@ bugs in three days while living inline in an HTML file where no test could reach
 bugs is now a named fixture (`edit-vs-unrelated-change`, `conflict-and-converge`, `dotted-label-keys`).
 They exist so the rewrite cannot reintroduce them.
 
+## The test ladder
+
+Each rung replaces one *simulated* boundary with a real one. They all replay the **same fixtures**, so
+a rung's job is not "more scenarios" — it is "the same scenarios, with one more thing that is really
+true."
+
+| | what is real | what is faked | run it |
+|---|---|---|---|
+| **store** | the merge | the wire (events handed over as objects) | `task test` |
+| **gateway** | the stream loop, the projection | the API server (`ScriptedBackend`) | `task test` |
+| **wire** | the SSE bytes — the client parses transcripts the **gateway really wrote** | the socket | `task test` |
+| **HTTP** | a real Go server, a real socket, a real `fetch` | the API server | `task e2e-wire` |
+| **browser** | a real Chromium, native `EventSource`, the **unbundled ESM** | the API server | `task e2e-browser` |
+| **cluster** | *(not built)* a real API server: `410 Gone`, RBAC, a controller moving `status` | nothing | — |
+
+None of these needs a cluster. That is not a compromise: every rule in the corpus is about framing,
+projection and merge, and a fake watch drives those deterministically in microseconds. What a fake
+*cannot* prove — that a real streaming list really terminates with the `initial-events-end` bookmark
+([the fact we have not verified](docs/facts/kubernetes-api-concepts.md#3-streaming-lists-sendinitialevents--the-snapshot-boundary)),
+that a real 410 arrives as we expect — is the cluster rung's job and nothing else's.
+
+**A green suite proves nothing until it can go red.** Before trusting a new test, break the code it
+covers and watch it fail. That habit has now found four real bugs in this repo — a `terminal` flag
+missing from the wire, an int64 `resourceVersion` overflow, a partial-object guard reading the wrong
+field, and two spec rules the corpus could not express at all. Every one of them was passing its tests.
+
 ## Changing the protocol
 
 A protocol change is a change to `spec/v1.md` **and** to the fixtures **and** to both implementations,
