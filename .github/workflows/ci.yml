@@ -57,10 +57,16 @@ jobs:
           cache-dependency-path: packages/krm-stream/package-lock.json
       - run: npm install --no-audit --no-fund
         working-directory: packages/krm-stream
-      # Node 22 runs .ts directly (type stripping) — the suite needs no test deps.
+      # Node 22 runs .ts directly (type stripping) — the suite needs no test runner dependency.
       - run: node --test
         working-directory: packages/krm-stream
-      - run: npx tsc --noEmit
+      # ...but stripping is not checking. This is the ONLY thing that typechecks test/, and test/ is
+      # where the conformance suite lives, so it is not optional.
+      - run: npx tsc --noEmit -p tsconfig.test.json
         working-directory: packages/krm-stream
+      - run: npx biome ci
+        working-directory: packages/krm-stream
+      # The build, last: it is what ships, and it must stay plain ESM a browser can import with no
+      # bundler and no runtime dependency.
       - run: npx tsc
         working-directory: packages/krm-stream

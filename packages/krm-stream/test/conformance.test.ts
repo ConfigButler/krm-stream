@@ -9,9 +9,9 @@
 // fixture that edits a uid the stream never delivered — a test that would pass against a store that
 // does nothing at all.
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { allBodies, allFixtures, clientFixtures, resolve, type Fixture } from "./conformance.ts";
+import { test } from "node:test";
+import { allBodies, allFixtures, clientFixtures, type Fixture, resolve } from "./conformance.ts";
 
 test("the corpus loads", () => {
   assert.ok(allFixtures().length > 0, "no fixtures — run `task fixtures`");

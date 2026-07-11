@@ -43,7 +43,7 @@ export function has(value: unknown, path: Path): boolean {
     if (Array.isArray(cur)) {
       if (Number(seg) >= cur.length) return false;
     } else if (isPlainObject(cur)) {
-      if (!Object.prototype.hasOwnProperty.call(cur, String(seg))) return false;
+      if (!Object.hasOwn(cur, String(seg))) return false;
     } else {
       return false;
     }

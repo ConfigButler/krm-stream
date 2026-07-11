@@ -5,7 +5,7 @@
 // "contract" is just two implementations agreeing to disagree.
 
 import { readFileSync } from "node:fs";
-import type { EventType, ErrorCode, Identity, KRMObject, Path, Projection, Scope, StreamEvent } from "../src/types.ts";
+import type { ErrorCode, EventType, Identity, KRMObject, Path, Projection, Scope, StreamEvent } from "../src/types.ts";
 
 // Resolved relative to THIS file, not to the working directory — so `node --test` works from
 // anywhere, and so does an editor's inline test runner.
@@ -61,12 +61,8 @@ export interface Fixture {
   gatewayRejects?: unknown[];
 }
 
-const bodies: Record<string, KRMObject> = JSON.parse(
-  readFileSync(new URL("gen/bodies.json", CONFORMANCE), "utf8"),
-);
-const fixtures: Fixture[] = JSON.parse(
-  readFileSync(new URL("gen/fixtures.json", CONFORMANCE), "utf8"),
-);
+const bodies: Record<string, KRMObject> = JSON.parse(readFileSync(new URL("gen/bodies.json", CONFORMANCE), "utf8"));
+const fixtures: Fixture[] = JSON.parse(readFileSync(new URL("gen/fixtures.json", CONFORMANCE), "utf8"));
 
 /** A KRM object by its bodies/ reference. Missing is a hard error: a fixture naming an object that
  * does not exist is a broken contract, not a skippable test. */

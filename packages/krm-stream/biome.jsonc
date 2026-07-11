@@ -1,0 +1,40 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
+  // The TypeScript half of `gofmt + go vet + golangci-lint`. One binary, one devDependency, and it
+  // ships NOTHING: the published bundle is still dependency-free ESM a browser imports with no
+  // bundler. Formatting is not a matter of taste here for the same reason gofmt is not — a review of
+  // this package should be an argument about the merge algorithm, never about where a line broke.
+  "files": {
+    "includes": ["src/**/*.ts", "test/**/*.ts", "*.json", "*.jsonc"]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    // Wide, because the house style puts the WHY in a comment beside the code, and 80 columns turns
+    // every one of those into a paragraph.
+    "lineWidth": 120
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "double",
+      "semicolons": "always",
+      "trailingCommas": "all"
+    }
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "style": {
+        // Off, deliberately, and it is not laziness: tsconfig has `noUncheckedIndexedAccess`, so
+        // EVERY array index is `T | undefined` — including `path[i]` inside a loop bounded by
+        // `path.length`. Given that stricter setting, `path[i]!` is the honest expression of a fact
+        // the loop bound already guarantees; the alternative is a runtime guard for a branch that
+        // cannot happen, which is worse code. Dropping noUncheckedIndexedAccess to satisfy this rule
+        // instead would trade a real check for a cosmetic one.
+        "noNonNullAssertion": "off"
+      }
+    }
+  }
+}

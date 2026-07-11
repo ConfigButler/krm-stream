@@ -9,11 +9,11 @@
 // stays green even against a store that would happily let them. "Structurally incapable of becoming
 // an edit" is a claim about what happens when someone tries, and something has to try.
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { body } from "./conformance.ts";
+import { test } from "node:test";
 import { LiveResourceStore, readOnlyPolicy } from "../src/index.ts";
 import type { Path } from "../src/types.ts";
+import { body } from "./conformance.ts";
 
 const CM = "cm-app.v1"; // ConfigMap: data.log-level=info, data.replicas="3", one dotted label
 const DEPLOY = "deploy-web.v1"; // Deployment: nested spec, a container array, a live status
@@ -86,7 +86,7 @@ test("I-IDEMPOTENT — redelivering the same object is a no-op (a reconnect repl
 test("I-BASESHIFT — the second event reconciles against the first, not against the snapshot", () => {
   const [store, id] = seeded(CM);
   store.applyServerEvent(body("cm-app.v3")); // log-level: info -> warn. Nobody is editing it.
-  assert.equal((store.draft(id)["data"] as Record<string, string>)["log-level"], "warn");
+  assert.equal((store.draft(id).data as Record<string, string>)["log-level"], "warn");
 
   // Now the user edits it, and the server sends v3 AGAIN. Against the ORIGINAL snapshot as base this
   // would look like "the server just changed log-level" and false-conflict; against v3 it is a no-op.
@@ -121,7 +121,7 @@ test("removeKey and renameKey — a deletion is a null in the patch, and a renam
   const [store2, id2] = seeded(CM);
   store2.renameKey(id2, ["data"], "log-level", "logLevel");
   assert.deepEqual(store2.patch(id2), { data: { "log-level": null, logLevel: "info" } });
-  assert.deepEqual(Object.keys(store2.draft(id2)["data"] as object), ["logLevel", "replicas"], "order is preserved");
+  assert.deepEqual(Object.keys(store2.draft(id2).data as object), ["logLevel", "replicas"], "order is preserved");
 });
 
 test("I-PATCH-ROUNDTRIP — applying patch(id) to the server object yields the draft", () => {
@@ -171,7 +171,7 @@ test("I-REDACT — a masked value is read-only, is never dirty, and never reache
 
   // The mask is still SHOWN — that is the point of keys-only disclosure: you can see that `token`
   // exists without ever learning, or overwriting, what it is.
-  assert.equal((store.draft(id)["data"] as Record<string, string>)["token"], "**REDACTED**");
+  assert.equal((store.draft(id).data as Record<string, string>).token, "**REDACTED**");
   store.setValue(id, ["metadata", "labels", "app.kubernetes.io/name"], "checkout");
   assert.deepEqual(store.patch(id), { metadata: { labels: { "app.kubernetes.io/name": "checkout" } } });
 });

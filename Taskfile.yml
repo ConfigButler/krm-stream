@@ -69,7 +69,20 @@ tasks:
   lint-client:
     dir: "{{.CLIENT_DIR}}"
     cmds:
+      # Two tsconfigs, on purpose. The first is the BUILD (src only — its rootDir is what ships);
+      # the second is the only thing that ever typechecks test/, because `node --test` STRIPS types
+      # rather than checking them. Without it the conformance suite — the file whose whole job is to
+      # be the contract check — would be the one piece of unverified TypeScript in the repo.
       - npx --no-install tsc --noEmit
+      - npx --no-install tsc --noEmit -p tsconfig.test.json
+      # biome = the TypeScript half of gofmt + go vet + golangci-lint. `task fmt-client` fixes.
+      - npx --no-install biome check
+
+  fmt-client:
+    desc: "Format and auto-fix the TypeScript (the gofmt of this side)."
+    dir: "{{.CLIENT_DIR}}"
+    cmds:
+      - npx --no-install biome check --write
 
   # ------------------------------------------------------------------- build --
   build-client:

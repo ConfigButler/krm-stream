@@ -20,11 +20,11 @@
 //                            does not flash a read-only field that moved. See docs §3 ("read-only
 //                            is not ignored"). The fixtures list the paths a UI must highlight.
 
-import { test } from "node:test";
 import assert from "node:assert/strict";
-import { clientFixtures, resolve, type FixtureEdit, type FixtureExpect } from "./conformance.ts";
+import { test } from "node:test";
 import { LiveResourceStore } from "../src/index.ts";
 import type { Path, StreamEvent } from "../src/types.ts";
+import { clientFixtures, type FixtureEdit, type FixtureExpect, resolve } from "./conformance.ts";
 
 for (const f of clientFixtures()) {
   test(`${f.id}: ${f.title}`, () => {

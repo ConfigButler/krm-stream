@@ -68,8 +68,20 @@ don't know (spec §0). Anything else gets a new path segment (`/v2`), not a sile
 
 - **Go:** `gofmt`, `go vet`, `golangci-lint` clean. The wire types stay dependency-free — no client-go
   in `event.go`.
-- **TypeScript:** `strict`. **No runtime dependencies, ever** — the published bundle is plain ESM a
-  browser can `import` with no bundler. `typescript` is the only devDependency; the tests run on
-  Node's built-in runner, which reads `.ts` directly.
+- **TypeScript:** `strict`, `biome check` clean. **No runtime dependencies, ever** — the published
+  bundle is plain ESM a browser can `import` with no bundler, and that rule is absolute.
+
+  **devDependencies are a different rule, and it is not "none".** They ship nothing, so the test is
+  whether they pay for themselves. Three do:
+
+  | | why |
+  |---|---|
+  | `typescript` | the compiler |
+  | `@types/node` | without it `tsc` cannot see `test/` **at all** — the tests import `node:test`. `node --test` *strips* types, it does not check them, so `tsconfig.test.json` is the only thing standing between us and an unverified conformance suite |
+  | `@biomejs/biome` | lint + format in one binary: the TypeScript half of what `gofmt`/`go vet`/`golangci-lint` do for the gateway. `task fmt-client` fixes what it can |
+
+  Two tsconfigs, and the difference matters: `tsconfig.json` is the **build** (`src/` only — its
+  `rootDir` is what ships); `tsconfig.test.json` is the **check** (`src/` + `test/`, `noEmit`). Both
+  run in `task lint` and in CI.
 - Comments explain *why*, and especially *what breaks if you do the obvious thing instead*. The
   fixtures are the best example of the house style: every one of them says what it defends.

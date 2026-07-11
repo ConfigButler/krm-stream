@@ -14,8 +14,8 @@
 // flagged forever, or unflags itself only on the next click.
 
 import { clone, deepEqual, isPlainObject } from "./deep.ts";
+import { type MergeState, type Regions, reconcile } from "./merge.ts";
 import { get, has, isPrefix, parsePointer, pathKey, removeAt, setAt } from "./path.ts";
-import { reconcile, type MergeState, type Regions } from "./merge.ts";
 import { defaultPolicy } from "./policy.ts";
 import type { Change, Conflict, EditabilityPolicy, KRMObject, Path } from "./types.ts";
 
@@ -215,7 +215,7 @@ export class LiveResourceStore {
 
   /** Read-only convenience for the watch UI. A kind with no status simply has none. */
   status(id: string): unknown {
-    return clone(this.#must(id).server["status"]);
+    return clone(this.#must(id).server.status);
   }
 
   /** Every pending edit, derived fresh by comparing the draft to the server object. Arrays appear
@@ -357,7 +357,7 @@ function sameShape(a: unknown, b: unknown): boolean {
     const ka = Object.keys(a);
     const kb = Object.keys(b);
     if (ka.length !== kb.length) return false;
-    return ka.every((k) => Object.prototype.hasOwnProperty.call(b, k) && sameShape(a[k], b[k]));
+    return ka.every((k) => Object.hasOwn(b, k) && sameShape(a[k], b[k]));
   }
   if (Array.isArray(a) && Array.isArray(b)) {
     return a.length === b.length && a.every((x, i) => sameShape(x, b[i]));

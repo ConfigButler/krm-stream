@@ -13,25 +13,24 @@
 // No runtime dependencies, and none of this knows anything about GitOps, Flux, Dex, kcp or
 // ConfigButler. It knows KRM.
 
-export { LiveResourceStore } from "./store.ts";
-export type { ApplyResult, ApplyOptions } from "./store.ts";
-
-export { defaultPolicy, readOnlyPolicy, regionPolicy, DEFAULT_EDITABLE_REGIONS } from "./policy.ts";
-
 // Useful to a host that renders paths, and to anyone writing a policy: identity is a segment ARRAY.
-export { deepEqual, clone } from "./deep.ts";
-export { get, has, pathKey, parsePointer, isPrefix } from "./path.ts";
+export { clone, deepEqual } from "./deep.ts";
+export { get, has, isPrefix, parsePointer, pathKey } from "./path.ts";
+
+export { DEFAULT_EDITABLE_REGIONS, defaultPolicy, readOnlyPolicy, regionPolicy } from "./policy.ts";
+export type { ApplyOptions, ApplyResult } from "./store.ts";
+export { LiveResourceStore } from "./store.ts";
 
 export type {
-  KRMObject,
-  Path,
-  EventType,
-  ErrorCode,
-  Projection,
-  Scope,
-  Identity,
-  StreamEvent,
   Change,
   Conflict,
   EditabilityPolicy,
+  ErrorCode,
+  EventType,
+  Identity,
+  KRMObject,
+  Path,
+  Projection,
+  Scope,
+  StreamEvent,
 } from "./types.ts";
