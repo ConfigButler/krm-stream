@@ -81,6 +81,57 @@
     }
   },
   {
+    "id": "bookmark-absorbed",
+    "title": "A routine watch BOOKMARK is absorbed — never forwarded, never mistaken for `synced`.",
+    "why": "Kubernetes, verbatim: \"The document representing the BOOKMARK event is of the type requested by the request, but only includes a .metadata.resourceVersion field.\" So an object with no uid, no name, no spec and no status is not an exotic case someone contrived — it is on EVERY conforming watch stream that asked for bookmarks, and the gateway must ask (allowWatchBookmarks=true is how the snapshot boundary arrives at all).\nTwo ways to get this wrong, and this fixture fails on both:\n\n  - forward the bookmark's object as `modified`. The consumer REPLACES on modified — that is the\n    protocol's single most important rule — so it would replace a live ConfigMap with a husk that\n    has only a resourceVersion. The screen goes blank.\n  - treat every bookmark as the snapshot boundary and emit `synced`. Pruning is gated on `synced`,\n    so a mid-cycle `synced` prunes objects the snapshot had not reached yet: half the user's\n    resources vanish, and reappear on the next relist.\n\nOnly the bookmark that TERMINATES the initial events is `synced` (spec §5, gateway §3a). Every other one is absorbed for its resourceVersion and never spoken of again (spec §2).\nSee docs/facts/kubernetes-api-concepts.md §1.1 — this rule is a quote from the API docs, not an opinion about them.\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      },
+      {
+        "op": "bookmark",
+        "resourceVersion": "1500"
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v2"
+      },
+      {
+        "op": "bookmark",
+        "resourceVersion": "1600"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v2"
+      }
+    ]
+  },
+  {
     "id": "conflict-and-converge",
     "title": "A real conflict is raised, kept, and then clears itself when the server converges.",
     "why": "R-DERIVED. Two halves:\n(1) The server changed the very key the user is editing, to a different value. Keep the user's\n    edit — never silently overwrite what someone typed — and surface what the cluster says.\n\n(2) Then the server's value ARRIVES at what the user typed (a colleague made the same change).\n    The conflict must clear, and the field must stop being dirty — draft == server now. This is\n    the half a cached `dirty` set gets wrong: it goes stale after a watch event and the field\n    stays flagged forever, or only unflags itself on the next click.\n    Dirtiness is DERIVED — deepEqual(draft@path, base@path) — never remembered.\n",
@@ -638,6 +689,67 @@
     }
   },
   {
+    "id": "partial-object-refused",
+    "title": "A metadata-only object is never forwarded as an upsert — the gateway resnapshots instead.",
+    "why": "Kubernetes serves PartialObjectMetadata on request (Accept: application/json;as=PartialObjectMetadata): \"the returned objects only contain the `metadata` field. The `spec` and `status` fields are omitted.\"\nThis fixture exists because it caught a real mistake in our own gateway. The guard was \"an object with no uid is partial\" — but a PartialObjectMetadata HAS a uid. It has a whole metadata block. What it does not have is a spec or a status. So the guard looked at the wrong field, the object sailed through, and the consumer — whose model is REPLACE, never merge — swapped a live Deployment for a husk: the status view goes blank and the editor silently loses the user's spec.\nThe honest check is the KIND (PartialObjectMetadata / PartialObjectMetadataList, group meta.k8s.io), not the presence of a uid. A partial object delivered as an update would blank a consumer's state — spec §2 says so, and it is right; we were simply not enforcing what we had written down.\nThe recovery is a new snapshot cycle: it is the one response that is ALWAYS correct, because it re-establishes the truth rather than guessing at it.\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "group": "apps",
+      "version": "v1",
+      "resource": "deployments",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "deploy-web.v1"
+        ]
+      },
+      {
+        "op": "partial",
+        "body": "deploy-web.v1"
+      },
+      {
+        "op": "list",
+        "bodies": [
+          "deploy-web.v2"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "deploy-web.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "error",
+        "code": "RESYNC_REQUIRED",
+        "terminal": false
+      },
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "deploy-web.v2"
+      },
+      {
+        "type": "synced"
+      }
+    ]
+  },
+  {
     "id": "reconnect-prune",
     "title": "An object deleted while the consumer was disconnected is pruned on the next synced.",
     "why": "No persistent ghosts. The consumer never saw the `deleted` event — it was offline — so the ONLY thing that can remove feature-flags is the reset…synced boundary: mark all unseen on reset, seen on each added, prune what is still unseen on synced.\n",
@@ -706,6 +818,53 @@
         "conflicts": []
       }
     }
+  },
+  {
+    "id": "resourceversion-bignum",
+    "title": "A 40-digit resourceVersion orders correctly — and a stale replay is still dropped.",
+    "why": "Kubernetes: \"Resource versions are compared as arbitrary bitsize decimal integers... The bitsize must not be assumed to be some fixed amount.\" Its own worked example is 40 digits long.\nstrconv.ParseInt tops out at 19. The gateway used to compare resource versions with it, so against a cluster like this one the parse simply failed — and the per-object monotonicity check (spec §6) gave up. The user-visible symptom is silently dropped live updates, which in a status view is indistinguishable from \"Kubernetes is being slow\", and is therefore the kind of bug that survives for years.\nThe comparison Kubernetes prescribes: \"If they are not of equal length, the longer one is greater (for example, \"123\" > \"23\"). If they are of equal length, the lexicographically greater one is greater.\" Note what that rules out: a plain lexicographic compare, which would call the 41-digit version OLDER than the 40-digit one and drop it.\nSo this fixture asserts both halves at once:\n  - the 41-digit v7 is NEWER than the 40-digit v6 and must be delivered;\n  - replaying v6 afterwards is STALE and must be dropped (§6: never emit, within a cycle, a state\n    older than one already emitted for that uid).\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v6-bignum"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v7-bignum-newer"
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v6-bignum"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v6-bignum"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v7-bignum-newer"
+      }
+    ]
   },
   {
     "id": "resync-midstream",
@@ -1038,5 +1197,70 @@
         ]
       }
     }
+  },
+  {
+    "id": "tombstone-without-uid",
+    "title": "An ambiguous tombstone is never emitted as `deleted` — a new cycle prunes instead.",
+    "why": "spec §4.2, and it is stated in strong terms for a reason: if the gateway cannot recover a trustworthy uid it MUST NOT emit an ambiguous `deleted`. It begins a new snapshot cycle and lets reset…synced do the pruning.\nThe source of a degenerate tombstone is client-go's cache.DeletedFinalStateUnknown: the informer missed the delete and noticed during a relist, so it hands you a wrapper whose object may be nothing more than a key. A gateway that \"helpfully\" reconstructs a uid from the name deletes THE WRONG OBJECT out of somebody's browser — and a delete-and-recreate under the same name (see delete-recreate-uid) is exactly the case where the name is a lie.\nPaying for a relist is the cheap option here. Guessing is not.\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1",
+          "cm-flags.v1"
+        ]
+      },
+      {
+        "op": "tombstone",
+        "body": "cm-flags.v1"
+      },
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "added",
+        "body": "cm-flags.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "error",
+        "code": "RESYNC_REQUIRED",
+        "terminal": false
+      },
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      }
+    ]
   }
 ]

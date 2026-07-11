@@ -1,0 +1,32 @@
+id: tombstone-without-uid
+title: An ambiguous tombstone is never emitted as `deleted` — a new cycle prunes instead.
+why: >
+  spec §4.2, and it is stated in strong terms for a reason: if the gateway cannot recover a trustworthy
+  uid it MUST NOT emit an ambiguous `deleted`. It begins a new snapshot cycle and lets reset…synced do
+  the pruning.
+
+  The source of a degenerate tombstone is client-go's cache.DeletedFinalStateUnknown: the informer
+  missed the delete and noticed during a relist, so it hands you a wrapper whose object may be nothing
+  more than a key. A gateway that "helpfully" reconstructs a uid from the name deletes THE WRONG
+  OBJECT out of somebody's browser — and a delete-and-recreate under the same name (see
+  delete-recreate-uid) is exactly the case where the name is a lie.
+
+  Paying for a relist is the cheap option here. Guessing is not.
+suites: [gateway]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v1, cm-flags.v1] }
+  - { op: tombstone, body: cm-flags.v1 }   # DELETED, but the object lost its identity
+  - { op: list, bodies: [cm-app.v1] }      # the resnapshot — and cm-flags is genuinely gone
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: added, body: cm-flags.v1 }
+  - { type: synced }
+  - { type: error, code: RESYNC_REQUIRED, terminal: false }
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }                       # cm-flags-0001 is pruned HERE, correctly, and by identity

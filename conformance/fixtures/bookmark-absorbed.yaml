@@ -1,0 +1,38 @@
+id: bookmark-absorbed
+title: A routine watch BOOKMARK is absorbed — never forwarded, never mistaken for `synced`.
+why: >
+  Kubernetes, verbatim: "The document representing the BOOKMARK event is of the type requested by the
+  request, but only includes a .metadata.resourceVersion field." So an object with no uid, no name, no
+  spec and no status is not an exotic case someone contrived — it is on EVERY conforming watch stream
+  that asked for bookmarks, and the gateway must ask (allowWatchBookmarks=true is how the snapshot
+  boundary arrives at all).
+
+  Two ways to get this wrong, and this fixture fails on both:
+
+    - forward the bookmark's object as `modified`. The consumer REPLACES on modified — that is the
+      protocol's single most important rule — so it would replace a live ConfigMap with a husk that
+      has only a resourceVersion. The screen goes blank.
+    - treat every bookmark as the snapshot boundary and emit `synced`. Pruning is gated on `synced`,
+      so a mid-cycle `synced` prunes objects the snapshot had not reached yet: half the user's
+      resources vanish, and reappear on the next relist.
+
+  Only the bookmark that TERMINATES the initial events is `synced` (spec §5, gateway §3a). Every other
+  one is absorbed for its resourceVersion and never spoken of again (spec §2).
+
+  See docs/facts/kubernetes-api-concepts.md §1.1 — this rule is a quote from the API docs, not an
+  opinion about them.
+suites: [gateway]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v1] }
+  - { op: bookmark, resourceVersion: "1500" }   # routine: absorbed, produces NOTHING
+  - { op: modified, body: cm-app.v2 }
+  - { op: bookmark, resourceVersion: "1600" }   # ...and again
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }
+  - { type: modified, body: cm-app.v2 }

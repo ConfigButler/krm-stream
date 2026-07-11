@@ -54,7 +54,7 @@ suites: [gateway, client]
 scope: { target: demo, version: v1, resource: configmaps, namespace: app }
 projection: krm-editor/v1
 
-watch:                                    # ops: list | added | modified | deleted | relist | disconnect
+watch:                                    # see "The watch ops" below
   - { op: list, bodies: [cm-app.v1] }
   - { op: modified, body: cm-app.v2 }
 
@@ -82,6 +82,29 @@ three-way merge, and a fixture format that couldn't express it would be useless.
 opaque string; making it legible costs nothing and makes a delete-and-recreate fixture (§`uid` changes,
 name does not) obvious at a glance.
 
+## The watch ops
+
+`watch:` is a scripted Kubernetes watch — the gateway's input. Every op is something a real API server
+really does; where that is not obvious, the reference is
+[docs/facts/kubernetes-api-concepts.md](../docs/facts/kubernetes-api-concepts.md), which is a reading
+of the [API concepts page](https://kubernetes.io/docs/reference/using-api/api-concepts/) rather than a
+reading of anyone's memory. That distinction has already cost us two bugs.
+
+| op | means | the gateway must |
+|---|---|---|
+| `list` | the objects currently in scope, then the bookmark that ends the initial events | open a cycle: `reset`, one `added` each, `synced` |
+| `added` / `modified` | an upsert | forward it (subject to monotonicity) |
+| `deleted` | the object left scope | emit `deleted` with its identity |
+| `relist` | **upstream** continuity lost (410 Gone / cache reset) — the SSE connection is fine | announce `RESYNC_REQUIRED`, then a fresh cycle **on the same connection** |
+| `disconnect` | the **browser's** connection dropped | nothing — the next connection is a new stream |
+| `bookmark` | a routine `BOOKMARK`. Its object carries **only** `metadata.resourceVersion` — that is what the API server sends, on every stream that asked for bookmarks | **absorb it.** Never forward it; never mistake it for `synced` |
+| `partial` | a metadata-only object (`PartialObjectMetadata`) delivered as an upsert. **It has a uid**; it has no `spec` and no `status` | **refuse it** and resnapshot. Forwarding it blanks the consumer's object |
+| `tombstone` | a `DELETED` whose object lost its identity (client-go's `DeletedFinalStateUnknown`) | **not guess.** Begin a new cycle and let `synced` prune |
+
+The last three were added by [proposal 0001](../docs/proposals/0001-watch-ops.md), because the corpus
+could not express three of the gateway's own MUST NOTs — and a mutation test proved it: emitting
+`synced` on every bookmark, and forwarding a partial object, both left every fixture green.
+
 **Assertions.** `dirty` and `conflicts` are compared as exact sets (order-insensitive). `patch` is
 compared exactly — it is what gets sent to the API server, so "close enough" is not a thing.
 `draftSubset` is a deep-subset check: it lets a fixture assert the two fields it cares about without
@@ -106,6 +129,10 @@ Every fixture names the rule it defends, in `why:`. The ones that catch real bug
 | `dotted-label-keys` | **R-ID** — `app.kubernetes.io/name` is ONE path segment. Dot-joining it is silently wrong |
 | `array-atomic-on-change` | arrays merge atomically when lengths change (engine spec §4.1); a positional merge mis-aligns |
 | `secret-redaction` | a redacted value is never displayed, never dirty, and can never be written back over the real one |
+| `bookmark-absorbed` | a routine `BOOKMARK` is absorbed. Forward its object and you replace a live resource with a husk that has only a `resourceVersion` |
+| `partial-object-refused` | a `PartialObjectMetadata` **has a uid** — so "has a uid" was never a sufficient test for "is a complete object", and ours was wrong |
+| `tombstone-without-uid` | identity is never *reconstructed*. A guessed uid deletes the wrong object out of somebody's browser |
+| `resourceversion-bignum` | a `resourceVersion` is an **arbitrary-bitsize** decimal (Kubernetes' own example is 40 digits). `strconv.ParseInt` overflows it, and the symptom is silently dropped live updates |
 
 ## Adding a fixture
 

@@ -1,0 +1,35 @@
+id: partial-object-refused
+title: A metadata-only object is never forwarded as an upsert — the gateway resnapshots instead.
+why: >
+  Kubernetes serves PartialObjectMetadata on request (Accept: application/json;as=PartialObjectMetadata):
+  "the returned objects only contain the `metadata` field. The `spec` and `status` fields are omitted."
+
+  This fixture exists because it caught a real mistake in our own gateway. The guard was "an object
+  with no uid is partial" — but a PartialObjectMetadata HAS a uid. It has a whole metadata block. What
+  it does not have is a spec or a status. So the guard looked at the wrong field, the object sailed
+  through, and the consumer — whose model is REPLACE, never merge — swapped a live Deployment for a
+  husk: the status view goes blank and the editor silently loses the user's spec.
+
+  The honest check is the KIND (PartialObjectMetadata / PartialObjectMetadataList, group meta.k8s.io),
+  not the presence of a uid. A partial object delivered as an update would blank a consumer's state —
+  spec §2 says so, and it is right; we were simply not enforcing what we had written down.
+
+  The recovery is a new snapshot cycle: it is the one response that is ALWAYS correct, because it
+  re-establishes the truth rather than guessing at it.
+suites: [gateway]
+scope: { target: demo, group: apps, version: v1, resource: deployments, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [deploy-web.v1] }
+  - { op: partial, body: deploy-web.v1 }   # metadata only: uid present, spec and status GONE
+  - { op: list, bodies: [deploy-web.v2] }  # the resnapshot the gateway must perform
+
+events:
+  - { type: reset }
+  - { type: added, body: deploy-web.v1 }
+  - { type: synced }
+  - { type: error, code: RESYNC_REQUIRED, terminal: false }
+  - { type: reset }
+  - { type: added, body: deploy-web.v2 }
+  - { type: synced }

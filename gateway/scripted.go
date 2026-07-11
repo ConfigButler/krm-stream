@@ -85,6 +85,46 @@ func NewScriptedBackend(c Corpus, ops []WatchOp) (*ScriptedBackend, error) {
 			}
 			cur.events = append(cur.events, WatchEvent{Type: WatchEventType(op.Op), Object: obj})
 
+		case "bookmark":
+			// A routine BOOKMARK, exactly as Kubernetes documents it: an object of the requested type
+			// carrying ONLY metadata.resourceVersion. No uid, no name, no spec, no status.
+			if cur == nil {
+				return nil, fmt.Errorf("scripted: bookmark before any list")
+			}
+			cur.events = append(cur.events, WatchEvent{
+				Type: WatchBookmark,
+				Object: KRMObject{
+					"apiVersion": "v1",
+					"kind":       "ConfigMap",
+					"metadata":   map[string]any{"resourceVersion": op.ResourceVersion},
+				},
+			})
+
+		case "partial":
+			// PartialObjectMetadata: the metadata, and NOTHING else. Note that it keeps the uid — which
+			// is precisely why "has a uid" was never a sufficient test for "is a complete object", and
+			// why this op had to exist before the gateway could be made honest.
+			if cur == nil {
+				return nil, fmt.Errorf("scripted: partial before any list")
+			}
+			full, err := body(op.Body)
+			if err != nil {
+				return nil, err
+			}
+			cur.events = append(cur.events, WatchEvent{Type: WatchModified, Object: partialOf(full)})
+
+		case "tombstone":
+			// client-go's cache.DeletedFinalStateUnknown: the informer missed the delete and noticed on
+			// a relist, so what it hands you may be little more than a key. The uid is gone.
+			if cur == nil {
+				return nil, fmt.Errorf("scripted: tombstone before any list")
+			}
+			full, err := body(op.Body)
+			if err != nil {
+				return nil, err
+			}
+			cur.events = append(cur.events, WatchEvent{Type: WatchDeleted, Object: degenerateTombstoneOf(full)})
+
 		case "disconnect":
 			return nil, fmt.Errorf("scripted: `disconnect` is the caller's to handle — split the script on it")
 
@@ -149,3 +189,40 @@ func (w *scriptedWatcher) Next(ctx context.Context) (WatchEvent, error) {
 }
 
 func (w *scriptedWatcher) Stop() {}
+
+// partialOf turns a complete object into the PartialObjectMetadata the API server serves when a
+// client asks for a metadata-only response: the metadata, verbatim — uid and all — and nothing else.
+//
+//	Accept: application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1
+//	  -> "the returned objects only contain the `metadata` field. The `spec` and `status` fields
+//	      are omitted."
+//
+// The uid survives. That is the whole trap: a gateway checking "does it have a uid?" waves this
+// through, and the consumer replaces a live Deployment with a husk.
+func partialOf(full KRMObject) KRMObject {
+	out := KRMObject{
+		"apiVersion": "meta.k8s.io/v1",
+		"kind":       "PartialObjectMetadata",
+	}
+	if meta, ok := deepCopyObject(full)["metadata"].(map[string]any); ok {
+		out["metadata"] = meta
+	}
+	return out
+}
+
+// degenerateTombstoneOf is what an informer hands you when it missed a delete and found out during a
+// relist (cache.DeletedFinalStateUnknown): the object may be little more than a key. Here: the kind
+// and the name survive, and the uid — the only thing a consumer may act on — does not.
+//
+// The name surviving is the dangerous part. It is exactly enough to tempt an implementer into
+// reconstructing the identity from it, and a delete-and-recreate under the same name (see
+// delete-recreate-uid) is precisely where that deletes the wrong object.
+func degenerateTombstoneOf(full KRMObject) KRMObject {
+	out := deepCopyObject(full)
+	meta, ok := out["metadata"].(map[string]any)
+	if !ok {
+		return out
+	}
+	delete(meta, "uid")
+	return out
+}

@@ -1,0 +1,36 @@
+id: resourceversion-bignum
+title: A 40-digit resourceVersion orders correctly — and a stale replay is still dropped.
+why: >
+  Kubernetes: "Resource versions are compared as arbitrary bitsize decimal integers... The bitsize
+  must not be assumed to be some fixed amount." Its own worked example is 40 digits long.
+
+  strconv.ParseInt tops out at 19. The gateway used to compare resource versions with it, so against a
+  cluster like this one the parse simply failed — and the per-object monotonicity check (spec §6) gave
+  up. The user-visible symptom is silently dropped live updates, which in a status view is
+  indistinguishable from "Kubernetes is being slow", and is therefore the kind of bug that survives for
+  years.
+
+  The comparison Kubernetes prescribes: "If they are not of equal length, the longer one is greater
+  (for example, "123" > "23"). If they are of equal length, the lexicographically greater one is
+  greater." Note what that rules out: a plain lexicographic compare, which would call the 41-digit
+  version OLDER than the 40-digit one and drop it.
+
+  So this fixture asserts both halves at once:
+    - the 41-digit v7 is NEWER than the 40-digit v6 and must be delivered;
+    - replaying v6 afterwards is STALE and must be dropped (§6: never emit, within a cycle, a state
+      older than one already emitted for that uid).
+suites: [gateway]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v6-bignum] }
+  - { op: modified, body: cm-app.v7-bignum-newer }   # 41 digits: LONGER, therefore newer
+  - { op: modified, body: cm-app.v6-bignum }         # a replay of the older state: must be DROPPED
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v6-bignum }
+  - { type: synced }
+  - { type: modified, body: cm-app.v7-bignum-newer }
+  # ...and nothing more: the stale replay never reaches the wire.

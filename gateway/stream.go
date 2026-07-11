@@ -3,7 +3,7 @@ package gateway
 import (
 	"context"
 	"errors"
-	"strconv"
+	"strings"
 )
 
 // The stream loop: a Kubernetes watch in, the protocol out.
@@ -110,7 +110,7 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 	// consumer already saw (that is what makes reconnect replays idempotent). Keeping this map
 	// across cycles would silently swallow the snapshot of an object whose resourceVersion had not
 	// moved — the object would simply never arrive, and the consumer would prune it.
-	emitted := map[string]int64{}
+	emitted := map[string]string{}
 
 	for {
 		ev, err := w.Next(ctx)
@@ -130,15 +130,21 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 			}
 
 		case WatchAdded, WatchModified:
+			// A partial object must never be forwarded (spec §2). The consumer's model is REPLACE,
+			// never merge, so a fragment does not "update" its object — it BLANKS it: the status view
+			// goes empty and an editor loses the user's spec.
+			//
+			// Note what is checked, and what is NOT. "Has no uid" is not sufficient, and believing it
+			// was is the bug this corrected: a PartialObjectMetadata carries a complete metadata block,
+			// uid included, and only omits `spec`/`status`. The kind is the honest test. (The uid test
+			// still earns its keep — a BOOKMARK's object has only a resourceVersion.)
+			if reason := partialReason(ev.Object); reason != "" {
+				// Resnapshot: it is the one recovery that is always correct, because it re-establishes
+				// the truth instead of guessing at it.
+				return ResyncRequired(reason)
+			}
 			obj, redacted := project(projection, ev.Object)
 			uid := obj.UID()
-			if uid == "" {
-				// A metadata-only or otherwise partial object. Forwarding it as added/modified would
-				// REPLACE the consumer's object with a fragment — the consumer's whole model is
-				// "replace, never merge" — so the object would blank out on screen. Resnapshot
-				// instead: it is the one recovery that is always correct.
-				return ResyncRequired("upstream delivered a partial object with no uid")
-			}
 			if isStale(emitted, uid, obj) {
 				continue
 			}
@@ -175,24 +181,96 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 	}
 }
 
+// partialReason says why an object must not be forwarded as added/modified, or "" if it may be.
+//
+// Both cases are things Kubernetes really sends — see docs/facts/kubernetes-api-concepts.md:
+//
+//  1. PartialObjectMetadata. A client can ask for metadata-only responses
+//     (`Accept: application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1`), and then "the returned
+//     objects only contain the `metadata` field. The `spec` and `status` fields are omitted." It KEEPS
+//     ITS UID. If this gateway is ever wired to a client that negotiated such a response — or to an
+//     aggregated API server that returns one — every object on the stream would arrive as a husk.
+//
+//  2. No uid at all. A BOOKMARK's object is exactly this: "of the type requested by the request, but
+//     only includes a .metadata.resourceVersion field". Bookmarks are absorbed before we get here, so
+//     reaching this branch means something upstream is confused — and confusion is not a thing to
+//     forward to a browser.
+func partialReason(obj KRMObject) string {
+	kind, _ := obj["kind"].(string)
+	if kind == "PartialObjectMetadata" || kind == "PartialObjectMetadataList" {
+		return "upstream delivered a metadata-only object (" + kind + "); it has no spec and no status"
+	}
+	if obj.UID() == "" {
+		return "upstream delivered a partial object with no uid"
+	}
+	return ""
+}
+
 // isStale enforces per-object monotonicity (§6): within one cycle, never hand a consumer a state
 // older than one it already has. This is what makes coalescing safe, and it is the guarantee a naive
 // relay cannot give — an informer that relists mid-stream will happily replay an older version of an
 // object it has already delivered.
-//
-// A resourceVersion that does not parse as an integer is not compared. The gateway may rely on
-// monotonicity within one target (§3d) but must not CRASH on a backend that does not provide it: the
-// failure mode of a wrong guess here is a dropped update, which is worse than a duplicate one.
-func isStale(emitted map[string]int64, uid string, obj KRMObject) bool {
-	rv, err := strconv.ParseInt(resourceVersionOf(obj), 10, 64)
-	if err != nil {
-		return false
-	}
-	if last, ok := emitted[uid]; ok && rv < last {
+func isStale(emitted map[string]string, uid string, obj KRMObject) bool {
+	rv := resourceVersionOf(obj)
+	last, seen := emitted[uid]
+	if seen && compareResourceVersion(rv, last) < 0 {
 		return true
 	}
+	// Not comparable, or newer: record it and let it through. Recording an unorderable version is
+	// harmless — the next comparison against it will also be unorderable, and will also let through.
 	emitted[uid] = rv
 	return false
+}
+
+// compareResourceVersion orders two resource versions the way Kubernetes says to, and returns 0 when
+// they cannot be ordered at all.
+//
+// This function is small and it is the second bug this project shipped for want of reading the docs.
+// The old version was `strconv.ParseInt(rv, 10, 64)`. Kubernetes:
+//
+//	"Resource versions are compared as ARBITRARY BITSIZE decimal integers... The bitsize must not be
+//	 assumed to be some fixed amount."
+//
+// and its own worked example is FORTY DIGITS long. int64 holds nineteen. Against such a cluster the
+// parse failed, the staleness check gave up, and updates were dropped — a symptom indistinguishable
+// from "Kubernetes is being slow", which is how a bug like this survives for years.
+//
+// The prescribed comparison, verbatim: "If they are not of equal length, the longer one is greater
+// (for example, "123" > "23"). If they are of equal length, the lexicographically greater one is
+// greater." Note that this rules out a PLAIN lexicographic compare, which calls "9" > "10".
+//
+// And the case with no integer in it at all: an extension API server may serve resource versions that
+// are not decimal, and then "the two strings can be checked for equality but you CANNOT rely on
+// comparisons for ordering". So: unorderable returns 0, and the caller drops nothing. A duplicate
+// event is harmless (the protocol is idempotent by construction); a dropped one is data loss.
+func compareResourceVersion(a, b string) int {
+	if a == b {
+		return 0
+	}
+	if !isDecimalResourceVersion(a) || !isDecimalResourceVersion(b) {
+		return 0 // not orderable — say so, rather than guessing
+	}
+	if len(a) != len(b) {
+		if len(a) > len(b) {
+			return 1
+		}
+		return -1
+	}
+	return strings.Compare(a, b)
+}
+
+// isDecimalResourceVersion reports whether a resource version may be ORDERED, per the rules the API
+// docs give: "Both must start with a digit 1-9 and contain only digits 0-9."
+func isDecimalResourceVersion(rv string) bool {
+	if rv == "" || rv[0] < '1' || rv[0] > '9' {
+		return false
+	}
+	for i := 0; i < len(rv); i++ {
+		if rv[i] < '0' || rv[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // emitTerminal puts the error on the wire and returns it. A terminal error MUST be the last event on
