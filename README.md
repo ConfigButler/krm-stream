@@ -58,7 +58,11 @@ They are joined by one thing, and it is the reason they live in one repo:
 **Early.** The specs are written and the conformance fixtures are the contract. The gateway and the
 client are being implemented against them, test-first. Nothing is published yet.
 
-See [`docs/`](docs/) for the design record and [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to run it.
+The design record lives in [`docs/`](docs/):
+[client-state-model](docs/client-state-model.md) (the merge algorithm the client implements),
+[extraction-plan](docs/extraction-plan.md) (where this came from, and the order of the work), and
+[naming](docs/naming.md) (why `krm-stream` — and why not `krm-live`).
+[`CONTRIBUTING.md`](CONTRIBUTING.md) is how to run it.
 
 ## Quick start
 
