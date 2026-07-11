@@ -1,0 +1,34 @@
+id: dotted-label-keys
+title: A label key containing dots and a slash is ONE path segment.
+why: >
+  R-ID. `app.kubernetes.io/name` dot-joined into a path string becomes
+  "metadata.labels.app.kubernetes.io/name", which splits back into SIX segments and addresses
+  nothing. The symptom is the worst kind: no crash, no error — the conflict lookup simply never
+  matches, so conflicts silently never appear and the user's edit is silently lost on save.
+
+  Paths are ARRAYS of segments. Where a scalar key is unavoidable (a conflict map), encode the path
+  structurally (JSON.stringify of the array) — never by joining with a magic separator.
+suites: [client]
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }
+  - { type: modified, body: cm-app.v3 }     # server changes data.log-level — a DIFFERENT path
+
+client:
+  edits:
+    - { after: 2, op: set, uid: cm-app-0001, path: [metadata, labels, "app.kubernetes.io/name"], value: checkout }
+  expect:
+    dirty: [[metadata, labels, "app.kubernetes.io/name"]]
+    conflicts: []                           # the server touched log-level, NOT the label
+    draftSubset:
+      metadata:
+        labels:
+          app.kubernetes.io/name: checkout
+      data:
+        log-level: warn                     # untouched by the user -> follows the server
+    patch:
+      metadata:
+        labels:
+          app.kubernetes.io/name: checkout

@@ -1,0 +1,36 @@
+# The server REMOVED a nested field: `spec.paused` is gone (v1 had `paused: false`).
+# A deep-merge of the incoming object over the old one leaves `paused` behind — a ghost in a
+# nested subtree, which is the hardest kind to notice. `added`/`modified` REPLACE.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  uid: deploy-web-0001
+  name: web
+  namespace: app
+  resourceVersion: "3003"
+  generation: 5
+  labels:
+    app.kubernetes.io/name: web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/configbutler/web:v1.2.3
+          ports:
+            - containerPort: 8080
+status:
+  observedGeneration: 5
+  replicas: 2
+  readyReplicas: 2
+  conditions:
+    - type: Available
+      status: "True"
+      reason: MinimumReplicasAvailable

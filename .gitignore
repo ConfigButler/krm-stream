@@ -1,0 +1,15 @@
+# Node
+node_modules/
+packages/*/dist/
+
+# Go
+/bin/
+
+# Task's fingerprint cache
+.task/
+
+# Local-only environment overrides
+.env
+
+# Editor scratch
+*.local.*

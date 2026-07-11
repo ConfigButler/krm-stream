@@ -1,0 +1,24 @@
+id: named-object-absent
+title: A named scope whose object does not exist is still framed reset…synced — not silence.
+why: >
+  This is the fixture that kills the tempting "named scopes may skip the snapshot" optimization.
+  If the object was deleted while the consumer was away, a reconnect that emits nothing leaves the
+  old uid on screen as a ghost FOREVER — there is no event that ever removes it. One framing, one
+  consumer state machine, both scope types.
+suites: [gateway, client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app, name: app-config }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [] }
+
+events:
+  - { type: reset }
+  - { type: synced }
+
+client:
+  edits: []
+  expect:
+    uids: []
+    dirty: []
+    conflicts: []

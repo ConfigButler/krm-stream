@@ -1,0 +1,47 @@
+id: conflict-and-converge
+title: A real conflict is raised, kept, and then clears itself when the server converges.
+why: >
+  R-DERIVED. Two halves:
+
+  (1) The server changed the very key the user is editing, to a different value. Keep the user's
+      edit — never silently overwrite what someone typed — and surface what the cluster says.
+
+  (2) Then the server's value ARRIVES at what the user typed (a colleague made the same change).
+      The conflict must clear, and the field must stop being dirty — draft == server now. This is
+      the half a cached `dirty` set gets wrong: it goes stale after a watch event and the field
+      stays flagged forever, or only unflags itself on the next click.
+      Dirtiness is DERIVED — deepEqual(draft@path, base@path) — never remembered.
+suites: [gateway, client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v1] }
+  - { op: modified, body: cm-app.v3 }       # log-level: info -> warn   (user is typing "debug")
+  - { op: modified, body: cm-app.v4 }       # log-level: warn -> debug  (converged on the user's value)
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }
+  - { type: modified, body: cm-app.v3 }
+  - { type: modified, body: cm-app.v4 }
+
+client:
+  edits:
+    - { after: 2, op: set, uid: cm-app-0001, path: [data, log-level], value: debug }
+  expect:
+    dirty: []                               # draft == server again: nothing to save
+    conflicts: []                           # the conflict cleared itself on convergence
+    draftSubset: { data: { log-level: debug } }
+    patch: null                             # and there is nothing left to send
+
+# The intermediate state, after event 3 (the conflict) and before event 4 (the convergence):
+#   dirty     = [[data, log-level]]
+#   conflicts = [{ path: [data, log-level], theirs: warn }]
+#   draft.data.log-level = debug            <- the user's edit is NEVER overwritten
+checkpoints:
+  - after: 3
+    dirty: [[data, log-level]]
+    conflicts: [{ path: [data, log-level], theirs: warn }]
+    draftSubset: { data: { log-level: debug } }

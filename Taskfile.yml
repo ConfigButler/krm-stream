@@ -1,0 +1,96 @@
+version: "3"
+
+# Everything in this repo is driven by `task` (same convention as gitops-api).
+# `task` with no argument lists what there is.
+
+run: once
+
+vars:
+  CLIENT_DIR: packages/krm-stream
+  # A throwaway cluster for proving the gateway against a real API server.
+  # (The unit suites need no cluster at all — see `task test`.)
+  SPIKE_CLUSTER: krm-stream-spike
+
+tasks:
+  default:
+    desc: "List the available tasks."
+    cmds:
+      - task --list
+    silent: true
+
+  # ---------------------------------------------------------------- fixtures --
+  fixtures:
+    desc: "Regenerate conformance/gen/*.json from the YAML sources (both suites read the JSON)."
+    sources:
+      - conformance/bodies/*.yaml
+      - conformance/fixtures/*.yaml
+      - conformance/generate.sh
+    generates:
+      - conformance/gen/*.json
+    cmds:
+      - bash conformance/generate.sh
+
+  fixtures-check:
+    desc: "Fail if conformance/gen/ is stale — the YAML is the source of truth, the JSON is built."
+    deps: [fixtures]
+    cmds:
+      - git diff --exit-code -- conformance/gen || (echo "conformance/gen is stale — run 'task fixtures' and commit" && exit 1)
+
+  # -------------------------------------------------------------------- test --
+  test:
+    desc: "Run both suites against the shared conformance fixtures."
+    deps: [test-gateway, test-client]
+
+  test-gateway:
+    desc: "Go: the gateway + its half of the conformance suite."
+    deps: [fixtures]
+    dir: gateway
+    cmds:
+      - go test ./...
+
+  test-client:
+    desc: "TypeScript: the client + its half of the conformance suite (node --test, no deps)."
+    deps: [fixtures]
+    dir: "{{.CLIENT_DIR}}"
+    cmds:
+      - node --test
+
+  # -------------------------------------------------------------------- lint --
+  lint:
+    desc: "Vet + lint both languages."
+    deps: [lint-gateway, lint-client]
+
+  lint-gateway:
+    dir: gateway
+    cmds:
+      - go vet ./...
+      - golangci-lint run ./...
+
+  lint-client:
+    dir: "{{.CLIENT_DIR}}"
+    cmds:
+      - npx --no-install tsc --noEmit
+
+  # ------------------------------------------------------------------- build --
+  build-client:
+    desc: "Emit the dependency-free ESM bundle a browser can <script type=module> import."
+    dir: "{{.CLIENT_DIR}}"
+    sources: ["src/**/*.ts", "tsconfig.json", "package.json"]
+    generates: ["dist/**/*.js"]
+    cmds:
+      - npm install --no-audit --no-fund
+      - npx tsc
+
+  # -------------------------------------------------------------------- spike --
+  spike-up:
+    desc: "Throwaway k3d cluster for proving the gateway against a real API server."
+    status:
+      - k3d cluster list {{.SPIKE_CLUSTER}} >/dev/null 2>&1
+    cmds:
+      - k3d cluster create {{.SPIKE_CLUSTER}} --wait
+      - kubectl --context k3d-{{.SPIKE_CLUSTER}} get --raw /healthz
+
+  spike-down:
+    desc: "Delete the throwaway cluster."
+    cmds:
+      - k3d cluster delete {{.SPIKE_CLUSTER}}

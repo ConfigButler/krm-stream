@@ -1,0 +1,35 @@
+id: edit-vs-unrelated-change
+title: A server change to a key you are NOT editing must not disturb the key you ARE.
+why: >
+  R-THREEWAY. The bug this defends against: comparing the incoming server object to the DRAFT
+  instead of to the PREVIOUS SERVER OBJECT. Do that, and every watch event looks like "the server
+  changed everything the user typed" — so an unrelated `replicas` bump falsely conflicts a
+  `log-level` edit, and the console fights the user on every controller heartbeat.
+
+  The base is the previous server state. If base == theirs for a path, the server did not move it,
+  and the draft is left ALONE — no follow, no flash, no conflict.
+suites: [gateway, client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v1] }
+  - { op: modified, body: cm-app.v2 }       # replicas 3 -> 5. Nobody touched log-level.
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }
+  - { type: modified, body: cm-app.v2 }
+
+client:
+  edits:
+    - { after: 2, op: set, uid: cm-app-0001, path: [data, log-level], value: debug }
+  expect:
+    dirty: [[data, log-level]]              # ONLY the user's own edit is dirty
+    conflicts: []                           # the replicas bump is not a conflict — they never touched it
+    draftSubset:
+      data:
+        log-level: debug                    # the edit survived the event untouched
+        replicas: "5"                       # and the untouched key followed the server
+    patch: { data: { log-level: debug } }   # the patch carries the edit, and nothing else

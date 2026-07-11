@@ -1,0 +1,24 @@
+id: partial-cycle-no-prune
+title: A snapshot cycle that never reaches synced prunes nothing.
+why: >
+  The consumer is fed reset + one added, and then the connection dies mid-cycle. If pruning were
+  driven by "reset clears the map" instead of "synced prunes the unseen", the user would watch half
+  their resources evaporate every time the network hiccuped. State from BEFORE the reset survives
+  until a cycle completes.
+suites: [client]
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: added, body: cm-flags.v1 }
+  - { type: synced }
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  # ...and nothing more. No synced: the connection dropped.
+
+client:
+  edits: []
+  expect:
+    uids: [cm-app-0001, cm-flags-0001]      # feature-flags is STILL HERE — we never completed a cycle
+    dirty: []
+    conflicts: []

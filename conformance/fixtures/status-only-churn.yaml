@@ -1,0 +1,36 @@
+id: status-only-churn
+title: status follows the server live, and is never dirty, never conflicted, never in a patch.
+why: >
+  This is the product thesis in one fixture. `status` is controller-owned: it must update live (that
+  is the whole live-status-watch use case — read-only is NOT ignored, it flashes and re-renders),
+  and it must be structurally incapable of becoming an edit. Meanwhile the user is editing
+  `spec.replicas`, and a status heartbeat must not touch it.
+
+  On a real workload this — not editing — is the dominant traffic on the stream.
+suites: [gateway, client]
+scope: { target: demo, group: apps, version: v1, resource: deployments, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [deploy-web.v1] }
+  - { op: modified, body: deploy-web.v2 }   # status only: readyReplicas 1 -> 2, Available False -> True
+
+events:
+  - { type: reset }
+  - { type: added, body: deploy-web.v1 }
+  - { type: synced }
+  - { type: modified, body: deploy-web.v2 }
+
+client:
+  edits:
+    - { after: 2, op: set, uid: deploy-web-0001, path: [spec, replicas], value: 4 }
+  expect:
+    dirty: [[spec, replicas]]               # the ONLY dirty path — status can never be one
+    conflicts: []
+    draftSubset:
+      spec: { replicas: 4 }                 # the edit survived the status churn
+      status:                               # ...and status followed the server, live
+        readyReplicas: 2
+        observedGeneration: 4
+    patch: { spec: { replicas: 4 } }        # status is NOT in the patch. It cannot be.
+    flashed: [[status, readyReplicas], [status, conditions]]

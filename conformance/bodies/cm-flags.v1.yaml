@@ -1,0 +1,11 @@
+# A second object in the same scope — the one that gets deleted while the consumer is disconnected,
+# so that `reconnect-prune` has a ghost to NOT leave behind.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  uid: cm-flags-0001
+  name: feature-flags
+  namespace: app
+  resourceVersion: "1010"
+data:
+  checkout-v2: "false"

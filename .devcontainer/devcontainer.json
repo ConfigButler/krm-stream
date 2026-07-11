@@ -1,0 +1,65 @@
+{
+  "name": "krm-stream DevContainer",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": "..",
+    "target": "dev"
+  },
+  "workspaceMount": "source=${localWorkspaceFolder},target=/workspaces/${localWorkspaceFolderBasename},type=bind",
+  "workspaceFolder": "/workspaces/${localWorkspaceFolderBasename}",
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2.5.9": {
+      "userUid": "automatic",
+      "userGid": "automatic",
+      "username": "vscode"
+    },
+    "ghcr.io/devcontainers/features/git:1": {},
+    "ghcr.io/devcontainers/features/docker-outside-of-docker:1.10.0": {}
+  },
+  "runArgs": [
+    "--group-add=docker",
+    "--add-host=host.docker.internal:host-gateway"
+  ],
+  "forwardPorts": [8081],
+  "portsAttributes": {
+    "8081": {
+      "label": "krm-stream-gateway (examples)",
+      "onAutoForward": "notify"
+    }
+  },
+  "customizations": {
+    "vscode": {
+      "settings": {
+        "go.useLanguageServer": true,
+        "go.gopath": "/go",
+        "go.testExplorer.enable": true,
+        "gopls": { "build.directoryFilters": ["-node_modules"] },
+        "typescript.tsdk": "packages/krm-stream/node_modules/typescript/lib",
+        "files.exclude": { "**/node_modules": true }
+      },
+      "extensions": [
+        "golang.go",
+        "anthropic.claude-code",
+        "redhat.vscode-yaml"
+      ]
+    }
+  },
+  "postCreateCommand": "bash .devcontainer/post-create.sh '${containerWorkspaceFolder}'",
+  "remoteUser": "vscode",
+  // Anything under /home/vscode that is NOT a named volume lives in the container's writable
+  // layer and is DESTROYED on rebuild (which editing this file triggers). Pin the things whose
+  // loss is confusing: the gh token, the kubeconfig, and the Go caches.
+  "mounts": [
+    "source=krm-stream-gomodcache,target=/go/pkg/mod,type=volume",
+    "source=krm-stream-gobuildcache,target=/home/vscode/.cache/go-build,type=volume",
+    "source=krm-stream-dotkube,target=/home/vscode/.kube,type=volume",
+    "source=krm-stream-ghconfig,target=/home/vscode/.config/gh,type=volume",
+    "source=krm-stream-claudeconfig,target=/home/vscode/.claude,type=volume"
+  ],
+  "containerEnv": {
+    "HOST_PROJECT_PATH": "${localWorkspaceFolder}",
+    "PROJECT_PATH": "/workspaces/${localWorkspaceFolderBasename}",
+    "GIT_USER_NAME": "${localEnv:GIT_USER_NAME}",
+    "GIT_USER_EMAIL": "${localEnv:GIT_USER_EMAIL}"
+  }
+}

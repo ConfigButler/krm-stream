@@ -1,0 +1,39 @@
+# STATUS ONLY: the controller finished rolling out. `spec` is byte-identical to v1.
+#
+# This is the dominant traffic on a real stream — controllers rewrite status constantly. It must
+# follow the server live (that IS the product), and it must NEVER make anything dirty, conflicted,
+# or part of a patch. A UI that treats this as an edit fights its own cluster.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  uid: deploy-web-0001
+  name: web
+  namespace: app
+  resourceVersion: "3002"
+  generation: 4
+  labels:
+    app.kubernetes.io/name: web
+spec:
+  replicas: 2
+  paused: false
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/configbutler/web:v1.2.3
+          ports:
+            - containerPort: 8080
+status:
+  observedGeneration: 4
+  replicas: 2
+  readyReplicas: 2
+  conditions:
+    - type: Available
+      status: "True"
+      reason: MinimumReplicasAvailable

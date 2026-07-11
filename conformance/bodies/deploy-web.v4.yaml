@@ -1,0 +1,44 @@
+# The server APPENDED a container (a sidecar was injected). The array's length changed.
+#
+# This is the array problem, and it is why the engine treats an array atomically as soon as it is
+# dirty or its length moves (engine spec §4.1): a positional merge would try to reconcile the user's
+# edited element 0 against a shifted list and produce nonsense. Atomic is coarse but correct — and
+# it agrees with RFC 7386 merge patch, which replaces arrays wholesale anyway.
+#
+# The keyed merge (x-kubernetes-list-map-keys: containers by `name`) is the known follow-up.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  uid: deploy-web-0001
+  name: web
+  namespace: app
+  resourceVersion: "3004"
+  generation: 5
+  labels:
+    app.kubernetes.io/name: web
+spec:
+  replicas: 2
+  paused: false
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: ghcr.io/configbutler/web:v1.2.3
+          ports:
+            - containerPort: 8080
+        - name: otel-sidecar
+          image: ghcr.io/configbutler/otel:v0.9.0
+status:
+  observedGeneration: 5
+  replicas: 2
+  readyReplicas: 2
+  conditions:
+    - type: Available
+      status: "True"
+      reason: MinimumReplicasAvailable

@@ -1,0 +1,29 @@
+id: snapshot-then-deltas
+title: The basic cycle — snapshot first, then live deltas.
+why: >
+  reset … added* … synced, and only then live events. The snapshot exists so the browser paints
+  immediately rather than waiting for something to change; the watch resumes from the list's
+  resourceVersion, so no event between the two is lost.
+suites: [gateway, client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v1, cm-flags.v1] }
+  - { op: modified, body: cm-app.v2 }
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: added, body: cm-flags.v1 }
+  - { type: synced }
+  - { type: modified, body: cm-app.v2 }
+
+client:
+  edits: []
+  expect:
+    uids: [cm-app-0001, cm-flags-0001]
+    dirty: []
+    conflicts: []
+    draftSubset: { data: { log-level: info, replicas: "5" } }
+    patch: null

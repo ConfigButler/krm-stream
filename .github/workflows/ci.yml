@@ -1,0 +1,66 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # The point of the monorepo: one contract, and a change to it must be seen by BOTH
+  # implementations in the same commit. Both jobs read conformance/gen/, which is built
+  # from conformance/{bodies,fixtures}/*.yaml — so a protocol change that breaks either
+  # side fails here, before it can ship.
+  fixtures:
+    name: fixtures are the contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: install yq
+        run: sudo curl -fsSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.48.1/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq
+      - name: regenerate
+        run: bash conformance/generate.sh
+      - name: conformance/gen must not be stale
+        run: git diff --exit-code -- conformance/gen
+
+  gateway:
+    name: gateway (go)
+    runs-on: ubuntu-latest
+    needs: fixtures
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: gateway/go.sum
+      - run: go vet ./...
+        working-directory: gateway
+      - run: go test ./...
+        working-directory: gateway
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          working-directory: gateway
+
+  client:
+    name: client (typescript)
+    runs-on: ubuntu-latest
+    needs: fixtures
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: packages/krm-stream/package-lock.json
+      - run: npm install --no-audit --no-fund
+        working-directory: packages/krm-stream
+      # Node 22 runs .ts directly (type stripping) — the suite needs no test deps.
+      - run: node --test
+        working-directory: packages/krm-stream
+      - run: npx tsc --noEmit
+        working-directory: packages/krm-stream
+      - run: npx tsc
+        working-directory: packages/krm-stream

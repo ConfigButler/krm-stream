@@ -1,0 +1,34 @@
+id: resync-midstream
+title: Upstream continuity can be lost WITHOUT the SSE connection dropping — a fresh cycle follows.
+why: >
+  410 Gone, an informer relist, a cache reset. The SSE connection is perfectly healthy, but the
+  gateway can no longer promise it saw every change — so it must begin a new snapshot cycle rather
+  than silently continue. A gateway that just relays the watch cannot do this, and the ghost it
+  leaves is invisible until someone notices a deleted object still on screen.
+  It SHOULD announce the break first with a non-terminal RESYNC_REQUIRED.
+suites: [gateway, client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v1, cm-flags.v1] }
+  - { op: modified, body: cm-app.v2 }
+  - { op: relist, bodies: [cm-app.v2] }     # 410 Gone -> the lister sees feature-flags is gone
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: added, body: cm-flags.v1 }
+  - { type: synced }
+  - { type: modified, body: cm-app.v2 }
+  - { type: error, code: RESYNC_REQUIRED, terminal: false }
+  - { type: reset }
+  - { type: added, body: cm-app.v2 }
+  - { type: synced }
+
+client:
+  edits: []
+  expect:
+    uids: [cm-app-0001]                     # converged; no ghost, and the connection never dropped
+    dirty: []
+    conflicts: []

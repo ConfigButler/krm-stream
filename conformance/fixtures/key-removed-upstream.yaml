@@ -1,0 +1,40 @@
+id: key-removed-upstream
+title: A map key deleted upstream disappears from the draft — while an in-flight edit survives.
+why: >
+  The removal case at map level, and it is subtler than it looks. The server deleted `data.replicas`
+  and the `note` annotation. The user is meanwhile editing `data.log-level`.
+
+  Three things must happen at once, and each is a different rule:
+    - `data.replicas`     -> gone from the draft. The user never touched it, so it follows the
+                             server, and "follows the server" includes following it into deletion.
+                             (A UI must drop the row — this is the `structural` signal.)
+    - `metadata.annotations.note` -> likewise gone.
+    - `data.log-level`    -> untouched by the server, so the edit stands, dirty, unconflicted.
+
+  A consumer that deep-merges leaves BOTH deleted keys on screen as ghosts the user can still type
+  into — and then a save resurrects them in the cluster.
+suites: [gateway, client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v1] }
+  - { op: modified, body: cm-app.v5 }       # data.replicas removed; annotation `note` removed
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }
+  - { type: modified, body: cm-app.v5 }
+
+client:
+  edits:
+    - { after: 2, op: set, uid: cm-app-0001, path: [data, log-level], value: debug }
+  expect:
+    dirty: [[data, log-level]]
+    conflicts: []
+    absentPaths:
+      - [data, replicas]
+      - [metadata, annotations, note]
+    draftSubset: { data: { log-level: debug } }
+    patch: { data: { log-level: debug } }   # the removals are the SERVER's, not ours — not in our patch

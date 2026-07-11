@@ -1,0 +1,35 @@
+id: nested-field-removed
+title: A field the server removed must disappear — replacement, not deep-merge.
+why: >
+  The single most important consumer rule, and the one an "obvious" implementation gets wrong.
+  A generic deep-merge of the incoming object over the previous one CANNOT express a removal:
+
+      old: { spec: { replicas: 2, paused: false } }
+      new: { spec: { replicas: 2 } }              <- server removed `paused`
+      deep-merge -> { replicas: 2, paused: false }   WRONG: a ghost, in a nested subtree
+      replace    -> { replicas: 2 }                  RIGHT
+
+  The authoritative server object is REPLACED wholesale. The three-way merge with local edits is
+  layered ABOVE that — never in place of it.
+suites: [gateway, client]
+scope: { target: demo, group: apps, version: v1, resource: deployments, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [deploy-web.v1] }
+  - { op: modified, body: deploy-web.v3 }   # spec.paused removed
+
+events:
+  - { type: reset }
+  - { type: added, body: deploy-web.v1 }
+  - { type: synced }
+  - { type: modified, body: deploy-web.v3 }
+
+client:
+  edits: []
+  expect:
+    dirty: []
+    conflicts: []
+    absentPaths:
+      - [spec, paused]                      # gone from the server object AND from the draft
+    patch: null

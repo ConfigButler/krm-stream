@@ -1,0 +1,30 @@
+id: reconnect-prune
+title: An object deleted while the consumer was disconnected is pruned on the next synced.
+why: >
+  No persistent ghosts. The consumer never saw the `deleted` event — it was offline — so the ONLY
+  thing that can remove feature-flags is the reset…synced boundary: mark all unseen on reset, seen
+  on each added, prune what is still unseen on synced.
+suites: [gateway, client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v1, cm-flags.v1] }
+  - { op: disconnect }                       # the browser's EventSource drops
+  - { op: list, bodies: [cm-app.v1] }        # ...and feature-flags was deleted while it was away
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: added, body: cm-flags.v1 }
+  - { type: synced }
+  - { type: reset }                          # a new connection begins a new cycle
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }                         # <- cm-flags-0001 is pruned HERE, and not before
+
+client:
+  edits: []
+  expect:
+    uids: [cm-app-0001]
+    dirty: []
+    conflicts: []

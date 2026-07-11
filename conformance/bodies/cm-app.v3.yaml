@@ -1,0 +1,16 @@
+# The server changed `log-level` — the very key the user is editing, and to a DIFFERENT value.
+# That is a real conflict: keep the user's edit, and tell them what the cluster says.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  uid: cm-app-0001
+  name: app-config
+  namespace: app
+  resourceVersion: "1003"
+  labels:
+    app.kubernetes.io/name: shop
+  annotations:
+    note: keep
+data:
+  log-level: warn
+  replicas: "3"

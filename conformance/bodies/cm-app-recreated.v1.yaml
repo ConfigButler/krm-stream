@@ -1,0 +1,13 @@
+# SAME name, NEW uid: someone deleted app-config and created it again. This is a different object
+# and the consumer must notice — which it only does if it keys on uid, never on name.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  uid: cm-app-0002
+  name: app-config
+  namespace: app
+  resourceVersion: "2001"
+  labels:
+    app.kubernetes.io/name: shop
+data:
+  log-level: trace

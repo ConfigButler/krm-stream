@@ -1,0 +1,28 @@
+{
+  // Emit plain ES2022 that a browser can <script type="module"> import directly. No bundler, no
+  // runtime dependency, no polyfill — if this package ever needs one, that is a design smell.
+  //
+  // rewriteRelativeImportExtensions is what lets the SOURCE import "./merge.ts" (which is what Node
+  // 22's type-stripping test runner requires) while the EMITTED js imports "./merge.js" (which is
+  // what a browser requires). Without it, exactly one of those two works.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["ES2022", "DOM"],
+    "allowImportingTsExtensions": true,
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": true,
+    "declaration": true,
+    "outDir": "dist",
+    "rootDir": "src",
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "noUnusedLocals": true,
+    "isolatedModules": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist", "node_modules"]
+}

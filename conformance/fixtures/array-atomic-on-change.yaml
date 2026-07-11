@@ -1,0 +1,43 @@
+id: array-atomic-on-change
+title: When an array's length changes under an edit, the whole array conflicts — atomically.
+why: >
+  Engine spec §4.1, the known-coarse-but-correct rule. The user edited containers[0].image; the
+  server injected a sidecar, so containers now has 2 elements. A positional merge would reconcile
+  ours[0] against theirs[0] and ours[1] (absent) against theirs[1] — and with a PREPENDED element
+  it would silently merge the user's edit into the wrong container.
+
+  So: any array that is dirty or whose length moved is treated as ONE value. The user's array wins
+  until they resolve it, and the whole array is the conflict. Coarse — their one-field edit now
+  conflicts with an unrelated append — but never wrong. It also agrees with RFC 7386, which replaces
+  arrays wholesale anyway, so the patch format needs no special case.
+
+  The right long-term answer is a keyed merge (x-kubernetes-list-map-keys: containers by `name`),
+  driven by the OpenAPI schema. That is the project's main open design question, not a TODO.
+suites: [client]
+
+events:
+  - { type: reset }
+  - { type: added, body: deploy-web.v1 }
+  - { type: synced }
+  - { type: modified, body: deploy-web.v4 }   # a sidecar was injected: 1 container -> 2
+
+client:
+  edits:
+    - after: 2
+      op: set
+      uid: deploy-web-0001
+      path: [spec, template, spec, containers, 0, image]
+      value: ghcr.io/configbutler/web:v2.0.0
+  expect:
+    conflicts:
+      - path: [spec, template, spec, containers]     # the ARRAY conflicts, not the element
+    dirty: [[spec, template, spec, containers]]
+    draftSubset:
+      spec:
+        template:
+          spec:
+            containers:
+              - name: web
+                image: ghcr.io/configbutler/web:v2.0.0   # the user's array is preserved intact
+                ports:
+                  - containerPort: 8080

@@ -1,0 +1,16 @@
+# The baseline ConfigMap. Note the label key: it contains dots AND a slash, and it is ONE
+# path segment — ["metadata","labels","app.kubernetes.io/name"]. Dot-joining it is the R-ID bug.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  uid: cm-app-0001
+  name: app-config
+  namespace: app
+  resourceVersion: "1001"
+  labels:
+    app.kubernetes.io/name: shop
+  annotations:
+    note: keep
+data:
+  log-level: info
+  replicas: "3"

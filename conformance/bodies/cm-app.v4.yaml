@@ -1,0 +1,16 @@
+# The server's value has CONVERGED on what the user typed (someone else made the same change).
+# The conflict must clear itself — and the field is no longer dirty, because draft == server.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  uid: cm-app-0001
+  name: app-config
+  namespace: app
+  resourceVersion: "1004"
+  labels:
+    app.kubernetes.io/name: shop
+  annotations:
+    note: keep
+data:
+  log-level: debug
+  replicas: "3"

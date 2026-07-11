@@ -1,0 +1,31 @@
+id: delete-recreate-uid
+title: Delete and recreate under the same name — new uid, no state bleeds across.
+why: >
+  Identity is metadata.uid, never metadata.name. A consumer keyed on name would merge the new
+  object's state into the old one's draft and quietly show a mixture of two different objects.
+  Note the user had a pending edit on the OLD object: it dies with it. That is correct — the object
+  they were editing no longer exists.
+suites: [gateway, client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-editor/v1
+
+watch:
+  - { op: list, bodies: [cm-app.v1] }
+  - { op: deleted, body: cm-app.v1 }
+  - { op: added, body: cm-app-recreated.v1 }
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }
+  - { type: deleted, identity: { uid: cm-app-0001, apiVersion: v1, kind: ConfigMap, namespace: app, name: app-config } }
+  - { type: added, body: cm-app-recreated.v1 }
+
+client:
+  edits:
+    - { after: 2, op: set, uid: cm-app-0001, path: [data, log-level], value: debug }
+  expect:
+    uids: [cm-app-0002]
+    dirty: []                               # the edit died with the object it belonged to
+    conflicts: []
+    draftSubset: { data: { log-level: trace } }

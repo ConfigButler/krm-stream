@@ -1,0 +1,13 @@
+# The server REMOVED `data.replicas` and the `note` annotation. A consumer that deep-merges the
+# incoming object over the old one resurrects both as ghosts. `added`/`modified` REPLACE.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  uid: cm-app-0001
+  name: app-config
+  namespace: app
+  resourceVersion: "1005"
+  labels:
+    app.kubernetes.io/name: shop
+data:
+  log-level: info

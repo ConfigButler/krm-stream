@@ -1,0 +1,16 @@
+# The server changed `replicas` — a key the user is NOT editing. It must not disturb, and must not
+# falsely conflict with, an in-flight edit to `log-level`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  uid: cm-app-0001
+  name: app-config
+  namespace: app
+  resourceVersion: "1002"
+  labels:
+    app.kubernetes.io/name: shop
+  annotations:
+    note: keep
+data:
+  log-level: info
+  replicas: "5"

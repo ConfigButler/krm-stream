@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/ConfigButler/krm-stream/spec/events.schema.json",
+  "title": "KRM resource stream protocol v1 — event envelope",
+  "description": "One JSON object per SSE `data:` frame. The normative text is spec/v1.md; this schema is the machine-readable shape of what it says. Heartbeats are SSE comments (': heartbeat'), not events.",
+
+  "oneOf": [
+    { "$ref": "#/$defs/reset" },
+    { "$ref": "#/$defs/upsert" },
+    { "$ref": "#/$defs/deleted" },
+    { "$ref": "#/$defs/synced" },
+    { "$ref": "#/$defs/error" }
+  ],
+
+  "$defs": {
+    "krmObject": {
+      "title": "A complete projected Kubernetes object",
+      "description": "NOT a schema — a ConfigMap has `data` and no `spec`; a CRD may define any root field. Carried verbatim, minus exactly what the declared projection removed.",
+      "type": "object",
+      "required": ["apiVersion", "kind", "metadata"],
+      "properties": {
+        "apiVersion": { "type": "string" },
+        "kind": { "type": "string" },
+        "metadata": {
+          "type": "object",
+          "required": ["uid", "name"],
+          "properties": {
+            "uid": { "type": "string" },
+            "name": { "type": "string" },
+            "namespace": { "type": "string" },
+            "resourceVersion": {
+              "type": "string",
+              "description": "Opaque to consumers. A consumer MAY echo it back on save; it MUST NOT parse, compare or order by it."
+            }
+          }
+        }
+      }
+    },
+
+    "scope": {
+      "type": "object",
+      "required": ["target", "version", "resource"],
+      "properties": {
+        "target": { "type": "string", "description": "An allowlisted upstream id. Never a raw API-server URL." },
+        "group": { "type": "string" },
+        "version": { "type": "string" },
+        "resource": { "type": "string" },
+        "namespace": { "type": "string", "description": "Absent => a cluster-scoped resource. NOT 'all namespaces'." },
+        "name": { "type": "string", "description": "Present => a single-object scope, framed exactly like a collection." },
+        "labelSelector": { "type": "string" }
+      }
+    },
+
+    "reset": {
+      "title": "reset — a snapshot cycle begins",
+      "description": "Consumer: mark every known uid unseen. DO NOT PRUNE YET.",
+      "type": "object",
+      "required": ["type", "projection"],
+      "properties": {
+        "type": { "const": "reset" },
+        "target": { "type": "string" },
+        "scope": { "$ref": "#/$defs/scope" },
+        "projection": {
+          "enum": ["krm-raw/v1", "krm-editor/v1"],
+          "description": "What this stream removes from every object. Declared so a consumer can distinguish 'absent upstream' from 'the gateway took it away'."
+        }
+      }
+    },
+
+    "upsert": {
+      "title": "added / modified — here is this object's current complete state",
+      "description": "The only two upsert spellings. A consumer MUST treat them identically and REPLACE the authoritative object for that uid; a deep-merge resurrects fields the server deleted. They stay distinct because a UI legitimately animates an arrival differently from a change.",
+      "type": "object",
+      "required": ["type", "object", "redactedPaths"],
+      "properties": {
+        "type": { "enum": ["added", "modified"] },
+        "object": { "$ref": "#/$defs/krmObject" },
+        "redactedPaths": {
+          "type": "array",
+          "items": { "type": "string", "pattern": "^/" },
+          "description": "RFC 6901 JSON Pointers into `object` whose values are masked. REQUIRED — empty array when nothing is redacted. Mandatory precisely so a consumer never infers redaction from a value that merely looks like a placeholder."
+        }
+      }
+    },
+
+    "deleted": {
+      "title": "deleted — a tombstone with identity",
+      "description": "The one event with no complete object; there may not be one. If the gateway cannot recover a trustworthy uid it MUST NOT emit this at all — it begins a new snapshot cycle and lets reset…synced prune.",
+      "type": "object",
+      "required": ["type", "identity"],
+      "properties": {
+        "type": { "const": "deleted" },
+        "identity": {
+          "type": "object",
+          "required": ["uid", "apiVersion", "kind", "name"],
+          "properties": {
+            "uid": { "type": "string" },
+            "apiVersion": { "type": "string" },
+            "kind": { "type": "string" },
+            "namespace": { "type": "string" },
+            "name": { "type": "string" }
+          }
+        },
+        "object": { "$ref": "#/$defs/krmObject" }
+      }
+    },
+
+    "synced": {
+      "title": "synced — the snapshot cycle is complete",
+      "description": "Consumer: prune every uid still unseen. Pruning happens HERE and nowhere else — a cycle that never reaches synced must prune nothing.",
+      "type": "object",
+      "required": ["type"],
+      "properties": { "type": { "const": "synced" } }
+    },
+
+    "error": {
+      "type": "object",
+      "required": ["type", "code", "terminal"],
+      "properties": {
+        "type": { "const": "error" },
+        "code": {
+          "enum": [
+            "FORBIDDEN",
+            "UNAUTHENTICATED",
+            "SCOPE_INVALID",
+            "UPSTREAM_UNAVAILABLE",
+            "RESYNC_REQUIRED",
+            "SLOW_CONSUMER",
+            "INTERNAL"
+          ],
+          "description": "A stable machine-readable set: a free-form message alone cannot tell a client whether to reconnect or give up."
+        },
+        "message": { "type": "string" },
+        "terminal": {
+          "type": "boolean",
+          "description": "If true this MUST be the last event and the gateway closes the connection. A consumer using native EventSource MUST call close() — otherwise it reconnects automatically and hammers a forbidden scope forever."
+        },
+        "retryAfterMs": { "type": ["integer", "null"] }
+      }
+    }
+  }
+}

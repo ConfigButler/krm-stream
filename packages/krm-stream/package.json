@@ -1,0 +1,42 @@
+{
+  "name": "krm-stream",
+  "version": "0.0.0",
+  "description": "A live, honest window onto Kubernetes resources, in the browser: consume a KRM resource stream, three-way merge local edits, build a merge patch.",
+  "keywords": [
+    "kubernetes",
+    "krm",
+    "sse",
+    "watch",
+    "live",
+    "three-way-merge",
+    "resource-stream"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ConfigButler/krm-stream.git",
+    "directory": "packages/krm-stream"
+  },
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "README.md"],
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc",
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "//": "typescript is the ONLY devDependency, and there are no dependencies at all. The engine must emit plain, dependency-free ESM: gitops-api has no bundler and is not getting one. Node 22 runs the .ts tests directly (type stripping), so the test suite needs nothing either.",
+  "devDependencies": {
+    "typescript": "^5.9.0"
+  }
+}

@@ -1,0 +1,1042 @@
+[
+  {
+    "id": "array-atomic-on-change",
+    "title": "When an array's length changes under an edit, the whole array conflicts — atomically.",
+    "why": "Engine spec §4.1, the known-coarse-but-correct rule. The user edited containers[0].image; the server injected a sidecar, so containers now has 2 elements. A positional merge would reconcile ours[0] against theirs[0] and ours[1] (absent) against theirs[1] — and with a PREPENDED element it would silently merge the user's edit into the wrong container.\nSo: any array that is dirty or whose length moved is treated as ONE value. The user's array wins until they resolve it, and the whole array is the conflict. Coarse — their one-field edit now conflicts with an unrelated append — but never wrong. It also agrees with RFC 7386, which replaces arrays wholesale anyway, so the patch format needs no special case.\nThe right long-term answer is a keyed merge (x-kubernetes-list-map-keys: containers by `name`), driven by the OpenAPI schema. That is the project's main open design question, not a TODO.\n",
+    "suites": [
+      "client"
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "deploy-web.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "deploy-web.v4"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "set",
+          "uid": "deploy-web-0001",
+          "path": [
+            "spec",
+            "template",
+            "spec",
+            "containers",
+            0,
+            "image"
+          ],
+          "value": "ghcr.io/configbutler/web:v2.0.0"
+        }
+      ],
+      "expect": {
+        "conflicts": [
+          {
+            "path": [
+              "spec",
+              "template",
+              "spec",
+              "containers"
+            ]
+          }
+        ],
+        "dirty": [
+          [
+            "spec",
+            "template",
+            "spec",
+            "containers"
+          ]
+        ],
+        "draftSubset": {
+          "spec": {
+            "template": {
+              "spec": {
+                "containers": [
+                  {
+                    "name": "web",
+                    "image": "ghcr.io/configbutler/web:v2.0.0",
+                    "ports": [
+                      {
+                        "containerPort": 8080
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "conflict-and-converge",
+    "title": "A real conflict is raised, kept, and then clears itself when the server converges.",
+    "why": "R-DERIVED. Two halves:\n(1) The server changed the very key the user is editing, to a different value. Keep the user's\n    edit — never silently overwrite what someone typed — and surface what the cluster says.\n\n(2) Then the server's value ARRIVES at what the user typed (a colleague made the same change).\n    The conflict must clear, and the field must stop being dirty — draft == server now. This is\n    the half a cached `dirty` set gets wrong: it goes stale after a watch event and the field\n    stays flagged forever, or only unflags itself on the next click.\n    Dirtiness is DERIVED — deepEqual(draft@path, base@path) — never remembered.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v3"
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v4"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v3"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v4"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "set",
+          "uid": "cm-app-0001",
+          "path": [
+            "data",
+            "log-level"
+          ],
+          "value": "debug"
+        }
+      ],
+      "expect": {
+        "dirty": [],
+        "conflicts": [],
+        "draftSubset": {
+          "data": {
+            "log-level": "debug"
+          }
+        },
+        "patch": null
+      }
+    },
+    "checkpoints": [
+      {
+        "after": 3,
+        "dirty": [
+          [
+            "data",
+            "log-level"
+          ]
+        ],
+        "conflicts": [
+          {
+            "path": [
+              "data",
+              "log-level"
+            ],
+            "theirs": "warn"
+          }
+        ],
+        "draftSubset": {
+          "data": {
+            "log-level": "debug"
+          }
+        }
+      }
+    ]
+  },
+  {
+    "id": "delete-recreate-uid",
+    "title": "Delete and recreate under the same name — new uid, no state bleeds across.",
+    "why": "Identity is metadata.uid, never metadata.name. A consumer keyed on name would merge the new object's state into the old one's draft and quietly show a mixture of two different objects. Note the user had a pending edit on the OLD object: it dies with it. That is correct — the object they were editing no longer exists.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      },
+      {
+        "op": "deleted",
+        "body": "cm-app.v1"
+      },
+      {
+        "op": "added",
+        "body": "cm-app-recreated.v1"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "deleted",
+        "identity": {
+          "uid": "cm-app-0001",
+          "apiVersion": "v1",
+          "kind": "ConfigMap",
+          "namespace": "app",
+          "name": "app-config"
+        }
+      },
+      {
+        "type": "added",
+        "body": "cm-app-recreated.v1"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "set",
+          "uid": "cm-app-0001",
+          "path": [
+            "data",
+            "log-level"
+          ],
+          "value": "debug"
+        }
+      ],
+      "expect": {
+        "uids": [
+          "cm-app-0002"
+        ],
+        "dirty": [],
+        "conflicts": [],
+        "draftSubset": {
+          "data": {
+            "log-level": "trace"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "dotted-label-keys",
+    "title": "A label key containing dots and a slash is ONE path segment.",
+    "why": "R-ID. `app.kubernetes.io/name` dot-joined into a path string becomes \"metadata.labels.app.kubernetes.io/name\", which splits back into SIX segments and addresses nothing. The symptom is the worst kind: no crash, no error — the conflict lookup simply never matches, so conflicts silently never appear and the user's edit is silently lost on save.\nPaths are ARRAYS of segments. Where a scalar key is unavoidable (a conflict map), encode the path structurally (JSON.stringify of the array) — never by joining with a magic separator.\n",
+    "suites": [
+      "client"
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v3"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "set",
+          "uid": "cm-app-0001",
+          "path": [
+            "metadata",
+            "labels",
+            "app.kubernetes.io/name"
+          ],
+          "value": "checkout"
+        }
+      ],
+      "expect": {
+        "dirty": [
+          [
+            "metadata",
+            "labels",
+            "app.kubernetes.io/name"
+          ]
+        ],
+        "conflicts": [],
+        "draftSubset": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/name": "checkout"
+            }
+          },
+          "data": {
+            "log-level": "warn"
+          }
+        },
+        "patch": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/name": "checkout"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "edit-vs-unrelated-change",
+    "title": "A server change to a key you are NOT editing must not disturb the key you ARE.",
+    "why": "R-THREEWAY. The bug this defends against: comparing the incoming server object to the DRAFT instead of to the PREVIOUS SERVER OBJECT. Do that, and every watch event looks like \"the server changed everything the user typed\" — so an unrelated `replicas` bump falsely conflicts a `log-level` edit, and the console fights the user on every controller heartbeat.\nThe base is the previous server state. If base == theirs for a path, the server did not move it, and the draft is left ALONE — no follow, no flash, no conflict.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v2"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v2"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "set",
+          "uid": "cm-app-0001",
+          "path": [
+            "data",
+            "log-level"
+          ],
+          "value": "debug"
+        }
+      ],
+      "expect": {
+        "dirty": [
+          [
+            "data",
+            "log-level"
+          ]
+        ],
+        "conflicts": [],
+        "draftSubset": {
+          "data": {
+            "log-level": "debug",
+            "replicas": "5"
+          }
+        },
+        "patch": {
+          "data": {
+            "log-level": "debug"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "key-removed-upstream",
+    "title": "A map key deleted upstream disappears from the draft — while an in-flight edit survives.",
+    "why": "The removal case at map level, and it is subtler than it looks. The server deleted `data.replicas` and the `note` annotation. The user is meanwhile editing `data.log-level`.\nThree things must happen at once, and each is a different rule:\n  - `data.replicas`     -> gone from the draft. The user never touched it, so it follows the\n                           server, and \"follows the server\" includes following it into deletion.\n                           (A UI must drop the row — this is the `structural` signal.)\n  - `metadata.annotations.note` -> likewise gone.\n  - `data.log-level`    -> untouched by the server, so the edit stands, dirty, unconflicted.\n\nA consumer that deep-merges leaves BOTH deleted keys on screen as ghosts the user can still type into — and then a save resurrects them in the cluster.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v5"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v5"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "set",
+          "uid": "cm-app-0001",
+          "path": [
+            "data",
+            "log-level"
+          ],
+          "value": "debug"
+        }
+      ],
+      "expect": {
+        "dirty": [
+          [
+            "data",
+            "log-level"
+          ]
+        ],
+        "conflicts": [],
+        "absentPaths": [
+          [
+            "data",
+            "replicas"
+          ],
+          [
+            "metadata",
+            "annotations",
+            "note"
+          ]
+        ],
+        "draftSubset": {
+          "data": {
+            "log-level": "debug"
+          }
+        },
+        "patch": {
+          "data": {
+            "log-level": "debug"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "named-object-absent",
+    "title": "A named scope whose object does not exist is still framed reset…synced — not silence.",
+    "why": "This is the fixture that kills the tempting \"named scopes may skip the snapshot\" optimization. If the object was deleted while the consumer was away, a reconnect that emits nothing leaves the old uid on screen as a ghost FOREVER — there is no event that ever removes it. One framing, one consumer state machine, both scope types.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app",
+      "name": "app-config"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": []
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "synced"
+      }
+    ],
+    "client": {
+      "edits": [],
+      "expect": {
+        "uids": [],
+        "dirty": [],
+        "conflicts": []
+      }
+    }
+  },
+  {
+    "id": "nested-field-removed",
+    "title": "A field the server removed must disappear — replacement, not deep-merge.",
+    "why": "The single most important consumer rule, and the one an \"obvious\" implementation gets wrong. A generic deep-merge of the incoming object over the previous one CANNOT express a removal:\n\n    old: { spec: { replicas: 2, paused: false } }\n    new: { spec: { replicas: 2 } }              <- server removed `paused`\n    deep-merge -> { replicas: 2, paused: false }   WRONG: a ghost, in a nested subtree\n    replace    -> { replicas: 2 }                  RIGHT\n\nThe authoritative server object is REPLACED wholesale. The three-way merge with local edits is layered ABOVE that — never in place of it.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "group": "apps",
+      "version": "v1",
+      "resource": "deployments",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "deploy-web.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "deploy-web.v3"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "deploy-web.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "deploy-web.v3"
+      }
+    ],
+    "client": {
+      "edits": [],
+      "expect": {
+        "dirty": [],
+        "conflicts": [],
+        "absentPaths": [
+          [
+            "spec",
+            "paused"
+          ]
+        ],
+        "patch": null
+      }
+    }
+  },
+  {
+    "id": "partial-cycle-no-prune",
+    "title": "A snapshot cycle that never reaches synced prunes nothing.",
+    "why": "The consumer is fed reset + one added, and then the connection dies mid-cycle. If pruning were driven by \"reset clears the map\" instead of \"synced prunes the unseen\", the user would watch half their resources evaporate every time the network hiccuped. State from BEFORE the reset survives until a cycle completes.\n",
+    "suites": [
+      "client"
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "added",
+        "body": "cm-flags.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      }
+    ],
+    "client": {
+      "edits": [],
+      "expect": {
+        "uids": [
+          "cm-app-0001",
+          "cm-flags-0001"
+        ],
+        "dirty": [],
+        "conflicts": []
+      }
+    }
+  },
+  {
+    "id": "reconnect-prune",
+    "title": "An object deleted while the consumer was disconnected is pruned on the next synced.",
+    "why": "No persistent ghosts. The consumer never saw the `deleted` event — it was offline — so the ONLY thing that can remove feature-flags is the reset…synced boundary: mark all unseen on reset, seen on each added, prune what is still unseen on synced.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1",
+          "cm-flags.v1"
+        ]
+      },
+      {
+        "op": "disconnect"
+      },
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "added",
+        "body": "cm-flags.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      }
+    ],
+    "client": {
+      "edits": [],
+      "expect": {
+        "uids": [
+          "cm-app-0001"
+        ],
+        "dirty": [],
+        "conflicts": []
+      }
+    }
+  },
+  {
+    "id": "resync-midstream",
+    "title": "Upstream continuity can be lost WITHOUT the SSE connection dropping — a fresh cycle follows.",
+    "why": "410 Gone, an informer relist, a cache reset. The SSE connection is perfectly healthy, but the gateway can no longer promise it saw every change — so it must begin a new snapshot cycle rather than silently continue. A gateway that just relays the watch cannot do this, and the ghost it leaves is invisible until someone notices a deleted object still on screen. It SHOULD announce the break first with a non-terminal RESYNC_REQUIRED.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1",
+          "cm-flags.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v2"
+      },
+      {
+        "op": "relist",
+        "bodies": [
+          "cm-app.v2"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "added",
+        "body": "cm-flags.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v2"
+      },
+      {
+        "type": "error",
+        "code": "RESYNC_REQUIRED",
+        "terminal": false
+      },
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v2"
+      },
+      {
+        "type": "synced"
+      }
+    ],
+    "client": {
+      "edits": [],
+      "expect": {
+        "uids": [
+          "cm-app-0001"
+        ],
+        "dirty": [],
+        "conflicts": []
+      }
+    }
+  },
+  {
+    "id": "secret-redaction",
+    "title": "A redacted value is shown as a mask, is never dirtiable, and can never be written back.",
+    "why": "The rule that makes a Secret safe to display at all: a value you never SAW cannot round-trip over the real one. Three obligations, and all three must hold or the feature is a vulnerability:\n\n  1. the gateway declares WHICH paths are redacted (RFC 6901 pointers), on the wire, per object —\n     so a consumer never has to infer redaction from a value that merely LOOKS like a placeholder;\n  2. the client marks those paths read-only: no draft, no dirty, no conflict, never in a patch;\n  3. the gateway REJECTS any patch that touches a redacted path — belt and braces, because the\n     client is not the security boundary. A hostile client is just a client.\n\nEditing an UNREDACTED field of the same object must still work — that is the whole point of keys-only disclosure. You can see that `token` exists, you can rename the object's labels, and you can never learn or clobber the token itself.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "secrets",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "secret-token.v1"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "secret-token.v1",
+        "redactedPaths": [
+          "/data/token",
+          "/data/username"
+        ]
+      },
+      {
+        "type": "synced"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "set",
+          "uid": "secret-token-0001",
+          "path": [
+            "metadata",
+            "labels",
+            "app.kubernetes.io/name"
+          ],
+          "value": "checkout"
+        }
+      ],
+      "expect": {
+        "dirty": [
+          [
+            "metadata",
+            "labels",
+            "app.kubernetes.io/name"
+          ]
+        ],
+        "conflicts": [],
+        "readOnlyPaths": [
+          [
+            "data",
+            "token"
+          ],
+          [
+            "data",
+            "username"
+          ]
+        ],
+        "patch": {
+          "metadata": {
+            "labels": {
+              "app.kubernetes.io/name": "checkout"
+            }
+          }
+        }
+      }
+    },
+    "gatewayRejects": [
+      {
+        "patch": {
+          "data": {
+            "token": "hunter2"
+          }
+        },
+        "code": "FORBIDDEN",
+        "because": "/data/token is redacted under krm-editor/v1"
+      }
+    ]
+  },
+  {
+    "id": "snapshot-then-deltas",
+    "title": "The basic cycle — snapshot first, then live deltas.",
+    "why": "reset … added* … synced, and only then live events. The snapshot exists so the browser paints immediately rather than waiting for something to change; the watch resumes from the list's resourceVersion, so no event between the two is lost.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1",
+          "cm-flags.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v2"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "added",
+        "body": "cm-flags.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v2"
+      }
+    ],
+    "client": {
+      "edits": [],
+      "expect": {
+        "uids": [
+          "cm-app-0001",
+          "cm-flags-0001"
+        ],
+        "dirty": [],
+        "conflicts": [],
+        "draftSubset": {
+          "data": {
+            "log-level": "info",
+            "replicas": "5"
+          }
+        },
+        "patch": null
+      }
+    }
+  },
+  {
+    "id": "status-only-churn",
+    "title": "status follows the server live, and is never dirty, never conflicted, never in a patch.",
+    "why": "This is the product thesis in one fixture. `status` is controller-owned: it must update live (that is the whole live-status-watch use case — read-only is NOT ignored, it flashes and re-renders), and it must be structurally incapable of becoming an edit. Meanwhile the user is editing `spec.replicas`, and a status heartbeat must not touch it.\nOn a real workload this — not editing — is the dominant traffic on the stream.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "group": "apps",
+      "version": "v1",
+      "resource": "deployments",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "deploy-web.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "deploy-web.v2"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "deploy-web.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "deploy-web.v2"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "set",
+          "uid": "deploy-web-0001",
+          "path": [
+            "spec",
+            "replicas"
+          ],
+          "value": 4
+        }
+      ],
+      "expect": {
+        "dirty": [
+          [
+            "spec",
+            "replicas"
+          ]
+        ],
+        "conflicts": [],
+        "draftSubset": {
+          "spec": {
+            "replicas": 4
+          },
+          "status": {
+            "readyReplicas": 2,
+            "observedGeneration": 4
+          }
+        },
+        "patch": {
+          "spec": {
+            "replicas": 4
+          }
+        },
+        "flashed": [
+          [
+            "status",
+            "readyReplicas"
+          ],
+          [
+            "status",
+            "conditions"
+          ]
+        ]
+      }
+    }
+  }
+]
