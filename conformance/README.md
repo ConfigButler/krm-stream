@@ -133,6 +133,25 @@ Every fixture names the rule it defends, in `why:`. The ones that catch real bug
 | `partial-object-refused` | a `PartialObjectMetadata` **has a uid** — so "has a uid" was never a sufficient test for "is a complete object", and ours was wrong |
 | `tombstone-without-uid` | identity is never *reconstructed*. A guessed uid deletes the wrong object out of somebody's browser |
 | `resourceversion-bignum` | a `resourceVersion` is an **arbitrary-bitsize** decimal (Kubernetes' own example is 40 digits). `strconv.ParseInt` overflows it, and the symptom is silently dropped live updates |
+| `resourceversion-unorderable` | an **aggregated API** may serve a non-decimal `resourceVersion`. Strict ordering refuses it, loudly, naming the escape hatch — it never degrades in silence |
+
+### Why the resourceVersion fixtures use a `Flunder`
+
+Those two use **`wardle.example.com/v1alpha1 Flunder`** — Kubernetes' own
+[sample-apiserver](https://github.com/kubernetes/sample-apiserver) — and not a ConfigMap, and the
+reason is the whole point of grounding fixtures in real behaviour:
+
+- **A conformant cluster cannot produce either value on a built-in.** Since **1.35**, orderability is a
+  Certified Kubernetes requirement for base objects *and* custom resources. An unorderable
+  `resourceVersion` on a ConfigMap is a scenario that **cannot happen**, and a fixture defending
+  against it would be defending against nothing.
+- **kube-apiserver's `resourceVersion` is an etcd revision** — an int64, 19 digits. You will never meet
+  a 40-digit one there either. A different backing store is where such a value actually comes from.
+- **An aggregated / extension API server is the one server the docs still carve out**, because it is a
+  third-party implementation the conformance test does not cover. So it is the honest home for both.
+
+A fixture that teaches a real rule with an impossible example is worse than no fixture: it makes the
+reader trust a mental model that will mislead them the next time.
 
 ## Adding a fixture
 

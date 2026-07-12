@@ -5,32 +5,39 @@ why: >
   must not be assumed to be some fixed amount." Its own worked example is 40 digits long.
 
   strconv.ParseInt tops out at 19. The gateway used to compare resource versions with it, so against a
-  cluster like this one the parse simply failed — and the per-object monotonicity check (spec §6) gave
+  server like this one the parse simply failed — and the per-object monotonicity check (spec §6) gave
   up. The user-visible symptom is silently dropped live updates, which in a status view is
   indistinguishable from "Kubernetes is being slow", and is therefore the kind of bug that survives for
   years.
 
-  The comparison Kubernetes prescribes: "If they are not of equal length, the longer one is greater
-  (for example, "123" > "23"). If they are of equal length, the lexicographically greater one is
-  greater." Note what that rules out: a plain lexicographic compare, which would call the 41-digit
-  version OLDER than the 40-digit one and drop it.
+  Note the KIND. This is a Flunder — Kubernetes' own sample aggregated API — and not a ConfigMap, on
+  purpose: kube-apiserver's resourceVersion is an etcd revision, so it fits in an int64 and you will
+  never meet a 40-digit one there. A server with a different backing store is where such a value
+  actually comes from, and a fixture that pretended otherwise would be teaching the rule with an
+  example that cannot happen.
 
-  So this fixture asserts both halves at once:
-    - the 41-digit v7 is NEWER than the 40-digit v6 and must be delivered;
-    - replaying v6 afterwards is STALE and must be dropped (§6: never emit, within a cycle, a state
+  The comparison Kubernetes prescribes: "If they are not of equal length, the longer one is greater...
+  If they are of equal length, the lexicographically greater one is greater." That rules out a plain
+  lexicographic compare, which would call the 41-digit version OLDER than the 40-digit one.
+
+  So, both halves at once:
+    - the 41-digit v2 is NEWER than the 40-digit v1 and must be delivered;
+    - replaying v1 afterwards is STALE and must be dropped (§6: never emit, within a cycle, a state
       older than one already emitted for that uid).
+
+  These are decimals, so they ARE orderable: the default (OrderingStrict) handles them, and must.
 suites: [gateway]
-scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+scope: { target: demo, group: wardle.example.com, version: v1alpha1, resource: flunders, namespace: app }
 projection: krm-editor/v1
 
 watch:
-  - { op: list, bodies: [cm-app.v6-bignum] }
-  - { op: modified, body: cm-app.v7-bignum-newer }   # 41 digits: LONGER, therefore newer
-  - { op: modified, body: cm-app.v6-bignum }         # a replay of the older state: must be DROPPED
+  - { op: list, bodies: [flunder.v1-bignum] }
+  - { op: modified, body: flunder.v2-bignum-newer }   # 41 digits: LONGER, therefore newer
+  - { op: modified, body: flunder.v1-bignum }         # a replay of the older state: must be DROPPED
 
 events:
   - { type: reset }
-  - { type: added, body: cm-app.v6-bignum }
+  - { type: added, body: flunder.v1-bignum }
   - { type: synced }
-  - { type: modified, body: cm-app.v7-bignum-newer }
+  - { type: modified, body: flunder.v2-bignum-newer }
   # ...and nothing more: the stale replay never reaches the wire.

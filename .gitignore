@@ -17,3 +17,7 @@ packages/*/dist/
 # Playwright (examples/vanilla-browser) — the browser rung of the e2e ladder
 test-results/
 playwright-report/
+
+# A sibling repo checked out for reference (gitops-reverser: its e2e stands up the wardle
+# sample-apiserver, which is where the aggregated-API fixtures came from). It is NOT ours.
+external/

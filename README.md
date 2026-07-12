@@ -135,6 +135,37 @@ They are joined by one thing, and it is the reason they live in one repo:
 > say what the gateway must *emit* and what the client must then *hold*. Both suites load them. A
 > protocol change that breaks one side fails both, in the same commit, before it can ship.
 
+## Requirements
+
+> ### Kubernetes **1.35+**
+>
+> Not a soft preference — the design leans on it.
+>
+> **From 1.35, `resourceVersion` orderability is a Certified Kubernetes conformance requirement**, for
+> built-in types *and* custom resources: *"Base API objects and custom resources **must** be orderable
+> as a monotonically increasing integer for any 1.35+ APIServer implementation in order to pass
+> conformance tests."*
+>
+> That is what lets the gateway promise a browser something no naive watch relay can — **per-object
+> monotonicity**: within a snapshot cycle you are never handed a state older than one you already hold.
+> It is what makes coalescing safe (and a controller rewriting `status` at 200Hz *needs* coalescing),
+> and it is what lets a stale replay after a relist be dropped instead of flickering the UI backwards.
+
+Ordering is a real dependency, so it is a real setting — [`Gateway.Ordering`](gateway/stream.go):
+
+| | |
+|---|---|
+| **`OrderingStrict`** *(default)* | Trust 1.35. A `resourceVersion` that cannot be ordered means the upstream is not what it claimed to be, so the stream **fails loudly with a terminal error that names the fix** — rather than silently dropping a guarantee the consumer still believes it has. |
+| **`OrderingLenient`** | The escape hatch, for the one case Kubernetes itself still carves out: an **aggregated / extension API server**, which is a third-party implementation the conformance test does not cover, and may serve a non-decimal `resourceVersion`. Lenient orders nothing it cannot order, and **drops nothing** — a duplicate is harmless (applying an event is idempotent by construction), a wrongly-dropped update is data loss. |
+
+The conformance corpus says this with real objects, not invented ones: the unorderable and
+arbitrary-bitsize `resourceVersion` fixtures use a **`Flunder`** — Kubernetes' own
+[sample aggregated API](https://github.com/kubernetes/sample-apiserver) (`wardle.example.com`) —
+because a ConfigMap on a conformant cluster *cannot* produce either value, and a fixture that pretended
+otherwise would be teaching the rule with an example that cannot happen.
+
+Also: Go 1.26, Node 22 (client build + tests only — the shipped bundle has **zero** dependencies).
+
 ## Status
 
 **Early.** The specs are written and the conformance fixtures are the contract. The gateway and the

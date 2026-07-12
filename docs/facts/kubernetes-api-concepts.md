@@ -106,11 +106,28 @@ for CRDs. The "may not parse as a decimal" escape is scoped to **extension / agg
 which are third-party implementations that this conformance test does not cover.
 
 That makes "can I trust `resourceVersion` to increase?" a real decision rather than a shrug, and this
-library takes the strong side: **it targets Kubernetes 1.35+, trusts orderability, and refuses loudly
+library takes the strong side: **it REQUIRES Kubernetes 1.35+, trusts orderability, and refuses loudly
 when the upstream lies** (`Gateway.Ordering = OrderingStrict`, the default), with an explicit
-`OrderingLenient` for a pre-1.35 cluster or an aggregated API. Degrading *silently* on every cluster in
-order to accommodate one is the wrong trade: a consumer that was promised per-object monotonicity and
-is quietly no longer getting it is worse off than one that has been told.
+`OrderingLenient` for an aggregated API. Degrading *silently* on every cluster in order to accommodate
+one is the wrong trade: a consumer that was promised per-object monotonicity and is quietly no longer
+getting it is worse off than one that has been told.
+
+**Where you actually meet an unorderable resourceVersion — and where you do not.** This distinction is
+now baked into the corpus, because getting it wrong means writing a fixture for a scenario that cannot
+occur:
+
+| server | orderable? | why |
+|---|---|---|
+| kube-apiserver, built-in types | **yes**, guaranteed | 1.35 conformance |
+| kube-apiserver, **CRDs** | **yes**, guaranteed | 1.35 conformance says "base API objects **and custom resources**" |
+| **aggregated / extension** API server | **not guaranteed** | a third-party implementation; the conformance test does not cover it. This is the *only* case the docs' equality-only carve-out is written for |
+
+And a related fact worth stating, because it decides the *other* fixture: **kube-apiserver's
+`resourceVersion` is an etcd revision** — an int64, at most 19 digits. The docs' 40-digit example
+therefore cannot have come from kube-apiserver; it is a value only a server with a different backing
+store produces. Both facts point the same way, so both `resourceversion-*` fixtures use a **`Flunder`**
+(`wardle.example.com/v1alpha1`, Kubernetes' own [sample-apiserver](https://github.com/kubernetes/sample-apiserver))
+rather than a ConfigMap.
 
 Also, and we get this right already:
 

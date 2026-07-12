@@ -822,14 +822,15 @@
   {
     "id": "resourceversion-bignum",
     "title": "A 40-digit resourceVersion orders correctly — and a stale replay is still dropped.",
-    "why": "Kubernetes: \"Resource versions are compared as arbitrary bitsize decimal integers... The bitsize must not be assumed to be some fixed amount.\" Its own worked example is 40 digits long.\nstrconv.ParseInt tops out at 19. The gateway used to compare resource versions with it, so against a cluster like this one the parse simply failed — and the per-object monotonicity check (spec §6) gave up. The user-visible symptom is silently dropped live updates, which in a status view is indistinguishable from \"Kubernetes is being slow\", and is therefore the kind of bug that survives for years.\nThe comparison Kubernetes prescribes: \"If they are not of equal length, the longer one is greater (for example, \"123\" > \"23\"). If they are of equal length, the lexicographically greater one is greater.\" Note what that rules out: a plain lexicographic compare, which would call the 41-digit version OLDER than the 40-digit one and drop it.\nSo this fixture asserts both halves at once:\n  - the 41-digit v7 is NEWER than the 40-digit v6 and must be delivered;\n  - replaying v6 afterwards is STALE and must be dropped (§6: never emit, within a cycle, a state\n    older than one already emitted for that uid).\n",
+    "why": "Kubernetes: \"Resource versions are compared as arbitrary bitsize decimal integers... The bitsize must not be assumed to be some fixed amount.\" Its own worked example is 40 digits long.\nstrconv.ParseInt tops out at 19. The gateway used to compare resource versions with it, so against a server like this one the parse simply failed — and the per-object monotonicity check (spec §6) gave up. The user-visible symptom is silently dropped live updates, which in a status view is indistinguishable from \"Kubernetes is being slow\", and is therefore the kind of bug that survives for years.\nNote the KIND. This is a Flunder — Kubernetes' own sample aggregated API — and not a ConfigMap, on purpose: kube-apiserver's resourceVersion is an etcd revision, so it fits in an int64 and you will never meet a 40-digit one there. A server with a different backing store is where such a value actually comes from, and a fixture that pretended otherwise would be teaching the rule with an example that cannot happen.\nThe comparison Kubernetes prescribes: \"If they are not of equal length, the longer one is greater... If they are of equal length, the lexicographically greater one is greater.\" That rules out a plain lexicographic compare, which would call the 41-digit version OLDER than the 40-digit one.\nSo, both halves at once:\n  - the 41-digit v2 is NEWER than the 40-digit v1 and must be delivered;\n  - replaying v1 afterwards is STALE and must be dropped (§6: never emit, within a cycle, a state\n    older than one already emitted for that uid).\n\nThese are decimals, so they ARE orderable: the default (OrderingStrict) handles them, and must.\n",
     "suites": [
       "gateway"
     ],
     "scope": {
       "target": "demo",
-      "version": "v1",
-      "resource": "configmaps",
+      "group": "wardle.example.com",
+      "version": "v1alpha1",
+      "resource": "flunders",
       "namespace": "app"
     },
     "projection": "krm-editor/v1",
@@ -837,16 +838,16 @@
       {
         "op": "list",
         "bodies": [
-          "cm-app.v6-bignum"
+          "flunder.v1-bignum"
         ]
       },
       {
         "op": "modified",
-        "body": "cm-app.v7-bignum-newer"
+        "body": "flunder.v2-bignum-newer"
       },
       {
         "op": "modified",
-        "body": "cm-app.v6-bignum"
+        "body": "flunder.v1-bignum"
       }
     ],
     "events": [
@@ -855,28 +856,29 @@
       },
       {
         "type": "added",
-        "body": "cm-app.v6-bignum"
+        "body": "flunder.v1-bignum"
       },
       {
         "type": "synced"
       },
       {
         "type": "modified",
-        "body": "cm-app.v7-bignum-newer"
+        "body": "flunder.v2-bignum-newer"
       }
     ]
   },
   {
     "id": "resourceversion-unorderable",
-    "title": "An unorderable resourceVersion is refused, loudly — not tolerated in silence.",
-    "why": "Kubernetes 1.35 made orderability a CONFORMANCE requirement, for built-in types and custom resources alike. This library targets 1.35+, so a resourceVersion it cannot order is not a case to shrug at: it means the upstream is not the thing we were told it is.\nThe protocol promises consumers per-object monotonicity (§6) — within a cycle you are never handed a state older than one you already hold — and the gateway keeps that promise BY ordering resource versions. If it cannot order them, it cannot keep the promise. A gateway that quietly carries on anyway leaves a consumer believing a guarantee it is no longer getting, which is strictly worse than a consumer that has been told.\nSo the default (Gateway.Ordering = OrderingStrict) refuses: a terminal INTERNAL error, naming the escape hatch, so the operator of a pre-1.35 or aggregated upstream is never merely stuck. Setting OrderingLenient streams it anyway and simply stops ordering — dropping nothing it cannot compare, because a duplicate is harmless (apply is idempotent) while a wrongly-dropped update is data loss.\nNote WHERE the refusal lands: after `reset`, because the gateway only learns what the upstream's resource versions look like when the first object arrives. It cannot know from the scope alone.\n",
+    "title": "An aggregated API's unorderable resourceVersion is refused, loudly — not tolerated in silence.",
+    "why": "Kubernetes 1.35 made orderability a CONFORMANCE requirement, for built-in types and custom resources alike. This library REQUIRES 1.35+ and relies on it: a ConfigMap, a Deployment or a CRD cannot serve an unorderable resourceVersion, so a fixture using one would be defending against a case a conformant cluster cannot produce.\nThe one server that still may is an AGGREGATED / extension API server — a third-party implementation the conformance test does not cover. Hence a Flunder (wardle.example.com), Kubernetes' own sample aggregated API. The docs' carve-out is written for exactly this: \"if either of two resource version strings does not parse as a decimal number, the two strings can be checked for equality but you cannot rely on comparisons for ordering.\"\nThe protocol promises consumers per-object monotonicity (§6) — within a cycle you are never handed a state older than one you already hold — and the gateway keeps that promise BY ordering resource versions. If it cannot order them, it cannot keep it. A gateway that quietly carries on anyway leaves a consumer believing a guarantee it is no longer getting, which is strictly worse than one that has been told.\nSo the default (Gateway.Ordering = OrderingStrict) refuses: a terminal INTERNAL error that NAMES the escape hatch, so the operator of an aggregated API is never merely stuck. OrderingLenient streams it anyway and simply stops ordering — dropping nothing it cannot compare, because a duplicate is harmless (apply is idempotent) while a wrongly-dropped update is data loss.\nNote WHERE the refusal lands: after `reset`, because the gateway only learns what this upstream's resource versions look like when the first object arrives. It cannot know from the scope alone.\n",
     "suites": [
       "gateway"
     ],
     "scope": {
       "target": "demo",
-      "version": "v1",
-      "resource": "configmaps",
+      "group": "wardle.example.com",
+      "version": "v1alpha1",
+      "resource": "flunders",
       "namespace": "app"
     },
     "projection": "krm-editor/v1",
@@ -884,7 +886,7 @@
       {
         "op": "list",
         "bodies": [
-          "cm-app.v8-opaque"
+          "flunder.v3-opaque"
         ]
       }
     ],

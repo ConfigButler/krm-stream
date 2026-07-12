@@ -1,0 +1,19 @@
+# One digit longer than v1-bignum, and therefore GREATER: "if they are not of equal length, the longer
+# one is greater" — the comparison Kubernetes prescribes.
+#
+# A plain lexicographic compare (the obvious "fix" once you learn int64 overflows) would call this
+# OLDER than the 40-digit one, drop it as a stale replay, and the user would simply never see the
+# change. That is the second bug hiding behind the first.
+apiVersion: wardle.example.com/v1alpha1
+kind: Flunder
+metadata:
+  uid: flunder-0001
+  name: fl-1
+  namespace: app
+  resourceVersion: "12345678901234567890123456789012345678901"
+  labels:
+    app.kubernetes.io/name: shop
+spec:
+  referenceType: Flunder
+  reference: another-flunder
+status: {}

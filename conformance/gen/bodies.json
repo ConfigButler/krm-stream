@@ -111,59 +111,6 @@
       "log-level": "info"
     }
   },
-  "cm-app.v6-bignum": {
-    "apiVersion": "v1",
-    "kind": "ConfigMap",
-    "metadata": {
-      "uid": "cm-app-0001",
-      "name": "app-config",
-      "namespace": "app",
-      "resourceVersion": "2345678901234567890123456789012345678901",
-      "labels": {
-        "app.kubernetes.io/name": "shop"
-      },
-      "annotations": {
-        "note": "keep"
-      }
-    },
-    "data": {
-      "log-level": "info",
-      "replicas": "3"
-    }
-  },
-  "cm-app.v7-bignum-newer": {
-    "apiVersion": "v1",
-    "kind": "ConfigMap",
-    "metadata": {
-      "uid": "cm-app-0001",
-      "name": "app-config",
-      "namespace": "app",
-      "resourceVersion": "12345678901234567890123456789012345678901",
-      "labels": {
-        "app.kubernetes.io/name": "shop"
-      },
-      "annotations": {
-        "note": "keep"
-      }
-    },
-    "data": {
-      "log-level": "warn",
-      "replicas": "3"
-    }
-  },
-  "cm-app.v8-opaque": {
-    "apiVersion": "v1",
-    "kind": "ConfigMap",
-    "metadata": {
-      "uid": "cm-app-0001",
-      "name": "app-config",
-      "namespace": "app",
-      "resourceVersion": "opaque-alpha"
-    },
-    "data": {
-      "log-level": "info"
-    }
-  },
   "cm-flags.v1": {
     "apiVersion": "v1",
     "kind": "ConfigMap",
@@ -399,6 +346,60 @@
         }
       ]
     }
+  },
+  "flunder.v1-bignum": {
+    "apiVersion": "wardle.example.com/v1alpha1",
+    "kind": "Flunder",
+    "metadata": {
+      "uid": "flunder-0001",
+      "name": "fl-1",
+      "namespace": "app",
+      "resourceVersion": "2345678901234567890123456789012345678901",
+      "labels": {
+        "app.kubernetes.io/name": "shop"
+      }
+    },
+    "spec": {
+      "referenceType": "Flunder",
+      "reference": "some-flunder"
+    },
+    "status": {}
+  },
+  "flunder.v2-bignum-newer": {
+    "apiVersion": "wardle.example.com/v1alpha1",
+    "kind": "Flunder",
+    "metadata": {
+      "uid": "flunder-0001",
+      "name": "fl-1",
+      "namespace": "app",
+      "resourceVersion": "12345678901234567890123456789012345678901",
+      "labels": {
+        "app.kubernetes.io/name": "shop"
+      }
+    },
+    "spec": {
+      "referenceType": "Flunder",
+      "reference": "another-flunder"
+    },
+    "status": {}
+  },
+  "flunder.v3-opaque": {
+    "apiVersion": "wardle.example.com/v1alpha1",
+    "kind": "Flunder",
+    "metadata": {
+      "uid": "flunder-0001",
+      "name": "fl-1",
+      "namespace": "app",
+      "resourceVersion": "opaque-alpha",
+      "labels": {
+        "app.kubernetes.io/name": "shop"
+      }
+    },
+    "spec": {
+      "referenceType": "Flunder",
+      "reference": "some-flunder"
+    },
+    "status": {}
   },
   "secret-token.v1": {
     "apiVersion": "v1",
