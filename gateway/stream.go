@@ -23,6 +23,47 @@ import (
 //  3. An ambiguous tombstone is never emitted. A guessed uid deletes the wrong object.
 //  4. Never emit, within a cycle, a state older than one already emitted for that uid (§6).
 
+// ResourceVersionOrdering says how much this gateway may trust the upstream's resourceVersions.
+//
+// The protocol promises a consumer **per-object monotonicity** (spec §6): within a snapshot cycle, it
+// will never be handed a state older than one it already has. That promise is what makes coalescing
+// safe, and it is the one guarantee a naive "just relay the watch" gateway cannot give. The gateway
+// keeps it by ORDERING resourceVersions — so what it may assume about them is a real decision, and it
+// is this one.
+type ResourceVersionOrdering int
+
+const (
+	// OrderingStrict requires every resourceVersion to be an orderable decimal, and is the default.
+	//
+	// This is not optimism. Since **Kubernetes 1.35 it is a conformance requirement**: "orderability of
+	// resource versions for all Kubernetes types is included in Certified Kubernetes requirements. Base
+	// API objects **and custom resources** must be orderable as a monotonically increasing integer for
+	// any 1.35+ APIServer implementation in order to pass conformance tests."
+	//
+	// So on a supported cluster, an unorderable resourceVersion cannot happen — and if one arrives, the
+	// honest response is to SAY SO and stop, not to silently drop the guarantee and keep streaming. A
+	// consumer that was promised monotonicity and is quietly no longer getting it is worse off than one
+	// that was told. The error names the fix (OrderingLenient), so the operator is never stuck.
+	OrderingStrict ResourceVersionOrdering = iota
+
+	// OrderingLenient tolerates a resourceVersion it cannot order, and simply does not order it.
+	//
+	// For the two cases the docs carve out, both of which are real:
+	//
+	//   - a cluster **older than 1.35**, where orderability was conventional rather than required;
+	//   - an **aggregated / extension API server**, which is a third-party implementation and is not
+	//     covered by that conformance test. The docs are explicit: if a resourceVersion "does not parse
+	//     as a decimal number, the two strings can be checked for equality but you CANNOT rely on
+	//     comparisons for ordering."
+	//
+	// The cost is precise and worth stating: for objects whose resourceVersions cannot be ordered, the
+	// gateway can no longer drop a stale replay, so a consumer may briefly see an older state before
+	// converging. It never sees a WRONG final state — a duplicate is harmless, because applying an
+	// event is idempotent by construction (§6) — it just loses the "never goes backwards" property in
+	// between. That is strictly better than dropping an update that was actually newer.
+	OrderingLenient
+)
+
 // Gateway turns a Kubernetes watch into a conforming resource stream. It holds no cluster
 // connection of its own: the host supplies both the authorization decision and the client, through
 // the seams in seams.go.
@@ -35,6 +76,10 @@ type Gateway struct {
 	// a gateway that defaults to raw and streams Secret values because someone forgot a config line
 	// has a vulnerability, not a bug.
 	Projection Projection
+	// Ordering is how far the upstream's resourceVersions may be trusted. The zero value is
+	// OrderingStrict: this library targets Kubernetes 1.35+, where orderability is a conformance
+	// requirement, and it says so rather than degrading quietly on every cluster to accommodate one.
+	Ordering ResourceVersionOrdering
 }
 
 // Stream runs one consumer's stream until the context is done or a terminal error is emitted.
@@ -145,7 +190,11 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 			}
 			obj, redacted := project(projection, ev.Object)
 			uid := obj.UID()
-			if isStale(emitted, uid, obj) {
+			stale, err := isStale(g.Ordering, emitted, uid, obj)
+			if err != nil {
+				return err
+			}
+			if stale {
 				continue
 			}
 			out := Event{Type: EventAdded, Object: obj, RedactedPaths: redacted}
@@ -210,20 +259,51 @@ func partialReason(obj KRMObject) string {
 // older than one it already has. This is what makes coalescing safe, and it is the guarantee a naive
 // relay cannot give — an informer that relists mid-stream will happily replay an older version of an
 // object it has already delivered.
-func isStale(emitted map[string]string, uid string, obj KRMObject) bool {
+//
+// It returns an error only in OrderingStrict (the default) and only when the upstream served a
+// resourceVersion that cannot be ordered — which a conformant Kubernetes ≥1.35 never does. See
+// ResourceVersionOrdering for why that is a refusal and not a shrug.
+func isStale(ordering ResourceVersionOrdering, emitted map[string]string, uid string, obj KRMObject) (bool, error) {
 	rv := resourceVersionOf(obj)
 	last, seen := emitted[uid]
-	if seen && compareResourceVersion(rv, last) < 0 {
-		return true
+	if !seen {
+		if ordering == OrderingStrict && !isDecimalResourceVersion(rv) {
+			return false, unorderable(rv)
+		}
+		emitted[uid] = rv
+		return false, nil
 	}
-	// Not comparable, or newer: record it and let it through. Recording an unorderable version is
-	// harmless — the next comparison against it will also be unorderable, and will also let through.
+
+	cmp, ok := compareResourceVersion(rv, last)
+	if !ok {
+		if ordering == OrderingStrict {
+			return false, unorderable(rv)
+		}
+		// Lenient: we cannot order these, so we do not pretend to. Let it through — a duplicate is
+		// harmless (apply is idempotent by construction), a wrongly-dropped update is data loss.
+		emitted[uid] = rv
+		return false, nil
+	}
+	if cmp < 0 {
+		return true, nil // older than what the consumer already holds: drop it (§6)
+	}
 	emitted[uid] = rv
-	return false
+	return false, nil
 }
 
-// compareResourceVersion orders two resource versions the way Kubernetes says to, and returns 0 when
-// they cannot be ordered at all.
+func unorderable(rv string) error {
+	return &StreamError{
+		Code:     CodeInternal,
+		Terminal: true,
+		Message: "upstream served a resourceVersion that cannot be ordered (" + rv + "). " +
+			"Kubernetes 1.35+ requires every resourceVersion to be an orderable decimal, so this " +
+			"upstream is either older than 1.35 or an aggregated API server that does not conform. " +
+			"Set Gateway.Ordering = OrderingLenient to stream it anyway, without per-object monotonicity.",
+	}
+}
+
+// compareResourceVersion orders two resource versions the way Kubernetes says to. `ok` is false when
+// they cannot be ordered at all — which, on a conformant 1.35+ server, never happens.
 //
 // This function is small and it is the second bug this project shipped for want of reading the docs.
 // The old version was `strconv.ParseInt(rv, 10, 64)`. Kubernetes:
@@ -238,25 +318,20 @@ func isStale(emitted map[string]string, uid string, obj KRMObject) bool {
 // The prescribed comparison, verbatim: "If they are not of equal length, the longer one is greater
 // (for example, "123" > "23"). If they are of equal length, the lexicographically greater one is
 // greater." Note that this rules out a PLAIN lexicographic compare, which calls "9" > "10".
-//
-// And the case with no integer in it at all: an extension API server may serve resource versions that
-// are not decimal, and then "the two strings can be checked for equality but you CANNOT rely on
-// comparisons for ordering". So: unorderable returns 0, and the caller drops nothing. A duplicate
-// event is harmless (the protocol is idempotent by construction); a dropped one is data loss.
-func compareResourceVersion(a, b string) int {
+func compareResourceVersion(a, b string) (cmp int, ok bool) {
 	if a == b {
-		return 0
+		return 0, isDecimalResourceVersion(a)
 	}
 	if !isDecimalResourceVersion(a) || !isDecimalResourceVersion(b) {
-		return 0 // not orderable — say so, rather than guessing
+		return 0, false
 	}
 	if len(a) != len(b) {
 		if len(a) > len(b) {
-			return 1
+			return 1, true
 		}
-		return -1
+		return -1, true
 	}
-	return strings.Compare(a, b)
+	return strings.Compare(a, b), true
 }
 
 // isDecimalResourceVersion reports whether a resource version may be ORDERED, per the rules the API

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -229,50 +230,99 @@ func TestCompareResourceVersion(t *testing.T) {
 	cases := []struct {
 		a, b string
 		want int
+		ok   bool
 		why  string
 	}{
-		{big40, big39, 1, "40 digits beats 39 — and neither fits in an int64"},
-		{big39, big39, 0, "equal"},
-		{"345678901234567890123456789012345678900", big39, -1, "same length: lexicographic"},
-		{"123", "23", 1, "longer is greater — NOT plain lexicographic, which says '1' < '2'"},
-		{"9", "10", -1, "the case a naive string compare gets backwards"},
-		{"1001", "1002", -1, "the ordinary case"},
+		{big40, big39, 1, true, "40 digits beats 39 — and neither fits in an int64"},
+		{big39, big39, 0, true, "equal"},
+		{"345678901234567890123456789012345678900", big39, -1, true, "same length: lexicographic"},
+		{"123", "23", 1, true, "longer is greater — NOT plain lexicographic, which says '1' < '2'"},
+		{"9", "10", -1, true, "the case a naive string compare gets backwards"},
+		{"1001", "1002", -1, true, "the ordinary case"},
 
-		// An extension API server may serve a resourceVersion that is not a decimal at all. Then
-		// ordering is UNDEFINED — "the two strings can be checked for equality but you cannot rely on
-		// comparisons for ordering" — so we say 0 (not orderable) and the caller drops nothing.
-		{"abc", "def", 0, "non-decimal: not orderable"},
-		{"1001", "abc", 0, "one non-decimal: not orderable"},
-		{"", "1001", 0, "empty: not orderable"},
-		{"0123", "1001", 0, "a leading zero is not a valid orderable rv (must start 1-9)"},
-		{"abc", "abc", 0, "equal, even when not orderable"},
+		// Not orderable. On Kubernetes 1.35+ these cannot occur — orderability is a conformance
+		// requirement, for built-ins AND custom resources — so `ok:false` is a statement about
+		// non-conformant or aggregated upstreams, not about ordinary ones.
+		{"abc", "def", 0, false, "non-decimal: not orderable"},
+		{"1001", "abc", 0, false, "one non-decimal: not orderable"},
+		{"", "1001", 0, false, "empty: not orderable"},
+		{"0123", "1001", 0, false, "a leading zero is not a valid orderable rv (must start 1-9)"},
+		{"abc", "abc", 0, false, "equal — but still not ORDERABLE, and the caller must know that"},
 	}
 	for _, c := range cases {
-		if got := compareResourceVersion(c.a, c.b); got != c.want {
-			t.Errorf("compare(%q, %q) = %d, want %d — %s", c.a, c.b, got, c.want, c.why)
+		got, ok := compareResourceVersion(c.a, c.b)
+		if got != c.want || ok != c.ok {
+			t.Errorf("compare(%q, %q) = (%d, %v), want (%d, %v) — %s", c.a, c.b, got, ok, c.want, c.ok, c.why)
 		}
 	}
 }
 
-// The consequence of the above, at the level that matters: an unorderable pair must never cause an
-// event to be DROPPED. A duplicate is harmless (the protocol requires idempotent apply); a drop is
-// data loss, and in a status view it looks exactly like the cluster being slow.
-func TestUnorderableResourceVersionsNeverDropAnEvent(t *testing.T) {
-	rv := func(v string) KRMObject {
-		o := cm("u1", v, map[string]any{"v": v})
-		return o
-	}
+// OrderingStrict is the default because Kubernetes 1.35 made orderability a CONFORMANCE requirement.
+// So an unorderable resourceVersion is not a case to tolerate quietly — it means the upstream is not
+// what we were told it is, and a consumer that was promised per-object monotonicity is silently no
+// longer getting it. Say so, and stop.
+func TestStrictOrderingRefusesAnUnorderableResourceVersion(t *testing.T) {
 	got := run(t, ProjectionEditor, AllowAll{}, []WatchEvent{
-		{Type: WatchAdded, Object: rv("opaque-b")},
-		{Type: WatchBookmark, InitialEventsEnd: true},
-		{Type: WatchModified, Object: rv("opaque-a")}, // "older"? unknowable. Must NOT be dropped.
-		{Type: WatchModified, Object: rv("opaque-c")},
-	}, 5)
+		{Type: WatchAdded, Object: cm("u1", "opaque-1", nil)},
+	}, 2)
 
-	if !equalTypes(types(got), EventReset, EventAdded, EventSynced, EventModified, EventModified) {
-		t.Fatalf("an unorderable resourceVersion caused an event to be dropped: %v", types(got))
+	if !equalTypes(types(got), EventReset, EventError) {
+		t.Fatalf("want reset then a terminal error; got %v", types(got))
+	}
+	if !got[1].Terminal || got[1].Code != CodeInternal {
+		t.Errorf("want a terminal INTERNAL; got %+v", got[1])
+	}
+	// The error must name the way out, or the operator of a pre-1.35 (or aggregated) cluster is simply
+	// stuck, with a library that refuses to work and does not say why.
+	if !strings.Contains(got[1].Message, "OrderingLenient") {
+		t.Errorf("the refusal must name its own escape hatch; got %q", got[1].Message)
 	}
 }
+
+// OrderingLenient is the escape hatch: a cluster older than 1.35, or an aggregated API server, which
+// is a third-party implementation that the conformance test does not cover. There, ordering is
+// genuinely undefined — so we do not pretend to it, and we DROP NOTHING. A duplicate is harmless
+// (apply is idempotent by construction); a wrongly-dropped update is data loss, and in a status view
+// it looks exactly like the cluster being slow.
+func TestLenientOrderingDropsNothingItCannotOrder(t *testing.T) {
+	gw := &Gateway{
+		Auth:     AllowAll{},
+		Ordering: OrderingLenient,
+		Clients: func(string, Principal) (Backend, error) {
+			return &stubBackend{events: []WatchEvent{
+				{Type: WatchAdded, Object: cm("u1", "opaque-b", map[string]any{"v": "b"})},
+				{Type: WatchBookmark, InitialEventsEnd: true},
+				{Type: WatchModified, Object: cm("u1", "opaque-a", map[string]any{"v": "a"})}, // "older"? unknowable
+				{Type: WatchModified, Object: cm("u1", "opaque-c", map[string]any{"v": "c"})},
+			}}, nil
+		},
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+
+	sink := &countingSink{want: 4, done: make(chan struct{})}
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		_ = gw.Stream(ctx, nil, Scope{Target: "demo"}, sink)
+	}()
+	select {
+	case <-sink.done:
+	case <-ctx.Done():
+		<-stopped
+		t.Fatalf("an unorderable resourceVersion dropped an event: got %v", types(sink.events))
+	}
+	cancel()
+	<-stopped
+
+	if !equalTypes(types(sink.events), EventReset, EventAdded, EventSynced, EventModified) {
+		t.Fatalf("want the unorderable update let through; got %v", types(sink.events))
+	}
+}
+
+// (The other half — that ordering, when we HAVE it, really does drop a stale replay — is
+// TestStaleResourceVersionIsDropped above. Strict mode keeps the protocol's promise; lenient mode
+// gives it up only where Kubernetes itself does.)
 
 // The projection removes machinery — and ONLY what a named projection says it removes. Nothing is
 // "optionally other server-side bookkeeping".

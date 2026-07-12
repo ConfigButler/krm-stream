@@ -92,8 +92,25 @@ And the case that has no integer at all:
 → For a non-numeric `resourceVersion`, **ordering is undefined** and the only safe thing to do is not
 order. Not "guess". Not "fall back to string compare".
 
+### 2.1 …but from 1.35, orderability is a **conformance requirement**
+
+This is the sentence that decides the design, and it is stronger than the caveat above:
+
 > "Starting with Kubernetes 1.35, orderability of resource versions for all Kubernetes types is
-> included in Certified Kubernetes requirements."
+> included in **Certified Kubernetes requirements**. Base API objects **and custom resources** **must**
+> be orderable as a monotonically increasing integer for any 1.35+ APIServer implementation in order to
+> pass conformance tests."
+
+So on a supported cluster, an unorderable `resourceVersion` **cannot occur** — not for built-ins, not
+for CRDs. The "may not parse as a decimal" escape is scoped to **extension / aggregated API servers**,
+which are third-party implementations that this conformance test does not cover.
+
+That makes "can I trust `resourceVersion` to increase?" a real decision rather than a shrug, and this
+library takes the strong side: **it targets Kubernetes 1.35+, trusts orderability, and refuses loudly
+when the upstream lies** (`Gateway.Ordering = OrderingStrict`, the default), with an explicit
+`OrderingLenient` for a pre-1.35 cluster or an aggregated API. Degrading *silently* on every cluster in
+order to accommodate one is the wrong trade: a consumer that was promised per-object monotonicity and
+is quietly no longer getting it is worse off than one that has been told.
 
 Also, and we get this right already:
 
@@ -219,7 +236,8 @@ was, before it gets decided.
 | # | Fact | Consequence | Status |
 |---|---|---|---|
 | 1 | RVs are arbitrary-bitsize integers; a 40-digit one is legal | `strconv.ParseInt` in `isStale` **overflows** → silently drops live updates | **fixed** — string compare, length-then-lexicographic |
-| 2 | Non-numeric RVs (extension API servers) cannot be ordered | must compare for equality only, and **never** drop on an unorderable pair | **fixed** |
+| 2 | **1.35+ requires orderability** (built-ins *and* CRDs) | trust it: `OrderingStrict` is the default, and an unorderable RV is a **terminal error naming the fix**, not a silent degradation | **done** — fixture `resourceversion-unorderable` |
+| 2b | Aggregated/extension API servers are **not** covered by that conformance test | they need an escape hatch: `OrderingLenient` orders nothing it cannot order, and **drops nothing** | **done** |
 | 3 | A BOOKMARK's object has only `.metadata.resourceVersion` | a partial object is on **every** conforming stream; forwarding it blanks the consumer | **fixed** + fixture `bookmark-absorbed` |
 | 4 | `PartialObjectMetadata` has a **uid** | "no uid" is not a sufficient partial-object check; check the **kind** | **fixed** + fixture `partial-object-refused` |
 | 5 | Bookmarks may never arrive | nothing may depend on a bookmark's *arrival*, only on its meaning | holds — we only use the terminating one |

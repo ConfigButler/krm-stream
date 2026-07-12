@@ -151,6 +151,19 @@
       "replicas": "3"
     }
   },
+  "cm-app.v8-opaque": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "uid": "cm-app-0001",
+      "name": "app-config",
+      "namespace": "app",
+      "resourceVersion": "opaque-alpha"
+    },
+    "data": {
+      "log-level": "info"
+    }
+  },
   "cm-flags.v1": {
     "apiVersion": "v1",
     "kind": "ConfigMap",

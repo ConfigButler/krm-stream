@@ -40,6 +40,69 @@ attribution — the browser sees exactly what the API server sees, and never mor
 
 ---
 
+## How it fits together
+
+```mermaid
+flowchart LR
+    subgraph browser["🌐 Browser — no bundler, no framework"]
+        UI["your UI"]
+        Store["LiveResourceStore<br/><i>server truth + your draft</i><br/>three-way merge · conflicts · patch"]
+        UI -- "setValue(uid, path, v)" --> Store
+        Store -- "subscribe() → re-render<br/>status · dirty · conflicts · flash" --> UI
+    end
+
+    subgraph gw["⚙️ Gateway — your Go server"]
+        Loop["stream loop<br/><i>absorbs every watch mechanic</i>"]
+        Authz["Authorizer<br/><i>may this principal see this scope?</i>"]
+        Client["ClientFor(target, principal)<br/><i>a client acting AS them</i>"]
+        Proj["projection<br/><i>removes managedFields · masks Secrets</i>"]
+    end
+
+    K8S[("Kubernetes<br/>API server")]
+
+    Store <-. "SSE · text/event-stream<br/><b>reset · added · modified · deleted · synced · error</b>" .-> Loop
+    UI -- "PATCH · merge-patch+json<br/><i>only what you changed</i>" --> Loop
+    Loop --> Authz & Proj
+    Loop <--> Client
+    Client <-- "watch (streaming list)<br/>ADDED · MODIFIED · DELETED · BOOKMARK · 410 Gone" --> K8S
+
+    style Store fill:#2563eb,color:#fff
+    style Loop fill:#2563eb,color:#fff
+    style K8S fill:#326ce5,color:#fff
+```
+
+The two boxes in blue are what this repo ships. The **wire between them** is
+[a written contract](spec/v1.md) with [a conformance suite both sides run](conformance/) — which is why
+they cannot drift, and why a Rust or Python gateway is a legitimate thing for someone else to write.
+
+Everything ugly about a Kubernetes watch stops at the gateway. The browser never hears the words
+`BOOKMARK`, `410 Gone`, `resourceVersion` or *relist*:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant K as Kubernetes
+    participant G as Gateway
+    participant B as Browser (store)
+
+    Note over G,B: a snapshot cycle — the SAME framing for a collection and a single named object
+    G->>K: watch(sendInitialEvents, allowWatchBookmarks)
+    G-->>B: reset          (mark every known uid "unseen" — prune NOTHING yet)
+    K-->>G: ADDED ×N       (synthetic: the objects in scope)
+    G-->>B: added ×N       (mark "seen")
+    K-->>G: BOOKMARK (initial-events-end)
+    G-->>B: synced         (NOW prune whatever is still unseen)
+
+    Note over G,B: …then live deltas
+    K-->>G: MODIFIED (status churn — the dominant traffic)
+    G-->>B: modified       (replace the object · flash status · never touch the draft)
+    K-->>G: BOOKMARK       (routine — absorbed, never forwarded)
+    K-->>G: 410 Gone       (continuity lost — the SSE connection is FINE)
+    G-->>B: error RESYNC_REQUIRED (non-terminal)
+    G-->>B: reset … added … synced
+    Note right of B: converges. No ghosts.<br/>An object deleted while you were away<br/>is pruned at `synced`, and nowhere else.
+```
+
 ## Why this exists
 
 Every "Kubernetes in a browser" UI reinvents the same three things, and gets at least one of them

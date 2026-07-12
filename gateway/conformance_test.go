@@ -77,7 +77,11 @@ func TestSnapshotFraming(t *testing.T) {
 		t.Run(f.ID, func(t *testing.T) {
 			inCycle := false
 			sawReset := false
+			endedTerminally := false
 			for i, fe := range f.Events {
+				if endedTerminally {
+					t.Errorf("event %d: %s AFTER a terminal error — a terminal error is the last event (spec §4.3)", i, fe.Type)
+				}
 				switch fe.Type {
 				case EventReset:
 					if inCycle {
@@ -89,15 +93,27 @@ func TestSnapshotFraming(t *testing.T) {
 						t.Errorf("event %d: synced without a reset", i)
 					}
 					inCycle = false
-				case EventAdded, EventModified, EventDeleted, EventError:
+				case EventError:
+					if !sawReset {
+						t.Errorf("event %d: error before the first reset — a consumer has no scope yet", i)
+					}
+					endedTerminally = fe.Terminal
+				case EventAdded, EventModified, EventDeleted:
 					if !sawReset {
 						t.Errorf("event %d: %s before the first reset — a consumer has no scope yet", i, fe.Type)
 					}
 				}
 			}
-			// An unclosed cycle at the end is legal and deliberate: see partial-cycle-no-prune,
-			// whose whole point is that a cycle which never reaches `synced` prunes nothing.
-			if inCycle && f.ID != "partial-cycle-no-prune" {
+			// A stream may legally end mid-cycle, in exactly two ways, and both are fixtures:
+			//
+			//   - the connection died (partial-cycle-no-prune) — and the consumer must prune NOTHING;
+			//   - a TERMINAL error ended it (resourceversion-unorderable) — a terminal error is the
+			//     last event on the connection, and the gateway then closes it (spec §4.3). It can
+			//     perfectly well arrive mid-snapshot: the gateway only discovers that this upstream is
+			//     not what it was promised when the first object shows up.
+			//
+			// Anything else that ends mid-cycle is a fixture whose author did not notice.
+			if inCycle && !endedTerminally && f.ID != "partial-cycle-no-prune" {
 				t.Error("stream ends mid-cycle; if that is the point of this fixture, say so in `why`")
 			}
 		})

@@ -52,7 +52,12 @@ test("a snapshot cycle is reset … added* … synced", () => {
   for (const f of allFixtures()) {
     let inCycle = false;
     let sawReset = false;
+    let endedTerminally = false;
     for (const [i, fe] of f.events.entries()) {
+      assert.ok(
+        !endedTerminally,
+        `${f.id} event ${i}: ${fe.type} after a TERMINAL error, which must be the LAST event`,
+      );
       if (fe.type === "reset") {
         assert.ok(!inCycle, `${f.id} event ${i}: reset inside an unclosed cycle`);
         inCycle = sawReset = true;
@@ -61,11 +66,17 @@ test("a snapshot cycle is reset … added* … synced", () => {
         inCycle = false;
       } else {
         assert.ok(sawReset, `${f.id} event ${i}: ${fe.type} before the first reset`);
+        if (fe.type === "error" && fe.terminal) endedTerminally = true;
       }
     }
-    // Ending mid-cycle is legal, and partial-cycle-no-prune exists precisely to prove that an
-    // incomplete cycle prunes nothing.
-    if (inCycle) assert.equal(f.id, "partial-cycle-no-prune", `${f.id}: ends mid-cycle — is that the point?`);
+    // A stream may legally end mid-cycle in exactly two ways, and each of them is a fixture:
+    // partial-cycle-no-prune (the connection died — and the consumer must prune NOTHING), and a
+    // TERMINAL error, which is by definition the last event on the connection (spec §4.3) and can
+    // perfectly well arrive mid-snapshot — see resourceversion-unorderable, where the gateway only
+    // discovers the upstream is not what it was promised once the first object arrives.
+    if (inCycle && !endedTerminally) {
+      assert.equal(f.id, "partial-cycle-no-prune", `${f.id}: ends mid-cycle — is that the point?`);
+    }
   }
 });
 

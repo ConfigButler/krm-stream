@@ -1,0 +1,6 @@
+: connection 1
+
+data: {"type":"reset","target":"demo","scope":{"target":"demo","version":"v1","resource":"configmaps","namespace":"app"},"projection":"krm-editor/v1"}
+
+data: {"type":"error","code":"INTERNAL","message":"upstream served a resourceVersion that cannot be ordered (opaque-alpha). Kubernetes 1.35+ requires every resourceVersion to be an orderable decimal, so this upstream is either older than 1.35 or an aggregated API server that does not conform. Set Gateway.Ordering = OrderingLenient to stream it anyway, without per-object monotonicity.","terminal":true}
+

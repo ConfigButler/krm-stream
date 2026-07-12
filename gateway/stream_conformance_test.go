@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 )
@@ -92,14 +93,22 @@ func replay(t *testing.T, c Corpus, f Fixture, newSink func(conn int) Sink, done
 		// pull-based upstream makes the handoff a synchronisation point for free.
 		select {
 		case <-backend.Exhausted():
+			cancel()
+			if err := <-finished; err != nil && !isCanceled(err) {
+				t.Fatalf("stream: %v", err)
+			}
 		case err := <-finished:
-			t.Fatalf("the gateway stopped before the script did: %v", err)
+			// The gateway stopped early. That is legal in exactly one way: a TERMINAL error, which is
+			// the last event on the connection, after which the gateway closes it (spec §4.3). The
+			// gateway is entitled to decide mid-script that this upstream is not one it can serve —
+			// see resourceversion-unorderable — and refusing loudly is the whole point of that fixture.
+			var se *StreamError
+			if !errors.As(err, &se) || !se.Terminal {
+				t.Fatalf("the gateway stopped before the script did, and not with a terminal error: %v", err)
+			}
+			cancel()
 		case <-ctx.Done():
 			t.Fatal("the gateway never consumed the whole watch script")
-		}
-		cancel()
-		if err := <-finished; err != nil && !isCanceled(err) {
-			t.Fatalf("stream: %v", err)
 		}
 		done(sink)
 	}

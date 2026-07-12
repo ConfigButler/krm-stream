@@ -867,6 +867,39 @@
     ]
   },
   {
+    "id": "resourceversion-unorderable",
+    "title": "An unorderable resourceVersion is refused, loudly — not tolerated in silence.",
+    "why": "Kubernetes 1.35 made orderability a CONFORMANCE requirement, for built-in types and custom resources alike. This library targets 1.35+, so a resourceVersion it cannot order is not a case to shrug at: it means the upstream is not the thing we were told it is.\nThe protocol promises consumers per-object monotonicity (§6) — within a cycle you are never handed a state older than one you already hold — and the gateway keeps that promise BY ordering resource versions. If it cannot order them, it cannot keep the promise. A gateway that quietly carries on anyway leaves a consumer believing a guarantee it is no longer getting, which is strictly worse than a consumer that has been told.\nSo the default (Gateway.Ordering = OrderingStrict) refuses: a terminal INTERNAL error, naming the escape hatch, so the operator of a pre-1.35 or aggregated upstream is never merely stuck. Setting OrderingLenient streams it anyway and simply stops ordering — dropping nothing it cannot compare, because a duplicate is harmless (apply is idempotent) while a wrongly-dropped update is data loss.\nNote WHERE the refusal lands: after `reset`, because the gateway only learns what the upstream's resource versions look like when the first object arrives. It cannot know from the scope alone.\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-editor/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v8-opaque"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "error",
+        "code": "INTERNAL",
+        "terminal": true
+      }
+    ]
+  },
+  {
     "id": "resync-midstream",
     "title": "Upstream continuity can be lost WITHOUT the SSE connection dropping — a fresh cycle follows.",
     "why": "410 Gone, an informer relist, a cache reset. The SSE connection is perfectly healthy, but the gateway can no longer promise it saw every change — so it must begin a new snapshot cycle rather than silently continue. A gateway that just relays the watch cannot do this, and the ghost it leaves is invisible until someone notices a deleted object still on screen. It SHOULD announce the break first with a non-terminal RESYNC_REQUIRED.\n",

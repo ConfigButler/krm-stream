@@ -53,6 +53,31 @@ Each rung replaces one *simulated* boundary with a real one. They all replay the
 a rung's job is not "more scenarios" — it is "the same scenarios, with one more thing that is really
 true."
 
+```mermaid
+flowchart LR
+    Y["conformance/*.yaml<br/><i>one scenario, end to end</i>"] --> W["watch:"] & E["events:"] & C["client:"]
+
+    W --> G["<b>gateway</b><br/>ScriptedBackend<br/><i>a fake watch</i>"]
+    G -- "must emit" --> E
+    E -- "is fed to" --> S["<b>store</b><br/>three-way merge"]
+    S -- "must hold" --> C
+
+    G -.-> SSE["<b>wire</b><br/>gen/sse/*.sse<br/><i>the bytes the gateway<br/>REALLY wrote</i>"]
+    SSE -.-> S
+
+    G ==> HTTP["<b>HTTP</b> · task e2e-wire<br/><i>real socket · real fetch</i>"]
+    HTTP ==> BR["<b>browser</b> · task e2e-browser<br/><i>real Chromium · native EventSource<br/>· unbundled ESM</i>"]
+
+    K8S["<b>cluster</b> · not built<br/><i>410 Gone · RBAC · a real controller<br/>moving status · initial-events-end</i>"]
+
+    style E fill:#2563eb,color:#fff
+    style SSE fill:#2563eb,color:#fff
+    style K8S fill:#6b7280,color:#fff,stroke-dasharray: 5 5
+```
+
+`events:` is the meeting point — the gateway must *emit* it, the client is *fed* it. That is the whole
+reason this is one repository.
+
 | | what is real | what is faked | run it |
 |---|---|---|---|
 | **store** | the merge | the wire (events handed over as objects) | `task test` |

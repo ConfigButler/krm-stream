@@ -167,6 +167,62 @@ appears in a patch. The policy can also mark *parts* of `spec` read-only (e.g. i
 
 ## 4. The deep three-way reconcile
 
+**The two layers, and why conflating them is the ghost bug.** `applyServerEvent` does two different
+things, in this order, and neither may be skipped:
+
+```mermaid
+flowchart TB
+    E["applyServerEvent(incoming)"] --> K{"known uid?"}
+    K -- no --> Seed["base = draft = incoming<br/><i>an arrival is not a change: nothing flashes</i>"]
+    K -- yes --> L1
+
+    subgraph L1["① stream reducer — the PROTOCOL"]
+        R["server(id) := incoming<br/><b>REPLACE, wholesale</b>"]
+        RW["a deep-merge here CANNOT express a removal,<br/>so it resurrects the field the server just deleted"]
+        R -.- RW
+    end
+
+    L1 --> L2
+
+    subgraph L2["② reconcile engine — NOT the protocol"]
+        Split{"for each path:<br/>editable region?"}
+        Split -- "no · status, metadata.name, redacted" --> RO["<b>follow the server</b><br/>draft := incoming<br/>flash what moved<br/><i>never dirty · never conflict · never in a patch</i>"]
+        Split -- "yes · spec, labels, data" --> TW["<b>three-way merge</b><br/>base=previous server · ours=draft · theirs=incoming"]
+    end
+
+    L2 --> Shift["base = incoming  (I-BASESHIFT)<br/><i>the next event merges against THIS version</i>"]
+
+    style L1 fill:#7c2d12,color:#fff
+    style L2 fill:#1e3a5f,color:#fff
+    style RW fill:none,stroke-dasharray: 3 3
+```
+
+**The merge decision, per path.** Everything turns on one question that the naive implementations
+never ask — *did the **server** move this?* — and it is answerable only because we kept the **base**:
+
+```mermaid
+flowchart TB
+    Start(["reconcile(path, base, ours, theirs)"]) --> D{"ours == base?<br/><i>(isDirty — DERIVED, never cached)</i>"}
+
+    D -- "clean · the user has no edit here" --> C{"base == theirs?"}
+    C -- yes --> Keep["keep · nothing happened"]
+    C -- no --> Follow["<b>take theirs</b> + flash<br/><i>follow the server — including into deletion</i>"]
+
+    D -- "dirty · the user typed here" --> S{"base == theirs?"}
+    S -- "yes · the server did NOT move it" --> NoConf["<b>keep ours</b>, still dirty, <b>NO conflict</b><br/><i>I-NOFALSE: this is the bug that false-conflicts<br/>on every controller heartbeat</i>"]
+    S -- "no · the server moved it too" --> Conv{"ours == theirs?"}
+    Conv -- "yes · converged" --> Clear["<b>keep ours</b>, clear conflict<br/><i>and it is no longer dirty: draft == server</i>"]
+    Conv -- "no · a REAL conflict" --> Conflict["<b>keep ours</b> + record theirs<br/><i>what someone typed is never silently overwritten</i>"]
+
+    style Follow fill:#166534,color:#fff
+    style NoConf fill:#1d4ed8,color:#fff
+    style Clear fill:#166534,color:#fff
+    style Conflict fill:#b91c1c,color:#fff
+```
+
+Arrays and scalars take the same branch (`§4.1`): an array is **one atomic value**, because a
+positional merge mis-aligns the moment the server prepends an element.
+
 `applyServerEvent(incoming)` for one resource. Let `base` be the resource's current server snapshot
 (unknown resource ⇒ seed base = draft = incoming, emit `added`). Otherwise reconcile each **editable
 region** with the recursive merge below, **follow the server** for each read-only region (deep-replace
