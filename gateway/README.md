@@ -106,10 +106,39 @@ to thread by hand, and no full list held in the API server's memory at once.
 *This is the algorithm the protocol deliberately does not name.* It lives here because it is one
 conforming way to satisfy "gap-free handoff", not the definition of it.
 
-### 3b. Fallback: list-then-watch at a pinned `resourceVersion`
+> **Verified** against Kubernetes v1.36.2: the synthetic `ADDED`s arrive, and the snapshot really is
+> terminated by a bookmark carrying `k8s.io/initial-events-end: "true"` — an annotation that appears
+> **nowhere** in the API documentation, and on which this entire design rests
+> ([observed-v1.36.2+k3s1.md](../docs/facts/observed-v1.36.2+k3s1.md), F1).
+>
+> **But not universal.** The same request is *refused* by an aggregated API server — see §3b, which is
+> therefore a required path and not a fallback.
+
+### 3b. list-then-watch at a pinned `resourceVersion` — **not optional**
+
+> ### ❗ This section said "fallback", and a real cluster proved that wrong.
+>
+> `task cluster-facts` (F6, [observed-v1.36.2+k3s1.md](../docs/facts/observed-v1.36.2+k3s1.md)) pointed
+> the streaming list of §3a at a real **aggregated API** — Kubernetes' own sample-apiserver — and the
+> request was **refused outright**:
+>
+> ```
+> ListOptions.meta.k8s.io "" is invalid: sendInitialEvents: Forbidden:
+>   sendInitialEvents is forbidden for watch unless the WatchList feature gate is enabled
+> ```
+>
+> An aggregated API server is a **separate binary with its own feature gates**. `WatchList` being on in
+> kube-apiserver says nothing about it. So this is not a fallback for old clusters — **it is the only
+> way to serve an aggregated API on a current one**, and a gateway that implements only §3a cannot open
+> a stream for a `Flunder` at all.
+>
+> **Consequence for the implementation:** open with §3a, and on an `Invalid`/`Forbidden` rejection
+> mentioning `sendInitialEvents`, fall back to §3b **for that scope** and remember it. The snapshot
+> boundary is then ours to synthesize (`synced` after the last `Added`) rather than the API server's to
+> hand us — which is precisely why the protocol names the boundary and not the mechanism.
 
 What gitops-api's console (`handleConsoleStream`) and voter's config stream
-(`streamCoffeeConfigWatch`) ship today, and what to use when a target cannot do §3a:
+(`streamCoffeeConfigWatch`) ship today, and what a target that cannot do §3a requires:
 
 ```go
 list, _   := client.List(ctx, opts)                                        // snapshot @ list.resourceVersion

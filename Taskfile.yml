@@ -11,6 +11,11 @@ vars:
   # A throwaway cluster for proving the gateway against a real API server.
   # (The unit suites need no cluster at all — see `task test`.)
   SPIKE_CLUSTER: krm-stream-spike
+  # Kubernetes 1.35+ is a REQUIREMENT of this library, not a preference: from 1.35, resourceVersion
+  # orderability is a Certified Kubernetes conformance requirement, and the gateway relies on it to
+  # promise consumers per-object monotonicity. So the cluster we verify against must be one.
+  K3S_IMAGE: rancher/k3s:v1.36.2-k3s1
+  KUBECONFIG_PATH: '{{.HOME}}/.kube/config' 
 
 tasks:
   default:
@@ -165,16 +170,63 @@ tasks:
       - npm install --no-audit --no-fund
       - npx tsc
 
-  # -------------------------------------------------------------------- spike --
-  spike-up:
-    desc: "Throwaway k3d cluster for proving the gateway against a real API server."
+  # ---------------------------------------------------------------- cluster --
+  # The one rung a fake watch cannot reach. Everything the gateway BELIEVES about Kubernetes — that a
+  # streaming list ends with an `initial-events-end` bookmark, that a 410 arrives as a watch error,
+  # that resourceVersions are orderable decimals — is unverified until something asks a real API
+  # server. See docs/proposals/0002-real-cluster.md.
+  cluster-up:
+    desc: "A real Kubernetes (k3d, {{.K3S_IMAGE}}) — with real etcd, because that is what we are verifying."
     status:
       - k3d cluster list {{.SPIKE_CLUSTER}} >/dev/null 2>&1
     cmds:
-      - k3d cluster create {{.SPIKE_CLUSTER}} --wait
+      # --cluster-init gives k3s its EMBEDDED ETCD. Without it k3s stores in kine (SQLite), and then
+      # `resourceVersion` and compaction/410 semantics would be kine's rather than etcd's — which are
+      # exactly the two things this rung exists to check. Verifying them against a substitute storage
+      # layer would be worse than not verifying them at all.
+      - k3d cluster create {{.SPIKE_CLUSTER}} --image {{.K3S_IMAGE}} --k3s-arg "--cluster-init@server:0" --wait
+      - task: cluster-kubeconfig
       - kubectl --context k3d-{{.SPIKE_CLUSTER}} get --raw /healthz
+      - kubectl --context k3d-{{.SPIKE_CLUSTER}} version -o json | jq -r '.serverVersion.gitVersion'
 
-  spike-down:
+  cluster-kubeconfig:
+    desc: "Point the kubeconfig at the cluster in a way that works from INSIDE the devcontainer."
+    cmds:
+      # Docker-outside-Docker. k3d publishes the API server on the HOST's docker daemon, and writes a
+      # kubeconfig saying `https://0.0.0.0:<port>` — which is the host's address, and means nothing in
+      # here. From this container the host is `host.docker.internal`.
+      #
+      # But the API server's certificate has no SAN for that name (it has `localhost`, `127.0.0.1`,
+      # `0.0.0.0` and the k3d container IPs), so simply rewriting the host fails TLS verification.
+      # `--tls-server-name` is the honest fix: connect to the host, verify the name the cert actually
+      # carries. The alternative — turning off certificate verification — would be trading a real check
+      # for a convenient one, in a repo whose entire point is not doing that.
+      - |
+        set -e
+        port="$(docker port k3d-{{.SPIKE_CLUSTER}}-serverlb 6443/tcp | head -1 | sed 's/.*://')"
+        kubectl config set-cluster k3d-{{.SPIKE_CLUSTER}} \
+          --server "https://host.docker.internal:${port}" --tls-server-name localhost >/dev/null
+        echo "kubeconfig → https://host.docker.internal:${port} (tls-server-name: localhost)"
+
+  cluster-down:
     desc: "Delete the throwaway cluster."
     cmds:
       - k3d cluster delete {{.SPIKE_CLUSTER}}
+
+  cluster-aggregated-api:
+    desc: "Install Kubernetes' own sample-apiserver (wardle Flunders) as a REAL aggregated API."
+    deps: [cluster-up]
+    cmds:
+      # The one upstream whose behaviour Kubernetes' conformance requirements do NOT cover — so the only
+      # place OrderingLenient could be needed, and (as it turns out) the only place the gateway's
+      # streaming-list assumption actually breaks. See docs/facts/observed-*.md, F6.
+      - kubectl apply -f test/cluster/sample-apiserver/sample-apiserver.yaml
+      - kubectl -n wardle rollout status deploy/wardle-server --timeout=180s
+      - kubectl wait --for=condition=Available apiservice/v1alpha1.wardle.example.com --timeout=120s
+
+  cluster-facts:
+    desc: "Ask a REAL API server the questions the docs do not answer. Writes docs/facts/observed-*.md."
+    deps: [cluster-up, cluster-aggregated-api]
+    dir: gateway/kube
+    cmds:
+      - go run ./cmd/facts --kubeconfig {{.KUBECONFIG_PATH}} --out ../../docs/facts

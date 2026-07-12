@@ -156,13 +156,21 @@ This maps **one-to-one** onto our protocol: the synthetic ADDEDs are the snapsho
 bookmark **is** `synced`, everything after it is live. That is exactly what `gateway/README.md` §3a
 claims, and it checks out.
 
-**One claim of ours the page does NOT support.** `gateway/README.md` §3a says the terminating
-bookmark is identified by `metadata.annotations["k8s.io/initial-events-end"] == "true"`. **That
-annotation appears nowhere on this page.** It is real — it is `metav1.InitialEventsAnnotationKey` in
-`apimachinery`, from KEP-3157 — but it is **[unverified against docs]**, and it is precisely the kind
-of thing that must be proven against a live API server before we trust it. **This is now the single
-most important thing for the real-cluster (k3d) suite to confirm.** If it is wrong, we cannot tell
-the snapshot's closing bookmark from a routine one, and `synced` fires at the wrong moment — or never.
+**One claim of ours the page does NOT support — now settled against a real cluster.**
+`gateway/README.md` §3a says the terminating bookmark is identified by
+`metadata.annotations["k8s.io/initial-events-end"] == "true"`. **That annotation appears nowhere on
+this page.** It is `metav1.InitialEventsAnnotationKey` in `apimachinery` (KEP-3157), and it was the
+single load-bearing assumption in the whole gateway — if it were wrong, `synced` would fire at the
+wrong moment, or never, and the browser would never paint.
+
+> ✅ **CONFIRMED** on Kubernetes **v1.36.2** — see [observed-v1.36.2+k3s1.md](observed-v1.36.2+k3s1.md),
+> F1. The bookmark arrives, and it carries `k8s.io/initial-events-end: "true"`.
+>
+> And a detail the docs get *slightly* wrong, which we only know because we looked: the page says a
+> bookmark's object "only includes a `.metadata.resourceVersion` field", but the real terminating
+> bookmark also carries `metadata.annotations` (it has to — that is where the marker lives). What it
+> does **not** carry is a `uid`, which is what the gateway's partial-object guard actually keys on.
+> The guard is correct, but for a reason one shade more precise than the sentence it was written from.
 
 Note also: with `resourceVersion` **unset** (no `sendInitialEvents` at all), a watch is "Get State and
 Start at Most Recent" and *also* "begins with synthetic 'Added' events for all resource instances that
@@ -258,7 +266,9 @@ was, before it gets decided.
 | 3 | A BOOKMARK's object has only `.metadata.resourceVersion` | a partial object is on **every** conforming stream; forwarding it blanks the consumer | **fixed** + fixture `bookmark-absorbed` |
 | 4 | `PartialObjectMetadata` has a **uid** | "no uid" is not a sufficient partial-object check; check the **kind** | **fixed** + fixture `partial-object-refused` |
 | 5 | Bookmarks may never arrive | nothing may depend on a bookmark's *arrival*, only on its meaning | holds — we only use the terminating one |
-| 6 | `k8s.io/initial-events-end` is not in the docs | our snapshot boundary rests on it | **[unverified]** — the top priority for the k3d suite |
+| 6 | `k8s.io/initial-events-end` is not in the docs | our snapshot boundary rests on it | ✅ **CONFIRMED on v1.36.2** — [observed](observed-v1.36.2+k3s1.md) F1 |
+| 6b | **An aggregated API REJECTS `sendInitialEvents`** ("forbidden … unless the WatchList feature gate is enabled") | the streaming list is **not universal**. §3b's list-then-watch is not a fallback for old clusters — it is **mandatory**, today, for aggregated APIs | ❗ **open** — [observed](observed-v1.36.2+k3s1.md) F6. The gateway cannot serve a `Flunder` until it has this path |
+| 6c | An aggregated API has **its own** resourceVersion space, starting at ~1, and its store may be ephemeral | RVs can go **backwards** across a restart of that API server | ✅ survived — the high-water map is per-**cycle**, so a restart's new cycle clears it. A per-stream map would have swallowed every event after a restart |
 | 7 | Delete is two-phase; `deletionTimestamp` arrives as `MODIFIED` | "Terminating" is an observable state we must render, not a gap | **open** — no fixture yet |
 | 8 | `rv=0` watches may rewind and serve stale data | never open a watch with `resourceVersion=0` | holds — §3a uses `rv=""` |
 | 9 | RFC 7386 merge patch is a real k8s content type | `patch(id)` is directly usable, `application/merge-patch+json` | holds |
