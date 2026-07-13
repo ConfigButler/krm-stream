@@ -4,7 +4,8 @@
 //
 //   LiveResourceStore      holds server truth + your draft; three-way merges every watch event;
 //                          derives dirtiness; tracks conflicts; builds the merge patch.
-//   connectResourceStream  a conforming SSE consumer that feeds a store.  (not built yet)
+//   connectResourceStream  a conforming SSE consumer that feeds a store.
+//   resourceStreamURL      builds the stream URL from a scope — the encoding the gateway parses back.
 //
 // The store is built test-first against conformance/ — the same fixtures the Go gateway runs. See
 // ../../../docs/client-state-model.md for the algorithm, ../../../spec/v1.md for the wire, and
@@ -22,7 +23,6 @@ export type { StreamHandle, StreamOptions } from "./sse.ts";
 export { applyStreamEvent, connectResourceStream, connectWithEventSource, SSEDecoder } from "./sse.ts";
 export type { ApplyOptions, ApplyResult } from "./store.ts";
 export { LiveResourceStore } from "./store.ts";
-
 export type {
   Change,
   Conflict,
@@ -36,3 +36,5 @@ export type {
   Scope,
   StreamEvent,
 } from "./types.ts";
+export type { ScopeQuery } from "./url.ts";
+export { resourceStreamURL } from "./url.ts";

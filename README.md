@@ -13,22 +13,29 @@ Go is the product. The npm package is the helper you would otherwise have had to
 ```go
 import "github.com/ConfigButler/krm-stream/gateway"
 
-// Your app answers the two questions the library must never assume:
-//   who is this caller, and what may they see?
-h := gateway.Handler(gateway.Options{
-    Authorizer: myAuthz,                 // may this principal watch this scope?
-    ClientFor:  myClientForIdentity,     // a client acting AS them — their RBAC, their attribution
-})
-mux.Handle("/resource-stream/v1", h)
+// Your app answers the three things the library must never assume:
+//   who is this caller, what may they see, and how do I reach the cluster as them?
+mux.Handle("/resource-stream/v1", gateway.Handler(gateway.Options{
+    Principal:  func(r *http.Request) (gateway.Principal, error) { return userFrom(r) },
+    Authorizer: myAuthz,             // may this principal watch this scope?
+    Clients:    myClientForIdentity, // a client acting AS them — their RBAC, their attribution
+    Scopes: gateway.ScopePolicy{     // deny-by-default: the zero value streams nothing
+        Targets:   []string{""},
+        Resources: []gateway.GroupResource{{Resource: "configmaps"}},
+    },
+}))
 ```
 
 ...and the browser end, for free:
 
 ```js
-import { LiveResourceStore, connectResourceStream } from "krm-stream";
+import { LiveResourceStore, connectResourceStream, resourceStreamURL } from "krm-stream";
 
 const store = new LiveResourceStore();
-connectResourceStream("/resource-stream/v1?resource=configmaps&namespace=app", store);
+connectResourceStream(
+  resourceStreamURL("/resource-stream/v1", { version: "v1", resource: "configmaps", namespace: "app" }),
+  store,
+);
 
 store.subscribe(() => render(store));       // live status, live conflicts
 store.setValue(uid, ["data", "log-level"], "debug");
