@@ -99,7 +99,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV DLV_VERSION=v1.27.0 \
-    GOPLS_VERSION=v0.22.0 \
+    GOPLS_VERSION=v0.23.0 \
     STATICCHECK_VERSION=v0.7.0
 
 RUN apt-get update \

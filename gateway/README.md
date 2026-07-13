@@ -181,6 +181,25 @@ browser reconnects.
 subscribers. The browser contract is byte-identical across all three — which is the entire reason the
 protocol is specified separately.
 
+> **This is now built**, as `gateway.SharedBackend` — and it is a `Backend` like any other, so it
+> wraps whichever of §3a/§3b you are already using and the stream loop cannot tell. Ten tabs on one
+> namespace become one upstream watch and one warm cache; a joiner gets its whole `reset`…`synced`
+> from that cache without the API server hearing about it.
+>
+> **It is opt-in, and the reason is not performance.** A shared watch is opened ONCE, so it is opened
+> as ONE identity — your service account. Without sharing, `ClientFor` hands the gateway a client
+> acting *as the caller*, and Kubernetes' own RBAC is the enforcement: a bug in this library cannot
+> show someone objects they may not see. **With sharing, your `Authorizer` is the only thing standing
+> between a caller and the objects**, and a bug there is not a bug, it is a disclosure. That is a
+> choice about your threat model, so the library will not make it for you — it will only refuse to
+> make it silently.
+>
+> Two properties worth knowing, both tested: a subscriber that falls behind is **resnapshotted from
+> the warm cache**, never blocked and never silently starved (a bounded queue, so one paused tab
+> cannot grow memory for everyone else); and a partial object is refused *at the cache*, not just at
+> the wire — a husk forwarded once blanks one consumer's object, but a husk **cached** is served to
+> everyone who joins later.
+
 ### 3d. What monotonic `resourceVersion` buys us (internal, never on the wire)
 
 Because `resourceVersion` is a monotonic integer per (target, resource type), the gateway can hold one

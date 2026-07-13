@@ -62,7 +62,10 @@ tasks:
     deps: [fixtures]
     dir: gateway
     cmds:
-      - go test ./...
+      # -race, and it stays: SharedBackend fans one upstream watch out to N subscribers, so the
+      # gateway now has a pump goroutine, a per-scope cache and N bounded queues. A data race in
+      # THAT is a browser being shown another tenant's object, not a flaky test.
+      - go test -race ./...
 
   # A SEPARATE MODULE, so `go test ./...` in gateway/ does not reach it — which means that until it
   # was listed here, nothing tested it at all. The Kubernetes adapter is opt-in for adopters; it is

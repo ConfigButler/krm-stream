@@ -37,7 +37,9 @@ jobs:
           cache-dependency-path: gateway/go.sum
       - run: go vet ./...
         working-directory: gateway
-      - run: go test ./...
+      # -race: the gateway fans out one upstream watch to N subscribers (SharedBackend). A data race
+      # there shows a browser another tenant's object; it is not a flaky-test problem.
+      - run: go test -race ./...
         working-directory: gateway
       - uses: golangci/golangci-lint-action@v9
         with:
