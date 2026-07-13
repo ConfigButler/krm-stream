@@ -222,7 +222,7 @@ informer deletion tombstones (`cache.DeletedFinalStateUnknown`) — that is a `c
 
 The returned objects have `kind: PartialObjectMetadata`, `apiVersion: meta.k8s.io/v1` — and a full
 `metadata`, *including a `uid`*. This matters for us: **a "partial object" is not always detectable by
-a missing uid.** A `PartialObjectMetadata` has one. The honest check is the **kind**, and the
+a missing uid.** A `PartialObjectMetadata` has one. The reliable check is the **kind**, and the
 consequence of missing it is that a consumer replaces a real object with one that has no `spec` and no
 `status` — the status view goes blank and the editor loses the user's `spec`.
 

@@ -213,7 +213,7 @@ Because `resourceVersion` is a monotonic integer per (target, resource type), th
 | **Gap detection** | a watch that resumes below the last emitted RV is a bug or a shard change — detect it, `RESYNC_REQUIRED`, re-snapshot. |
 | **Cheap "is this stale"** | comparing two versions of one object is an integer compare, not a deep diff. |
 
-**The caveats, honestly.** The guarantee holds *within one upstream target and one resource type*. It
+**The caveats.** The guarantee holds *within one upstream target and one resource type*. It
 does **not** hold across targets (two kcp workspaces, two clusters), across aggregated API servers, or
 across a kcp shard migration. So: use it inside the gateway keyed by the normalized scope; never
 compare RVs across scope keys; never publish it as an ordering primitive to the browser. The protocol

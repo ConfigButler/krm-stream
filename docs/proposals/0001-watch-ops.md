@@ -64,7 +64,7 @@ have is a `spec` or a `status`. Forwarding one replaces a live Deployment with a
 goes blank and the editor loses the user's `spec`. Our check was looking at the wrong field, and the
 corpus could not tell us.
 
-The honest check is the **kind**: `PartialObjectMetadata` / `PartialObjectMetadataList`, in group
+The reliable check is the **kind**: `PartialObjectMetadata` / `PartialObjectMetadataList`, in group
 `meta.k8s.io`. Plus the uid check, which still catches the bookmark's object.
 
 > ```yaml

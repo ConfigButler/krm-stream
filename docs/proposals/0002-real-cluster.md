@@ -134,7 +134,7 @@ timestamps, `managedFields` and coalescing are all nondeterministic, so byte-for
 promises: **the store ends up holding what the fixture says it holds** (`uids`, `dirty`, `conflicts`,
 `draftSubset`, `patch`). We already have that assertion, in `test/expect.ts`.
 
-**Be honest about what does not run here.** Three ops cannot be provoked on demand against a real API
+**What does not run here.** Three ops cannot be provoked on demand against a real API
 server, and pretending otherwise is how a suite becomes a liar:
 
 | fixture | why it stays fake-watch-only |

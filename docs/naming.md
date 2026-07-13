@@ -163,7 +163,7 @@ store is.
 
 **Tagline, under the name in the README:**
 
-> **`krm-stream` — a live, honest window onto Kubernetes resources, in the browser.** A language-neutral
+> **`krm-stream` — a live, faithful window onto Kubernetes resources, in the browser.** A language-neutral
 > protocol for streaming Kubernetes Resource Model objects, a Go gateway that produces the stream, and
 > a JavaScript library that reconciles it against local edits. Watch `status` reconcile in real time;
 > edit `spec` with a real three-way merge; real RBAC, real attribution.

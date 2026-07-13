@@ -16,11 +16,19 @@ import (
 // No amount of squinting at a value distinguishes 3 from 4 — which is why redactedPaths is on the
 // wire, per object, mandatory, and why it is authoritative over anything the value looks like.
 
-// RedactedPlaceholder is the mask a redacted value is replaced with. It is never the truth, and —
-// this is the part that makes displaying a Secret safe at all — it can never be written back over
-// the truth: the write path refuses any patch touching a path in redactedPaths (spec §3, gateway
-// §7c). A real value that merely LOOKS like this is not redacted: redactedPaths is authoritative,
-// and the shape of a value is never evidence.
+// RedactedPlaceholder is the mask a redacted value is replaced with. It is never the truth. A real
+// value that merely LOOKS like this is not redacted: redactedPaths is authoritative, and the shape of
+// a value is never evidence.
+//
+// ⚠️ This comment used to say the mask "can never be written back over the truth: the write path
+// refuses any patch touching a path in redactedPaths." That is FALSE, and was false the moment the
+// write path was removed (spec §3). There is no write path here, so nothing in this library refuses
+// anything: **the endpoint that accepts a save must refuse it, and that endpoint is the host's.**
+//
+// The hazard is real and it is ours: this constant is why a browser can hold `**REDACTED**` where a
+// Secret's value should be, and a patch carrying it back overwrites the real one. See
+// docs/proposals/0003-validate-patch.md — the guard belongs in this library as a pure function, and
+// the only reason it is not here yet is that it has not been decided.
 const RedactedPlaceholder = "**REDACTED**"
 
 // lastAppliedAnnotation is machinery a human editor must never see and must never round-trip.

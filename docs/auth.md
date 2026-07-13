@@ -160,7 +160,7 @@ also how a revocation reaches a stream that is already open.
 ## Known gaps
 
 - **`ValidatePatch`** — the redaction guard for your save endpoint, as a pure function rather than a
-  paragraph. The hazard is one *this library creates*: the mask only exists because we redacted the
+  paragraph ([proposal 0003](proposals/0003-validate-patch.md)). The hazard is one *this library creates*: the mask only exists because we redacted the
   field, and a patch carrying it back overwrites the real Secret. Today every adopter must implement
   that check identically and correctly **from prose**, which is the weakest possible enforcement for
   something that destroys data when it is missed. It would not be a write path — no client, no
