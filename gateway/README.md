@@ -370,14 +370,22 @@ plus the `redactedPaths` that make it safe. Pick one, per kind or per scope, and
 
 | policy | when | on the wire |
 |---|---|---|
-| **keys only** (values omitted) | **default.** The UI shows *what* keys exist and can edit labels/annotations, without disclosing values. | key present, value absent, path in `redactedPaths` |
-| **masked** (`"••••"`, with length) | when the shape matters but the value must not leak. | placeholder value, path in `redactedPaths` |
+| **keys only** (values omitted) | **default.** The UI shows *what* keys exist and can edit labels/annotations, without disclosing values. | value **deleted**, path in `redactedPaths` |
 | **elevated auth** (values only for an authorized principal / re-auth) | operator consoles. | full value, path **not** in `redactedPaths` |
 | **full values** | trusted, narrowly-scoped operator UI only — and say so loudly. | full value, empty `redactedPaths` |
 
-A masked value **must never be distinguishable only by looking like a mask** — that is why
-`redactedPaths` is mandatory and not "nice for debugging". A real secret whose value happens to be
-`"••••"` must not be treated as redacted, and a placeholder must not be saved as real.
+> **There used to be a fourth policy here — "masked": put `"••••"` in the value.** It is gone, and
+> spec §3.1 now **forbids** it. A placeholder in the object is a value a browser can **save back**, and
+> a merge patch carrying `"••••"` writes that literal string **over the real Secret**. It was the only
+> poisoned value in the system, and we invented it (proposal 0003).
+>
+> Nothing was lost by deleting it: `redactedPaths` is mandatory and authoritative, so it already
+> carries the one thing the mask carried — that the key exists and is withheld. **A mask is something
+> a UI draws. It is not something the wire carries.**
+
+`redactedPaths` is therefore the *only* evidence of redaction, which is exactly why it is mandatory
+and not "nice for debugging": a real value that merely *looks* like a mask is not redacted, and
+redaction is never inferred from a value's shape.
 
 Independently: `binaryData` and any non-UTF-8 value are streamed as opaque (`"N bytes"`), never as
 editable text, so a text input cannot corrupt them.
@@ -502,7 +510,7 @@ A fake watch/informer + a fake API suffice for most of these.
 | 21 | save patches a Secret value the caller was **never shown** | **rejected** (`400`); no write reaches the API server |
 | 22 | save patches a field the **projection removed** (e.g. `managedFields`) | **rejected**; no write |
 | 23 | save with a whole projected object as a `PUT` | **unsupported** — the endpoint accepts patches only |
-| 24 | a real value that happens to equal the mask placeholder | **not** treated as redacted (`redactedPaths` is authoritative, never the value's shape) |
+| 24 | a real value that happens to look like a mask (`"••••••"`) | **not** treated as redacted — redaction is decided by the KIND and declared in `redactedPaths`, never inferred from a value's shape |
 | 25 | `ConfigMap.binaryData` / non-UTF-8 value | streamed opaque (`N bytes`), never as editable text |
 | **Authorization & lifecycle** |
 | 26 | unauthorized scope request | denied before any watch opens |

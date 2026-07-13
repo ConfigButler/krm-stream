@@ -401,6 +401,21 @@
     },
     "status": {}
   },
+  "secret-token.v1-wire": {
+    "apiVersion": "v1",
+    "kind": "Secret",
+    "metadata": {
+      "uid": "secret-token-0001",
+      "name": "git-creds",
+      "namespace": "app",
+      "resourceVersion": "4001",
+      "labels": {
+        "app.kubernetes.io/name": "shop"
+      }
+    },
+    "type": "Opaque",
+    "data": {}
+  },
   "secret-token.v1": {
     "apiVersion": "v1",
     "kind": "Secret",
@@ -415,8 +430,8 @@
     },
     "type": "Opaque",
     "data": {
-      "token": "**REDACTED**",
-      "username": "**REDACTED**"
+      "token": "aHVudGVyMg==",
+      "username": "Ym9i"
     }
   }
 }

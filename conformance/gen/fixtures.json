@@ -983,8 +983,8 @@
   },
   {
     "id": "secret-redaction",
-    "title": "A redacted value is shown as a mask, is never dirtiable, and can never be written back.",
-    "why": "The rule that makes a Secret safe to display at all: a value you never SAW cannot round-trip over the real one. Three obligations, and all three must hold or the feature is a vulnerability:\n\n  1. the gateway declares WHICH paths are redacted (RFC 6901 pointers), on the wire, per object —\n     so a consumer never has to infer redaction from a value that merely LOOKS like a placeholder;\n  2. the client marks those paths read-only: no draft, no dirty, no conflict, never in a patch;\n  3. the gateway REJECTS any patch that touches a redacted path — belt and braces, because the\n     client is not the security boundary. A hostile client is just a client.\n\nEditing an UNREDACTED field of the same object must still work — that is the whole point of keys-only disclosure. You can see that `token` exists, you can rename the object's labels, and you can never learn or clobber the token itself.\n",
+    "title": "A redacted value is not on the wire at all — the key is disclosed, the value is withheld.",
+    "why": "Keys-only disclosure, and the reason it is now SAFE by construction rather than by discipline.\nThe projection used to substitute a mask — `**REDACTED**` — for a Secret's value. That mask was the only poisoned value in the system, and we invented it: a browser holding it can send it back on an ordinary save, and the literal string `**REDACTED**` is written OVER the real secret. The token is destroyed, and from the browser it looked like a green tick. It needed a guard on every adopter's save endpoint, forever, correctly (proposal 0003).\nSo we stopped inventing it. Two obligations now, and neither is belt-and-braces:\n\n  1. the gateway DELETES the value and declares the path (RFC 6901 pointers) in `redactedPaths` —\n     on the wire, per object, mandatory, authoritative. That array is where the consumer learns\n     `token` exists at all, and it carries everything the mask used to carry;\n  2. the client marks those paths read-only: no draft, no dirty, no conflict, never in a patch.\n\nThe third obligation — \"the server must reject a patch touching a redacted path\" — is GONE, because the thing it defended against cannot happen: there is no redacted value anywhere for a draft to hold or a patch to carry.\nEditing an UNREDACTED field of the same object must still work — that is the whole point of keys-only disclosure. You can see that `token` exists, you can rename the object's labels, and you can never learn or clobber the token itself.\n",
     "suites": [
       "gateway",
       "client"
@@ -1010,7 +1010,7 @@
       },
       {
         "type": "added",
-        "body": "secret-token.v1",
+        "body": "secret-token.v1-wire",
         "redactedPaths": [
           "/data/token",
           "/data/username"

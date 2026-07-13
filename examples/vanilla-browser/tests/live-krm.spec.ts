@@ -96,14 +96,22 @@ test("an unrelated server change never disturbs the field you are editing", asyn
   await expect(page.getByTestId("patch")).toHaveText(JSON.stringify({ data: { "log-level": "debug" } }, null, 2));
 });
 
-test("a redacted Secret value is shown as a mask, cannot be edited, and never reaches the patch", async ({ page }) => {
-  // The rule that makes a Secret safe to display at all: a value you never SAW cannot round-trip over
-  // the real one.
+test("a redacted Secret value is not in the page at all — the mask is drawn, not received", async ({ page }) => {
+  // The rule that makes a Secret safe to display: a value you never RECEIVED cannot round-trip over
+  // the real one. The mask is something this page DRAWS from `redactedPaths` — it is not a value the
+  // wire carried, and there is therefore nothing to save back (proposal 0003).
   await page.goto("/?fixture=secret-redaction&pace=0ms");
   await expect(page.locator("#status-line")).toHaveText(/synced/);
 
+  // Keys-only disclosure: you can see THAT `token` exists…
   const token = page.getByTestId(`value:${path("data", "token")}`);
-  await expect(token).toContainText("**REDACTED**");
+  await expect(token).toContainText("••••••");
+
+  // …and the real value never reached the browser, in any form. Not even as a placeholder — so it is
+  // not in the DOM, not in the store, and not in a screenshot of this page.
+  await expect(page.locator("body")).not.toContainText("hunter2");
+  await expect(page.locator("body")).not.toContainText("aHVudGVyMg==");
+  await expect(page.locator("body")).not.toContainText("REDACTED");
 
   // Read-only means there is no input to type into. Not "an input we ignore" — no input.
   await expect(page.getByTestId(`input:${path("data", "token")}`)).toHaveCount(0);

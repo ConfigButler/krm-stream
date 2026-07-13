@@ -163,15 +163,23 @@ test("adoptSaved — the save landed; stop showing it as dirty without waiting f
   assert.equal(store.patch(id), null);
 });
 
-test("I-REDACT — a masked value is read-only, is never dirty, and never reaches a patch", () => {
-  const [store, id] = seeded("secret-token.v1", ["/data/token", "/data/username"]);
+test("I-REDACT — a redacted value is ABSENT, is read-only, and cannot reach a patch", () => {
+  const [store, id] = seeded("secret-token.v1-wire", ["/data/token", "/data/username"]);
   assert.equal(store.isEditable(id, ["data", "token"]), false);
   assert.throws(() => store.setValue(id, ["data", "token"], "hunter2"), /read-only/);
   assert.throws(() => store.removeKey(id, ["data", "token"]), /read-only/);
 
-  // The mask is still SHOWN — that is the point of keys-only disclosure: you can see that `token`
-  // exists without ever learning, or overwriting, what it is.
-  assert.equal((store.draft(id).data as Record<string, string>).token, "**REDACTED**");
+  // The value is GONE — not masked (proposal 0003). There is no placeholder to hold, and therefore
+  // none to save back over the real secret. The hazard cannot arise rather than being guarded.
+  assert.deepEqual(store.draft(id).data, {}, "a redacted value is on the wire");
+
+  // …and keys-only disclosure survives, because `redactedPaths` carries it: the consumer still knows
+  // `token` exists, which is what a UI renders `token ••••••` from.
+  assert.deepEqual(store.redactedPaths(id), [
+    ["data", "token"],
+    ["data", "username"],
+  ]);
+
   store.setValue(id, ["metadata", "labels", "app.kubernetes.io/name"], "checkout");
   assert.deepEqual(store.patch(id), { metadata: { labels: { "app.kubernetes.io/name": "checkout" } } });
 });

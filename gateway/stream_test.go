@@ -372,31 +372,43 @@ func TestProjectionDoesNotLeaveAnEmptyAnnotationsMap(t *testing.T) {
 	}
 }
 
-// Matrix #24, and the reason redactedPaths exists at all: a real value that merely LOOKS like the
-// mask is not redacted. redactedPaths is authoritative; the shape of a value is never evidence.
-func TestARealValueThatLooksLikeTheMaskIsNotRedacted(t *testing.T) {
-	_, paths := project(ProjectionEditor, cm("u1", "1", map[string]any{"greeting": RedactedPlaceholder}))
+// Redaction is decided by the KIND, never by what a value looks like. A ConfigMap holding a string
+// that happens to read like a mask is an ordinary ConfigMap holding an ordinary string.
+func TestRedactionIsDecidedByKindAndNeverByAValuesShape(t *testing.T) {
+	out, paths := project(ProjectionEditor, cm("u1", "1", map[string]any{"greeting": "**REDACTED**"}))
 	if len(paths) != 0 {
-		t.Errorf("a ConfigMap value that happens to equal the placeholder was reported as redacted: %v", paths)
+		t.Errorf("a ConfigMap value was reported as redacted because of how it LOOKS: %v", paths)
+	}
+	if got := out["data"].(map[string]any)["greeting"]; got != "**REDACTED**" {
+		t.Errorf("a real ConfigMap value was mangled: %v", got)
 	}
 }
 
-// Keys-only disclosure: you may see THAT `token` exists — which is what keeps the object editable at
-// all — and you may never see or write what it is.
-func TestSecretDisclosureIsKeysOnly(t *testing.T) {
+// Keys-only disclosure, after proposal 0003: you learn THAT `token` exists — from redactedPaths — and
+// the value is not on the wire in any form. Not even as a mask.
+//
+// The mask is what this test used to assert, and it was the one poisoned value in the system: a
+// browser holding `**REDACTED**` can save it back, and the literal string lands on the real secret.
+// So the assertion is now the strong one — there is NOTHING there.
+func TestSecretDisclosureIsKeysOnlyAndTheValueIsGone(t *testing.T) {
 	secret := KRMObject{
 		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
 		"metadata": map[string]any{"uid": "s1", "name": "git-creds", "labels": map[string]any{"a/b.c": "x"}},
 		// A Secret's whole point is that these are secret. They are base64 of "hunter2" and "bob",
-		// and the assertion below is that neither ever reaches the wire.
+		// and the assertion below is that neither ever reaches the wire, in any form.
 		"data": map[string]any{"token": "aHVudGVyMg==", "user~name": "Ym9i"}, //nolint:gosec // fixture data, and that is the test
 	}
 	out, paths := project(ProjectionEditor, secret)
 
-	data := out["data"].(map[string]any)
-	if data["token"] != RedactedPlaceholder || data["user~name"] != RedactedPlaceholder {
-		t.Errorf("a Secret value reached the wire: %v", data)
+	data, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatal("`data` was deleted entirely — the Secret HAS a data map, and saying otherwise is a " +
+			"different lie from the one we are avoiding")
 	}
+	if len(data) != 0 {
+		t.Errorf("something survived under data: %v — a redacted value must be GONE, not masked", data)
+	}
+
 	// RFC 6901: `~` escapes to `~0`. A key with a tilde in it is legal, and an unescaped pointer
 	// silently addresses the wrong field — the same class of bug as the client's dotted paths.
 	want := []string{"/data/token", "/data/user~0name"}
@@ -407,11 +419,17 @@ func TestSecretDisclosureIsKeysOnly(t *testing.T) {
 		t.Error("labels must stay editable on a redacted Secret — that is the point of keys-only")
 	}
 
+	// And the upstream object is untouched: project() deep-copies, so the REAL secret is still in the
+	// caller's object. Deleting from a shared informer's cache would be a spectacular bug.
+	if secret["data"].(map[string]any)["token"] != "aHVudGVyMg==" {
+		t.Error("project() mutated the upstream object — it deleted the real Secret's value")
+	}
+
 	// krm-raw/v1 declares no Secret policy. It must not silently apply one either — a projection's
 	// removal rules are what it SAYS they are, or the identifier is worthless.
 	rawOut, rawPaths := project(ProjectionRaw, secret)
-	if rawOut["data"].(map[string]any)["token"] == RedactedPlaceholder || len(rawPaths) != 0 {
-		t.Error("krm-raw/v1 masked a value it does not declare masking")
+	if rawOut["data"].(map[string]any)["token"] != "aHVudGVyMg==" || len(rawPaths) != 0 {
+		t.Error("krm-raw/v1 redacted a value it does not declare redacting")
 	}
 }
 

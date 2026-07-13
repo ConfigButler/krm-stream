@@ -134,6 +134,13 @@
         if (draft.spec) regions.push(...leaves(draft.spec, ["spec"]));
         if (draft.data) regions.push(...leaves(draft.data, ["data"]));
 
+        // ---- redacted: a Secret's values are NOT in the object — there is no mask, no placeholder,
+        // nothing (spec §3). So this is where keys-only disclosure actually happens: `redactedPaths`
+        // is the ONLY place we learn that `token` exists, and the mask is something the UI draws,
+        // not something the wire carries. A placeholder in the object would be a value this page
+        // could save back — and a merge patch carrying it writes it over the real Secret.
+        for (const path of store.redactedPaths(id)) regions.push([path, "••••••"]);
+
         editableBody.replaceChildren(
           ...regions.map(([path, value]) =>
             row(path, value, {

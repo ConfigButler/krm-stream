@@ -159,9 +159,9 @@ also how a revocation reaches a stream that is already open.
 
 ## Known gaps
 
-- **`ValidatePatch`** — the redaction guard for your save endpoint, as a pure function rather than a
-  paragraph ([proposal 0003](proposals/0003-validate-patch.md)). The hazard is one *this library creates*: the mask only exists because we redacted the
-  field, and a patch carrying it back overwrites the real Secret. Today every adopter must implement
-  that check identically and correctly **from prose**, which is the weakest possible enforcement for
-  something that destroys data when it is missed. It would not be a write path — no client, no
-  connection, no API server; just a function your save handler calls. Undecided, deliberately.
+- **A patch touching a *projection-removed* path** (`managedFields`, `last-applied-configuration`).
+  Your save endpoint should refuse one: the consumer never saw those fields either. It destroys
+  nothing, so it is not urgent — and the *catastrophic* version of this, a browser saving a mask back
+  over a real Secret, no longer exists: the projection deletes redacted values instead of masking them
+  ([proposal 0003](proposals/0003-validate-patch.md), spec §3.1). There is no poisoned value left to
+  write back.

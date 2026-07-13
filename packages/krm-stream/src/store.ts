@@ -240,11 +240,29 @@ export class LiveResourceStore {
     return [...this.#must(id).conflicts.values()].map((c) => ({ path: [...c.path], theirs: clone(c.theirs) }));
   }
 
-  /** The policy, minus this object's redacted paths. A masked value is read-only for exactly the
+  /** The policy, minus this object's redacted paths. A redacted value is read-only for exactly the
    * same reason `status` is: it is not the user's to change — and here, they never even saw it. */
   isEditable(id: string, path: Path): boolean {
     const res = this.#must(id);
     return this.#regionsFor(res.server, res.redacted).editable(path);
+  }
+
+  /**
+   * The paths whose values the gateway withheld. **This is the only place a consumer learns that a
+   * redacted field exists**, and rendering it is the whole of keys-only disclosure.
+   *
+   * The value itself is not in the object — there is no mask, no placeholder, nothing (spec §3). So a
+   * UI showing `token ••••••` reads it from HERE, not from the object:
+   *
+   * ```ts
+   * for (const path of store.redactedPaths(uid)) row(path, "••••••", { readOnly: true });
+   * ```
+   *
+   * That is deliberate. A placeholder sitting in the object is a value a browser can save back — and
+   * a merge patch carrying it writes the placeholder over the real Secret.
+   */
+  redactedPaths(id: string): Path[] {
+    return this.#must(id).redacted.map((p) => [...p]);
   }
 
   /** An RFC 7386 merge patch of the editable changes, or null when there is nothing to save.

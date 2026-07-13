@@ -359,7 +359,9 @@ handling.
 - **I-REPLACE** — the server object (`server(id)`, the merge base) is **replaced** by each incoming
   object, never merged into: a key the server removed must not survive in `server(id)` (§2.3).
 - **I-REDACT** — a path in `redactedPaths` is read-only, never dirty, never conflicted, and never
-  appears in `patch(id)`; the placeholder can never become a draft value (§2.3).
+  appears in `patch(id)`. There is no placeholder to become a draft value: the redacted value is not
+  on the wire at all (spec §3.1), so `patch()` *cannot* carry one back over the real Secret. The mask
+  a UI shows is drawn from `store.redactedPaths(id)` (§2.3).
 - **I-DERIVED** — `isDirty(f)` ⟺ `!deepEqual(get(server,f), get(draft,f))`; no cached dirty state.
 - **I-THREEWAY** — reconcile uses base = previous server; removing the base term must fail a test.
 - **I-DEEP** — the merge recurses through nested objects and arrays; a change deep in `spec` reconciles

@@ -5,31 +5,32 @@ import (
 	"strings"
 )
 
-// Projection: what the stream removes, and what it masks. Both are part of the WIRE (spec §3), not
-// an implementation detail, because a consumer must be able to tell these four apart:
+// Projection: what the stream removes, and what it redacts. Both are part of the WIRE (spec §3), not
+// an implementation detail, because a consumer must be able to tell these three apart:
 //
 //	1. a field that does not exist upstream
-//	2. a field the gateway REMOVED (never shown)
-//	3. a field that is present but REDACTED (shown as a placeholder)
-//	4. a field whose real value merely LOOKS like a placeholder
+//	2. a field the gateway REMOVED (never shown, never named)
+//	3. a field that EXISTS but whose value was withheld — the path is named in redactedPaths
 //
-// No amount of squinting at a value distinguishes 3 from 4 — which is why redactedPaths is on the
-// wire, per object, mandatory, and why it is authoritative over anything the value looks like.
-
-// RedactedPlaceholder is the mask a redacted value is replaced with. It is never the truth. A real
-// value that merely LOOKS like this is not redacted: redactedPaths is authoritative, and the shape of
-// a value is never evidence.
+// Nothing about a VALUE distinguishes those, which is why redactedPaths is on the wire, per object,
+// mandatory, and authoritative.
 //
-// ⚠️ This comment used to say the mask "can never be written back over the truth: the write path
-// refuses any patch touching a path in redactedPaths." That is FALSE, and was false the moment the
-// write path was removed (spec §3). There is no write path here, so nothing in this library refuses
-// anything: **the endpoint that accepts a save must refuse it, and that endpoint is the host's.**
+// # A redacted value is OMITTED. There is no placeholder, and that is the point (proposal 0003)
 //
-// The hazard is real and it is ours: this constant is why a browser can hold `**REDACTED**` where a
-// Secret's value should be, and a patch carrying it back overwrites the real one. See
-// docs/proposals/0003-validate-patch.md — the guard belongs in this library as a pure function, and
-// the only reason it is not here yet is that it has not been decided.
-const RedactedPlaceholder = "**REDACTED**"
+// This projection used to substitute a mask — `**REDACTED**` — for a Secret's value. That was the one
+// poisoned value in the whole system, and we invented it: a browser holding `**REDACTED**` where a
+// token should be can send it back on an ordinary save, and the literal string is written OVER the
+// real secret. The token is destroyed, and from the browser it looked like a green tick.
+//
+// So we do not invent it. The value is simply not there, and `redactedPaths` says why — which is all
+// the information the mask ever carried:
+//
+//   - the CONSUMER still knows the key exists and is withheld: `/data/token` is in redactedPaths. A
+//     UI renders `••••••` from that, exactly as it did before.
+//   - the DRAFT never contains a redacted value, so a merge patch cannot carry one back. The hazard
+//     does not need a guard, because it can no longer arise.
+//
+// Keys-only disclosure survives intact. What does not survive is the mask-shaped landmine.
 
 // lastAppliedAnnotation is machinery a human editor must never see and must never round-trip.
 const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
@@ -61,9 +62,12 @@ func project(p Projection, in KRMObject) (KRMObject, []string) {
 		}
 	}
 
-	// krm-editor/v1 additionally applies the Secret disclosure policy: keys-only. You may see THAT
-	// `token` exists — which is what makes the object editable at all, since you can still rename a
-	// label on it — and you may never see or overwrite what it is.
+	// krm-editor/v1 additionally applies the Secret disclosure policy: keys-only.
+	//
+	// The value is DELETED, not masked. You learn that `token` exists — from redactedPaths, which
+	// names `/data/token` — and you never learn or carry what it is. `data` is left in place even when
+	// it empties out: the Secret HAS a data map, and saying otherwise would be a different lie from
+	// the one we are avoiding.
 	if p == ProjectionEditor && isSecret(out) {
 		for _, field := range []string{"data", "stringData"} {
 			m, ok := out[field].(map[string]any)
@@ -71,7 +75,7 @@ func project(p Projection, in KRMObject) (KRMObject, []string) {
 				continue
 			}
 			for k := range m {
-				m[k] = RedactedPlaceholder
+				delete(m, k)
 				paths = append(paths, "/"+escapePointer(field)+"/"+escapePointer(k))
 			}
 		}

@@ -1,7 +1,14 @@
 # Proposal 0003 — the redacted-value hazard: guard it, or stop creating it
 
-**Status:** proposed. **Not built.** The decision is the owner's, and it should be made against the
-actual hazard rather than a summary of it.
+**Status: ACCEPTED — option B, and it is built.** The projection no longer emits a placeholder; a
+redacted value is deleted, and `redactedPaths` carries the fact. Spec §3.1 now **forbids** a mask on
+the wire. The mask-overwrite hazard cannot arise, so `ValidatePatch` is not needed for it and is not
+built.
+
+> **What remains, and it is small:** a consumer could still patch a *projection-removed* path
+> (`managedFields`, `last-applied-configuration`) — it never saw those either. That is worth refusing
+> in a host's save endpoint (spec §3 says so), but it destroys nothing and it is not load-bearing. The
+> catastrophic case is closed at the source.
 
 **One sentence:** the projection invents `**REDACTED**`, an ordinary save can write it back *over the
 real Secret*, and the only thing standing in the way is a paragraph — so either ship the guard
