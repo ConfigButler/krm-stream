@@ -1,0 +1,61 @@
+# Grouped, so a week of upstream patch releases is one PR to review and one release-note line — not
+# eleven. Every ecosystem in the repo is listed: an ecosystem that is not listed here is one where
+# nobody is watching.
+#
+# Conventional commits, because release-please reads them: `chore(deps):` keeps routine bumps out of
+# the changelog, which is what a consumer of this library wants — they do not care that our linter
+# moved. The k8s.io/* floor is DELIBERATELY excluded below; see gateway/kube/go.mod for why.
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      github-actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # The core module has no dependencies at all — by design, and CI fails if that changes — so there
+  # is nothing here to update. Only the adapter has any.
+  - package-ecosystem: gomod
+    directory: /gateway/kube
+    schedule:
+      interval: weekly
+    groups:
+      gomod:
+        patterns: ["*"]
+    ignore:
+      # The k8s.io/* requirement is a SUPPORTED-VERSION FLOOR, not a version to keep current: Go's
+      # minimal version selection means an adopter already on a newer client-go keeps it, while
+      # chasing patch releases here would force every adopter up to whatever we last built against.
+      # An adapter has no business dictating which Kubernetes libraries its host runs. Raising it is
+      # a deliberate act (it raises the supported minor), so it is not Dependabot's to make.
+      - dependency-name: k8s.io/*
+    commit-message:
+      prefix: "chore(deps)"
+
+  # devDependencies only — this package ships ZERO runtime dependencies, and the three dev ones are
+  # the compiler, its node types, and biome.
+  - package-ecosystem: npm
+    directory: /packages/krm-stream
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
+
+  # Playwright lives here rather than in the library, which is exactly why it needs its own entry.
+  - package-ecosystem: npm
+    directory: /examples/vanilla-browser
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"
