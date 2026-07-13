@@ -27,6 +27,17 @@
 // as WatchAdded events terminated by a bookmark whose InitialEventsEnd is set, and everything after
 // that bookmark is live. On the §3a path the API server hands us that boundary. On the §3b path we
 // synthesize it. That is precisely why the protocol names the BOUNDARY and not the mechanism.
+//
+// # The failure mode this does NOT defend against, and why
+//
+// A server could ACCEPT `sendInitialEvents` and then quietly ignore it — no synthetic ADDEDs, no
+// terminating bookmark, so `synced` never fires and a browser never paints. We do not guard against
+// that, and the omission is deliberate: the only possible guard is a timeout ("no bookmark in N
+// seconds ⇒ assume §3b"), and N would be a guess that turns a slow cluster into a corrupt one. What
+// we have instead is a stated environment: this gateway requires Kubernetes 1.35+ (README §3), where
+// the option is not silently droppable. A server that accepts an option and ignores it is broken in
+// a way that is not ours to paper over — and the honest response to a broken upstream is to be
+// diagnosable, not to guess.
 package kube
 
 import (
