@@ -68,11 +68,11 @@ flowchart LR
     G ==> HTTP["<b>HTTP</b> · task e2e-wire<br/><i>real socket · real fetch</i>"]
     HTTP ==> BR["<b>browser</b> · task e2e-browser<br/><i>real Chromium · native EventSource<br/>· unbundled ESM</i>"]
 
-    K8S["<b>cluster</b> · not built<br/><i>410 Gone · RBAC · a real controller<br/>moving status · initial-events-end</i>"]
+    BR ==> K8S["<b>cluster</b> · task test-cluster<br/><i>a real API server · initial-events-end<br/>· an aggregated API that refuses it</i>"]
 
     style E fill:#2563eb,color:#fff
     style SSE fill:#2563eb,color:#fff
-    style K8S fill:#6b7280,color:#fff,stroke-dasharray: 5 5
+    style K8S fill:#16a34a,color:#fff
 ```
 
 `events:` is the meeting point — the gateway must *emit* it, the client is *fed* it. That is the whole
@@ -85,13 +85,20 @@ reason this is one repository.
 | **wire** | the SSE bytes — the client parses transcripts the **gateway really wrote** | the socket | `task test` |
 | **HTTP** | a real Go server, a real socket, a real `fetch` | the API server | `task e2e-wire` |
 | **browser** | a real Chromium, native `EventSource`, the **unbundled ESM** | the API server | `task e2e-browser` |
-| **cluster** | *(not built)* a real API server: `410 Gone`, RBAC, a controller moving `status` | nothing | — |
+| **cluster** | a real API server — the streaming list, its bookmark, an aggregated API that refuses it | nothing | `task test-cluster` |
 
-None of these needs a cluster. That is not a compromise: every rule in the corpus is about framing,
-projection and merge, and a fake watch drives those deterministically in microseconds. What a fake
-*cannot* prove — that a real streaming list really terminates with the `initial-events-end` bookmark
-([the fact we have not verified](docs/facts/kubernetes-api-concepts.md#3-streaming-lists-sendinitialevents--the-snapshot-boundary)),
-that a real 410 arrives as we expect — is the cluster rung's job and nothing else's.
+Only the last rung needs a cluster, and that is not a compromise: every rule in the corpus is about
+framing, projection and merge, and a fake watch drives those deterministically in microseconds. What a
+fake *cannot* prove is exactly what the cluster rung exists for — and it earned its keep on the first
+run. The gateway's snapshot boundary rests on an annotation (`k8s.io/initial-events-end`) that appears
+**nowhere in the API documentation**; it is now a [witnessed fact](docs/facts/observed-v1.36.2+k3s1.md).
+And a real **aggregated API server refused the streaming list outright**, which turned `gateway/README`
+§3b from a fallback into a required path — a bug that would otherwise have been found by a user, in
+their cluster, and not by us (`docs/facts/…` F6).
+
+The cluster rung does **not** run in per-PR CI: it needs Docker-in-Docker and minutes, while the
+fixtures gate every PR in milliseconds. Its build tag is vetted on every PR all the same, because a
+suite that has quietly stopped compiling is a suite nobody notices has stopped running.
 
 **A green suite proves nothing until it can go red.** Before trusting a new test, break the code it
 covers and watch it fail. That habit has now found four real bugs in this repo — a `terminal` flag

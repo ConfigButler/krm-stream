@@ -1,8 +1,37 @@
 # Proposal 0002 — the real-cluster rung
 
-**Status:** proposed.
+**Status:** **B and A have landed.** C and D remain.
 **Goal:** stop guessing. Every rung below this one fakes the API server, and *everything the gateway
 believes about Kubernetes is currently unverified.*
+
+> ## What the cluster actually said, and what it changed
+>
+> **Phase B — the fact-finder** (`task cluster-facts`) → [observed-v1.36.2+k3s1.md](../facts/observed-v1.36.2+k3s1.md).
+> F1 holds: a streaming list really does end with a bookmark carrying `k8s.io/initial-events-end`, an
+> annotation that appears nowhere in the API docs and on which the whole snapshot boundary rests. F3,
+> F4, F5 and F7 hold as written.
+>
+> **F6 changed the design, and it is the reason this rung exists.** Pointed at a real aggregated API
+> (Kubernetes' own sample-apiserver), the §3a streaming list was **refused outright** —
+> `sendInitialEvents is forbidden ... unless the WatchList feature gate is enabled`. An aggregated API
+> server is a separate binary with its own feature gates. So §3b's list-then-watch is **not** a
+> fallback for old clusters: it is the *only* way to serve an aggregated API on a current one, and a
+> gateway implementing only §3a cannot open a stream for a `Flunder` at all. That is a bug a user
+> would have found, in their cluster, and we would not.
+>
+> **Phase A — the backend** (`gateway/kube`, its own module, so `go get .../gateway` stays
+> dependency-free). It therefore ships **both** paths, and *detects* which to use — nobody should have
+> to know which of their APIs is aggregated in order to watch it. `task test-cluster` proves both
+> against the real thing: it first asserts the aggregated API still **refuses** §3a (so a cluster that
+> quietly gained `WatchList` cannot make the test pass for the wrong reason), then asserts the gateway
+> serves the scope anyway.
+>
+> Two notes for whoever does C:
+>
+> - The order in this proposal was **B before A**, and it paid for itself exactly as argued: F6 landed
+>   *before* `gateway/kube` was written around an assumption that turned out to be false.
+> - A scratch namespace deletes **asynchronously**. Two tests sharing one namespace name race the
+>   first one's teardown ("because it is being terminated"). One namespace per test.
 
 ## Why this rung, and what it is NOT for
 

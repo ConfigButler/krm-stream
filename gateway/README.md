@@ -136,6 +136,12 @@ conforming way to satisfy "gap-free handoff", not the definition of it.
 > mentioning `sendInitialEvents`, fall back to §3b **for that scope** and remember it. The snapshot
 > boundary is then ours to synthesize (`synced` after the last `Added`) rather than the API server's to
 > hand us — which is precisely why the protocol names the boundary and not the mechanism.
+>
+> **This is now built**, in [`kube`](kube/) (`kube.NewBackend`) — a separate module, so client-go stays
+> opt-in. It ships both paths and *detects* which one an API needs: nobody should have to know which of
+> their APIs is aggregated in order to watch it. The refusal is remembered **per GroupVersion**, since
+> it is a fact about a server binary and not about a request. `task test-cluster` drives both paths
+> against a real cluster.
 
 What gitops-api's console (`handleConsoleStream`) and voter's config stream
 (`streamCoffeeConfigWatch`) ship today, and what a target that cannot do §3a requires:

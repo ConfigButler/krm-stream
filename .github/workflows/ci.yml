@@ -44,6 +44,33 @@ jobs:
           version: v2.12.2
           working-directory: gateway
 
+  # The Kubernetes adapter is a SEPARATE MODULE — which is the point (`go get .../gateway` stays
+  # dependency-free, and client-go is opt-in) but has a sharp edge: the gateway job's `go test ./...`
+  # does not reach across a module boundary, so without this job the adapter would ship untested.
+  #
+  # The e2e build tag is VETTED here and RUN nowhere in per-PR CI: the real-cluster suite needs
+  # Docker-in-Docker and minutes, while the fixtures gate every PR in milliseconds (`task
+  # test-cluster` runs it, and proposal 0002 says why it lives outside this gate). Vetting it still
+  # matters — a test suite that no longer compiles is a suite nobody notices has stopped running.
+  kube:
+    name: kube adapter (go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+          cache-dependency-path: gateway/kube/go.sum
+      - run: go vet -tags e2e ./...
+        working-directory: gateway/kube
+      - run: go test ./...
+        working-directory: gateway/kube
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          working-directory: gateway/kube
+          args: --build-tags e2e
+
   client:
     name: client (typescript)
     runs-on: ubuntu-latest

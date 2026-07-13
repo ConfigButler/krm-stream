@@ -115,7 +115,10 @@ func main() {
 	}
 
 	if *out != "" {
-		path := filepath.Join(*out, "observed-"+version.GitVersion+".md")
+		// The filename is built from a string the SERVER chose. That is worth one function: a server
+		// answering `../../../etc/cron.d/x` for its version would otherwise be picking the path we
+		// write to, and this program is the one thing here that runs against clusters we do not own.
+		path := filepath.Join(*out, "observed-"+versionSlug(version.GitVersion)+".md")
 		if err := writeMarkdown(path, version.GitVersion, findings); err != nil {
 			fatal("write: %v", err)
 		}
@@ -575,6 +578,28 @@ func f7(ctx context.Context, dyn dynamic.Interface, ns string) finding {
 	}
 }
 
+// versionSlug reduces a server-reported version to the characters a Kubernetes version can actually
+// contain (`v1.36.2+k3s1`), so that nothing a server says can escape the directory we were told to
+// write into. An allowlist, not a blocklist: the set of safe characters is short and knowable, and
+// the set of dangerous ones is neither.
+func versionSlug(version string) string {
+	slug := strings.Map(func(r rune) rune {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+			return r
+		case r == '.', r == '-', r == '_', r == '+':
+			return r
+		default:
+			return '-'
+		}
+	}, version)
+	// `.` and `..` survive the map above, and both name a directory rather than a file.
+	if strings.Trim(slug, ".") == "" {
+		return "unknown"
+	}
+	return slug
+}
+
 func isDecimal(rv string) bool {
 	if rv == "" || rv[0] < '1' || rv[0] > '9' {
 		return false
@@ -609,7 +634,12 @@ func writeMarkdown(path, version string, findings []finding) error {
 			fmt.Fprintf(&b, "%s\n\n", f.Detail)
 		}
 	}
-	return os.WriteFile(path, []byte(b.String()), 0o600)
+	// The two halves of `path` have very different provenance, and only one of them is a risk.
+	// The DIRECTORY is `--out`: an operator naming a directory on their own command line, which is
+	// what a CLI flag is for. The FILENAME embeds a string the SERVER chose, and that one is
+	// sanitized (versionSlug) precisely because a cluster we do not own should not get to pick where
+	// this program writes. gosec cannot see that distinction; it is the whole of the reasoning.
+	return os.WriteFile(path, []byte(b.String()), 0o600) // #nosec G703
 }
 
 func fatal(format string, args ...any) {

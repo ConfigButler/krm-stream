@@ -55,12 +55,21 @@ tasks:
   # -------------------------------------------------------------------- test --
   test:
     desc: "Run both suites against the shared conformance fixtures."
-    deps: [test-gateway, test-client]
+    deps: [test-gateway, test-kube, test-client]
 
   test-gateway:
     desc: "Go: the gateway + its half of the conformance suite."
     deps: [fixtures]
     dir: gateway
+    cmds:
+      - go test ./...
+
+  # A SEPARATE MODULE, so `go test ./...` in gateway/ does not reach it — which means that until it
+  # was listed here, nothing tested it at all. The Kubernetes adapter is opt-in for adopters; it is
+  # not optional for us.
+  test-kube:
+    desc: "Go: the Kubernetes adapter (no cluster — see test-cluster for the real thing)."
+    dir: gateway/kube
     cmds:
       - go test ./...
 
@@ -134,13 +143,20 @@ tasks:
   # -------------------------------------------------------------------- lint --
   lint:
     desc: "Vet + lint both languages."
-    deps: [lint-gateway, lint-client]
+    deps: [lint-gateway, lint-kube, lint-client]
 
   lint-gateway:
     dir: gateway
     cmds:
       - go vet ./...
       - golangci-lint run ./...
+
+  lint-kube:
+    dir: gateway/kube
+    cmds:
+      # --build-tags e2e, or the real-cluster suite is the one Go file in the repo nobody vets.
+      - go vet -tags e2e ./...
+      - golangci-lint run --build-tags e2e ./...
 
   lint-client:
     dir: "{{.CLIENT_DIR}}"
@@ -230,3 +246,17 @@ tasks:
     dir: gateway/kube
     cmds:
       - go run ./cmd/facts --kubeconfig {{.KUBECONFIG_PATH}} --out ../../docs/facts
+
+  # The backend, against the real thing. The unit suite stubs the API server — and a stub is a thing we
+  # wrote, so it agrees with us. This drives the REAL stream loop over the REAL backend against a REAL
+  # API server, on BOTH paths: the streaming list against kube-apiserver, and list-then-watch against
+  # the aggregated API that refuses it (F6). It does not run in per-PR CI: it needs Docker-in-Docker
+  # and it takes minutes, while the fixtures gate every PR in milliseconds.
+  test-cluster:
+    desc: "The kube backend against a REAL API server — both paths (§3a and §3b)."
+    deps: [cluster-up, cluster-aggregated-api]
+    dir: gateway/kube
+    env:
+      KUBECONFIG: '{{.KUBECONFIG_PATH}}'
+    cmds:
+      - go test -tags e2e -v -count=1 -timeout 10m ./...
