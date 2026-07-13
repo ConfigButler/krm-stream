@@ -22,9 +22,16 @@ export default defineConfig({
 
   // Build the library first — `dist/` is what the browser imports, unbundled, and a stale dist is a
   // test of last week's library.
+  //
+  // `npx --no-install`, and it is not a style preference. Bare `npx tsc` in a directory with no
+  // node_modules does not fail — it goes to the REGISTRY, downloads whatever is published under the
+  // name `tsc` (a squatter package, not TypeScript), and runs it. That is what this job did on its
+  // first-ever CI run, and it is a supply-chain hole that happened to announce itself by failing.
+  // --no-install makes a missing dependency loud instead of resolving it from the internet. Run
+  // `task e2e-browser`, which installs the library's devDependencies first.
   webServer: {
     command:
-      "cd ../../packages/krm-stream && npx tsc && " +
+      "cd ../../packages/krm-stream && npx --no-install tsc && " +
       "cd ../../gateway && go run ./cmd/replay " +
       "--addr 127.0.0.1:8100 --corpus ../conformance " +
       "--static ../examples/vanilla-browser --dist ../packages/krm-stream/dist",

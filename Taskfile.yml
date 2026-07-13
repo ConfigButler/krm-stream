@@ -120,15 +120,19 @@ tasks:
 
   e2e-browser:
     desc: "End to end in a REAL browser: native EventSource, unbundled ESM, no cluster."
-    deps: [fixtures]
+    # build-client, because playwright's webServer rebuilds the library from packages/krm-stream —
+    # and it cannot do that with no node_modules there. On a developer's machine that directory is
+    # already populated by `task test`, which is exactly why this gap survived until the first CI run
+    # on a clean checkout found it.
+    deps: [fixtures, build-client]
     dir: examples/vanilla-browser
     cmds:
       # The only place the library's central promise is actually tested: that the published ESM
       # imports in a browser with no bundler. Node importing it proves nothing — Node is not a browser.
       # Playwright lives in the EXAMPLE's package, so the library keeps its three devDependencies.
       - npm install --no-audit --no-fund
-      - npx playwright install chromium --with-deps
-      - npx playwright test {{.CLI_ARGS}}
+      - npx --no-install playwright install chromium --with-deps
+      - npx --no-install playwright test {{.CLI_ARGS}}
 
   demo:
     desc: "Serve the browser demo — watch a status reconcile while you edit spec. No cluster."
@@ -184,7 +188,9 @@ tasks:
     generates: ["dist/**/*.js"]
     cmds:
       - npm install --no-audit --no-fund
-      - npx tsc
+      # --no-install: bare `npx tsc` with no node_modules silently downloads a REGISTRY package named
+      # `tsc` (which is not TypeScript) and runs it. Never let a build reach the network by accident.
+      - npx --no-install tsc
 
   # ---------------------------------------------------------------- cluster --
   # The one rung a fake watch cannot reach. Everything the gateway BELIEVES about Kubernetes — that a
