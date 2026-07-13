@@ -104,7 +104,7 @@ too:
 - **`ClientFor` is your refresh point.** It is called again each cycle, so you can hand back a client
   bearing a *fresh* token.
 
-**Be honest about the gap:** a perfectly quiet stream may not cycle for a long time, so revocation is
+**The gap:** a perfectly quiet stream may not cycle for a long time, so revocation is
 noticed at the *next cycle*, not instantly. The credential half of that is solved properly on your
 side of the seam — give the client a **refreshing token source** (Dex issues a refresh token; the
 standard `oauth2.TokenSource` wraps it), and it never hands us a dead token in the first place.
@@ -116,13 +116,37 @@ user who is fully entitled to read a Secret still does not get its value in a br
 **never** be relied on to hide something the caller could not have read anyway — that is Kubernetes'
 job. Confusing the two is how you end up with a "secure" viewer whose only protection is a mask.
 
-**Sharing a watch moves the boundary.** `SharedBackend` opens one upstream watch per scope, so it
-opens it **once**, so it opens it as **one identity** — your service account. At that moment your
-`Authorizer` stops being defence in depth and becomes *the only thing* between a caller and the
-objects. That is why it is opt-in, and why it is not the default. If you turn it on, your `Authorizer`
-must be as strong as Kubernetes' RBAC was — the natural way to do that is to *ask Kubernetes*, with a
-`SubjectAccessReview`, before serving a subscriber from the shared cache. (Not shipped yet; see
-"Known gaps".)
+**Sharing a watch moves the boundary — so give it back.** `SharedBackend` opens one upstream watch per
+scope, so it opens it **once**, so it opens it as **one identity** — your service account. At that
+moment your `Authorizer` stops being defence in depth and becomes *the only thing* between a caller
+and the objects. That is why it is opt-in, and why it is not the default.
+
+If you turn it on, use **`kube.SSARAuthorizer`**, and Kubernetes is the boundary again:
+
+```go
+shared := gateway.NewSharedBackend(serviceAccountBackend)     // one watch, one identity…
+opts.Authorizer = kube.SSARAuthorizer(clientset, subjectOf)   // …but RBAC still decides
+opts.Clients = func(string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
+```
+
+Before a subscriber is served from the shared cache, it asks the API server — with a
+`SubjectAccessReview` — *"may this user `list` and `watch` this resource, in this namespace?"* — and
+lets it answer. `subjectOf` is yours: it maps your opaque `Principal` onto the Kubernetes user and
+groups that RBAC binds against (the OIDC `username` and `groups` claims).
+
+Three things it does that are easy to get accidentally permissive, all tested:
+
+- it asks about **both `list` and `watch`**. A snapshot cycle is a list *then* a watch — literally so
+  on the list-then-watch path — so a caller who may watch but not list could otherwise be handed, in
+  the snapshot, exactly the objects RBAC refused to let them enumerate;
+- a review it could not **complete** is not an allow. If the API server cannot say whether you may
+  look, the answer is no;
+- an explicit `Denied` wins over an `Allowed`.
+
+It needs your server's service account to hold `create` on `subjectaccessreviews` (the standard
+`system:auth-delegator` role). It does **not** need impersonate rights: it asks a question *about* a
+user, it does not act *as* one. And because the gateway re-authorizes every snapshot cycle, this is
+also how a revocation reaches a stream that is already open.
 
 ## What this library never does
 
@@ -135,8 +159,9 @@ must be as strong as Kubernetes' RBAC was — the natural way to do that is to *
 
 ## Known gaps
 
-- **`SubjectAccessReview` authorizer** (`kube.SSARAuthorizer`) — the thing that would let you share a
-  watch *and* keep Kubernetes as the authorization boundary. Not built.
 - **`ValidatePatch`** — the redaction guard for your save endpoint, as a pure function rather than a
-  paragraph. Today every adopter must implement it identically and correctly from prose, which is the
-  weakest possible enforcement for a check that destroys a Secret when it is missed.
+  paragraph. The hazard is one *this library creates*: the mask only exists because we redacted the
+  field, and a patch carrying it back overwrites the real Secret. Today every adopter must implement
+  that check identically and correctly **from prose**, which is the weakest possible enforcement for
+  something that destroys data when it is missed. It would not be a write path — no client, no
+  connection, no API server; just a function your save handler calls. Undecided, deliberately.

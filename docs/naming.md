@@ -77,7 +77,7 @@ from a description of the problem?* If yes, the name is doing retrieval work for
 | # | Criterion | Why |
 |---|---|---|
 | 1 | **Be the search query** | audiences B and C both arrive by describing the problem |
-| 2 | **Say KRM, honestly** | the pitch is that it streams *real Kubernetes objects*, not abstracted "documents". A name that hides that is selling a different, worse product |
+| 2 | **Say KRM, and mean it** | the pitch is that it streams *real Kubernetes objects*, not abstracted "documents". A name that hides that is selling a different, worse product |
 | 3 | **Not collide** | mis-recall toward a stronger incumbent is worse than obscurity |
 | 4 | **Name the shared foundation** | one umbrella over a protocol, a producer and a consumer. The umbrella should name **what they share**, not what one of them does |
 | 5 | **Stand alone from ConfigButler** | a stranger must be able to adopt it without adopting us. It is not `configbutler-console` |
@@ -110,7 +110,7 @@ search box — and one of them isn't human.
 tradition: helm, harbor, rudder), `Loupe`, `Sextant`, `Crow's Nest`, `Vantage`.
 
 `Porthole` is the one I actually like, and it is the one I argued against. It is a genuinely good
-*metaphor* — an honest live window onto something moving, which is precisely the product's thesis. But
+*metaphor* — a faithful live window onto something moving, which is precisely the product's thesis. But
 it fails every criterion that matters here: it cannot be reconstructed from the problem, it teaches an
 agent nothing, and **it is already taken on npm**. It is a brand for a product with a landing page,
 which this is not. Keep it in the drawer for a hosted product; don't spend it on a library.

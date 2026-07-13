@@ -1,6 +1,6 @@
 # krm-stream
 
-**A live, honest window onto Kubernetes resources, in the browser.**
+**A live, faithful window onto Kubernetes resources, in the browser.**
 
 **A Go library** that turns a Kubernetes watch into a browser-friendly stream of complete **KRM**
 (Kubernetes Resource Model) objects — absorbing every watch mechanic (`resourceVersion` arithmetic,
@@ -155,7 +155,7 @@ wrong:
    that naively overwrites the form on every watch event destroys the edit; one that naively ignores
    the event shows stale truth. The correct answer is a **three-way merge** — previous server state,
    your draft, new server state — and almost nobody does it.
-3. **The honesty.** Most consoles flatten Kubernetes into an abstracted "document" and lose the thing
+3. **The fidelity.** Most consoles flatten Kubernetes into an abstracted "document" and lose the thing
    that made it worth showing. A CRD you have never heard of must round-trip **verbatim**.
 
 `krm-stream` does those three things, once, with a written contract and a conformance suite that both

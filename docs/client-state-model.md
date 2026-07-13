@@ -5,7 +5,7 @@
 > the first consumer. Working name: **`krm-live`** (final name TBD — Open questions).
 >
 > **One line:** a headless, framework-agnostic engine for **live-editing and live-watching Kubernetes
-> objects in the browser** — a thin, honest layer over the **Kubernetes Resource Model (KRM)**. It
+> objects in the browser** — a thin, faithful layer over the **Kubernetes Resource Model (KRM)**. It
 > does a **deep three-way merge** of your edits to `spec`/`metadata` against a live watch stream,
 > tracks dirty state and conflicts, builds a merge patch — and streams read-only `status` so you can
 > watch an object actually reconcile.

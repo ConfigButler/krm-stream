@@ -26,12 +26,17 @@ import (
 //     subscriber reads from its cache. **Your Authorizer becomes the only thing standing between a
 //     caller and the objects.** A bug there is not a bug, it is a disclosure.
 //
-// So SharedBackend is not the default and never will be. A host opts in by wiring it deliberately:
+// So SharedBackend is not the default and never will be. A host opts in by wiring it deliberately —
+// and there is a way to opt in WITHOUT giving up the boundary, which is the wiring you want:
 //
-//	shared := gateway.NewSharedBackend(myServiceAccountBackend)   // ONE identity, on purpose
-//	opts.Clients = func(target string, p gateway.Principal) (gateway.Backend, error) {
-//	    return shared, nil                                        // …and an Authorizer that means it
-//	}
+//	shared := gateway.NewSharedBackend(myServiceAccountBackend)    // one watch, ONE identity…
+//	opts.Authorizer = kube.SSARAuthorizer(clientset, subjectOf)    // …but Kubernetes still decides
+//	opts.Clients = func(string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
+//
+// kube.SSARAuthorizer asks the API server, with a SubjectAccessReview, whether THIS user may list and
+// watch THIS resource here — before the subscriber is served from the shared cache. RBAC is the
+// boundary again, and the sharing costs you nothing but a round-trip per snapshot cycle. See
+// docs/auth.md.
 //
 // The library cannot make that choice for you, because it is a choice about YOUR threat model. What
 // it can do is refuse to make it silently, which is what this comment is for.

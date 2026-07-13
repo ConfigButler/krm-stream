@@ -148,7 +148,7 @@ reason is the whole point of grounding fixtures in real behaviour:
 - **kube-apiserver's `resourceVersion` is an etcd revision** — an int64, 19 digits. You will never meet
   a 40-digit one there either. A different backing store is where such a value actually comes from.
 - **An aggregated / extension API server is the one server the docs still carve out**, because it is a
-  third-party implementation the conformance test does not cover. So it is the honest home for both.
+  third-party implementation the conformance test does not cover. So it is the right home for both.
 
 A fixture that teaches a real rule with an impossible example is worse than no fixture: it makes the
 reader trust a mental model that will mislead them the next time.
