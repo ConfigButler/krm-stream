@@ -1,0 +1,48 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "bump-minor-pre-major": true,
+  "separate-pull-requests": false,
+  "packages": {
+    "packages/krm-stream": {
+      "release-type": "node",
+      "component": "krm-stream",
+      "package-name": "krm-stream",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "src/version.ts"
+        }
+      ]
+    },
+    "gateway": {
+      "release-type": "go",
+      "component": "gateway",
+      "tag-separator": "/"
+    },
+    "gateway/kube": {
+      "release-type": "go",
+      "component": "gateway/kube",
+      "tag-separator": "/"
+    }
+  },
+  "plugins": [
+    {
+      "type": "linked-versions",
+      "groupName": "krm-stream",
+      "components": ["krm-stream", "gateway", "gateway/kube"]
+    }
+  ],
+  "changelog-sections": [
+    { "type": "feat", "section": "Features" },
+    { "type": "fix", "section": "Bug Fixes" },
+    { "type": "perf", "section": "Performance Improvements" },
+    { "type": "revert", "section": "Reverts" },
+    { "type": "docs", "section": "Documentation" },
+    { "type": "refactor", "section": "Code Refactoring" },
+    { "type": "style", "section": "Styles", "hidden": true },
+    { "type": "chore", "section": "Miscellaneous Chores", "hidden": true },
+    { "type": "test", "section": "Tests", "hidden": true },
+    { "type": "build", "section": "Build System", "hidden": true },
+    { "type": "ci", "section": "Continuous Integration", "hidden": true }
+  ]
+}

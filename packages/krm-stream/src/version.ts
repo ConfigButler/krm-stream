@@ -16,9 +16,13 @@
 // from package.json, and if PROTOCOL_VERSION drifts from the Go constant that DEFINES it (the gateway
 // publishes it into conformance/gen/protocol.json, and the suite reads it back). Neither half of this
 // repo can bump the protocol alone.
+//
+// VERSION is written by release-please, which finds it by the annotation on the line itself (see
+// release-please-config.json). Do not edit it by hand: the release PR bumps package.json and this
+// line together, and version.test.ts fails if they ever disagree.
 
 /** The npm package version of this build. Assert it against the copy you vendored. */
-export const VERSION = "0.0.0";
+export const VERSION = "0.0.0"; // x-release-please-version
 
 /** The wire protocol this build speaks (spec/v1.md). The gateway sends it as `X-KRM-Stream-Protocol`. */
 export const PROTOCOL_VERSION = 1;
