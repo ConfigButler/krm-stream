@@ -31,8 +31,10 @@ type Fixture struct {
 	Events []FixtureEvent `json:"events"`
 	// Client is the client suite's business; the gateway ignores it.
 	Client json.RawMessage `json:"client"`
-	// GatewayRejects are saves that must be refused before they reach the API server.
-	GatewayRejects []Reject `json:"gatewayRejects"`
+
+	// There was a GatewayRejects field here. It is gone, with the fixture block it parsed: krm-stream
+	// has NO WRITE PATH (spec §3), so "saves the gateway must refuse" described a thing the gateway
+	// cannot do. It was parsed and never read — a struct tag standing in for an implementation.
 }
 
 // WatchOp is one step of the scripted upstream.
@@ -72,14 +74,6 @@ type FixtureEvent struct {
 	Identity      *Identity `json:"identity"`
 	Code          ErrorCode `json:"code"`
 	Terminal      bool      `json:"terminal"`
-}
-
-// Reject is a save the gateway must refuse — e.g. one touching a redacted path. The client
-// is not the security boundary; a hostile client is just a client.
-type Reject struct {
-	Patch   map[string]any `json:"patch"`
-	Code    ErrorCode      `json:"code"`
-	Because string         `json:"because"`
 }
 
 // Suite reports whether this fixture is one the given suite must run.

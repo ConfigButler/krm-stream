@@ -35,6 +35,11 @@ store.setValue(uid, ["data", "log-level"], "debug");
 await save(store.patch(uid));               // a merge patch of only what you changed
 ```
 
+`save` is **yours**. krm-stream builds the patch; it does not send it. The write goes through the
+Kubernetes API from your own server, as it always did — this library is a read path (spec §3), and
+your save endpoint keeps the one duty a projection creates: **refuse a patch touching a redacted
+path**, because a mask written back would overwrite the real Secret.
+
 Watch `status` reconcile in real time. Edit `spec` with a real three-way merge. Real RBAC, real
 attribution — the browser sees exactly what the API server sees, and never more.
 
@@ -51,24 +56,27 @@ flowchart LR
         Store -- "subscribe() → re-render<br/>status · dirty · conflicts · flash" --> UI
     end
 
-    subgraph gw["⚙️ Gateway — your Go server"]
-        Loop["stream loop<br/><i>absorbs every watch mechanic</i>"]
+    subgraph gw["⚙️ Your Go server"]
+        Loop["krm-stream gateway<br/><i>stream loop — absorbs every watch mechanic</i>"]
         Authz["Authorizer<br/><i>may this principal see this scope?</i>"]
         Client["ClientFor(target, principal)<br/><i>a client acting AS them</i>"]
         Proj["projection<br/><i>removes managedFields · masks Secrets</i>"]
+        Save["<b>your</b> save handler<br/><i>krm-stream has no write path</i><br/>MUST refuse a redacted path"]
     end
 
     K8S[("Kubernetes<br/>API server")]
 
-    Store <-. "SSE · text/event-stream<br/><b>reset · added · modified · deleted · synced · error</b>" .-> Loop
-    UI -- "PATCH · merge-patch+json<br/><i>only what you changed</i>" --> Loop
+    Store <-. "SSE · text/event-stream — the READ path<br/><b>reset · added · modified · deleted · synced · error</b>" .-> Loop
+    UI -- "patch() · merge-patch+json<br/><i>only what you changed</i>" --> Save
     Loop --> Authz & Proj
     Loop <--> Client
     Client <-- "watch (streaming list)<br/>ADDED · MODIFIED · DELETED · BOOKMARK · 410 Gone" --> K8S
+    Save -- "PATCH — an ordinary Kubernetes write" --> K8S
 
     style Store fill:#2563eb,color:#fff
     style Loop fill:#2563eb,color:#fff
     style K8S fill:#326ce5,color:#fff
+    style Save fill:#fff,color:#111,stroke:#dc2626,stroke-width:2px,stroke-dasharray: 5 5
 ```
 
 The two boxes in blue are what this repo ships. The **wire between them** is
@@ -126,7 +134,7 @@ sides run.
 
 | | what | where |
 |---|---|---|
-| **Gateway** (Go) — *the library* | `go get github.com/ConfigButler/krm-stream/gateway`. Produces the stream from a Kubernetes watch; absorbs every watch mechanic; applies saves as a guarded patch (it will refuse one that touches a redacted path). Your app injects the two things it must never assume: **who the caller is**, and **what they may see** | [`gateway/`](gateway/) |
+| **Gateway** (Go) — *the library* | `go get github.com/ConfigButler/krm-stream/gateway`. Produces the stream from a Kubernetes watch and absorbs every watch mechanic. **A read path: it never writes.** Your app injects the two things it must never assume: **who the caller is**, and **what they may see** | [`gateway/`](gateway/) |
 | **Protocol** — *the contract* | the wire: `reset` · `added` · `modified` · `deleted` · `synced` · `error`, over SSE. Language-neutral on purpose: a Rust or Python gateway is a legitimate thing to write | [`spec/v1.md`](spec/v1.md) |
 | **Client** (TS/JS) — *the helper* | `npm i krm-stream`. `LiveResourceStore`: three-way merge, derived dirtiness, conflicts, merge-patch builder. Optional — any conforming consumer works — but you would only reimplement it | [`packages/krm-stream/`](packages/krm-stream/) |
 

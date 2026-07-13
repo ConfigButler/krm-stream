@@ -58,7 +58,6 @@ export interface Fixture {
   events: FixtureEvent[];
   client?: { edits?: FixtureEdit[]; expect?: FixtureExpect };
   checkpoints?: FixtureCheckpoint[];
-  gatewayRejects?: unknown[];
 }
 
 const bodies: Record<string, KRMObject> = JSON.parse(readFileSync(new URL("gen/bodies.json", CONFORMANCE), "utf8"));

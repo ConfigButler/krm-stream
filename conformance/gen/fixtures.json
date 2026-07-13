@@ -1061,18 +1061,7 @@
           }
         }
       }
-    },
-    "gatewayRejects": [
-      {
-        "patch": {
-          "data": {
-            "token": "hunter2"
-          }
-        },
-        "code": "FORBIDDEN",
-        "because": "/data/token is redacted under krm-editor/v1"
-      }
-    ]
+    }
   },
   {
     "id": "snapshot-then-deltas",
