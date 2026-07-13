@@ -81,11 +81,12 @@ Everything ugly about a Kubernetes watch stops at the gateway. The browser never
 ```mermaid
 sequenceDiagram
     autonumber
-    participant K as Kubernetes
-    participant G as Gateway
     participant B as Browser (store)
+    participant G as Gateway
+    participant K as Kubernetes
 
-    Note over G,B: a snapshot cycle — the SAME framing for a collection and a single named object
+    Note over B,G: a snapshot cycle — the SAME framing for a collection and a single named object
+    B->>G: GET /…/stream   (EventSource · same-origin · your session cookie)
     G->>K: watch(sendInitialEvents, allowWatchBookmarks)
     G-->>B: reset          (mark every known uid "unseen" — prune NOTHING yet)
     K-->>G: ADDED ×N       (synthetic: the objects in scope)
@@ -93,14 +94,14 @@ sequenceDiagram
     K-->>G: BOOKMARK (initial-events-end)
     G-->>B: synced         (NOW prune whatever is still unseen)
 
-    Note over G,B: …then live deltas
+    Note over B,G: …then live deltas
     K-->>G: MODIFIED (status churn — the dominant traffic)
     G-->>B: modified       (replace the object · flash status · never touch the draft)
     K-->>G: BOOKMARK       (routine — absorbed, never forwarded)
     K-->>G: 410 Gone       (continuity lost — the SSE connection is FINE)
     G-->>B: error RESYNC_REQUIRED (non-terminal)
     G-->>B: reset … added … synced
-    Note right of B: converges. No ghosts.<br/>An object deleted while you were away<br/>is pruned at `synced`, and nowhere else.
+    Note left of B: converges. No ghosts.<br/>An object deleted while you were away<br/>is pruned at `synced`, and nowhere else.
 ```
 
 ## Why this exists

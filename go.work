@@ -1,0 +1,23 @@
+// Local development only. This file is what makes `gateway/kube` compile against the gateway core in
+// YOUR checkout, without a `replace` directive.
+//
+// The distinction is the whole point, and it cost us a blocker: a `replace` in gateway/kube/go.mod
+// applies ONLY to the main module. Inside this repo it works, and every test passes — but a consumer
+// running `go get github.com/ConfigButler/krm-stream/gateway/kube` IGNORES it, resolves the core
+// module at the literal version in the require line, and fails:
+//
+//	reading github.com/ConfigButler/krm-stream/gateway/go.mod
+//	  at revision gateway/v0.0.0: unknown revision gateway/v0.0.0
+//
+// Nothing inside this repository could catch that, because the replace hid it from every test we
+// have. So the require line now names a REAL, resolvable version of the core module, and this
+// go.work — which consumers never see — is what points it back at the working tree for us.
+//
+// The check that this stays true lives in CI (`a stranger can go get this`), and it deliberately runs
+// from a clean module OUTSIDE this workspace, because that is the only place the bug is visible.
+go 1.26.0
+
+use (
+	./gateway
+	./gateway/kube
+)

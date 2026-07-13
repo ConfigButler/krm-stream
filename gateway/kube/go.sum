@@ -1,3 +1,5 @@
+github.com/ConfigButler/krm-stream/gateway v0.0.0-20260713074452-d622f2413d1e h1:6GAO7H/pHInjiaplarLxMb/J7gVwrx7QegY5IeqCxHU=
+github.com/ConfigButler/krm-stream/gateway v0.0.0-20260713074452-d622f2413d1e/go.mod h1:BMdq7j79aNXEzaBept4sdM7cmCSWDm2hcK5G2IUJRjw=
 github.com/creack/pty v1.1.9/go.mod h1:oKZEueFk5CKHvIhNR5MUki03XCEU+Q6VDXinZuGJ33E=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=

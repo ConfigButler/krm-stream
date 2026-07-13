@@ -71,6 +71,67 @@ jobs:
           working-directory: gateway/kube
           args: --build-tags e2e
 
+  # Can a STRANGER actually use this? Nothing else in this repo can answer that.
+  #
+  # gateway/kube once carried `replace ... => ../`, and a replace applies ONLY to the main module. So
+  # every test in this repo passed while `go get github.com/ConfigButler/krm-stream/gateway/kube` was
+  # broken for literally everyone else ("unknown revision gateway/v0.0.0"). The bug was invisible from
+  # the inside BY CONSTRUCTION — which is why this job builds from a clean module in a temp directory,
+  # outside the workspace, resolving over the network exactly as an adopter would.
+  #
+  # It also guards the other half of the promise: the CORE module must stay dependency-free. `go get
+  # .../gateway` pulling in client-go would make the protocol cost what the adapter costs.
+  consumable:
+    name: a stranger can `go get` this
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.26"
+
+      - name: the core module has NO dependencies at all
+        run: |
+          set -euo pipefail
+          if grep -qE '^[[:space:]]*require' gateway/go.mod; then
+            echo '::error file=gateway/go.mod::the core module grew a dependency. go get of .../krm-stream/gateway is advertised as zero-dependency: it is the protocol, and an adopter must not inherit client-go transitively just to read a conforming event.'
+            grep -nE '^[[:space:]]*require' -A5 gateway/go.mod
+            exit 1
+          fi
+          echo "gateway/go.mod has no require block. The protocol still costs nothing."
+
+      # No checkout is used below this line, on purpose: the module must resolve from the network.
+      - name: go get the ADAPTER from a clean module, outside this workspace
+        env:
+          # direct, not the proxy: a commit pushed seconds ago may not be in proxy.golang.org yet, and
+          # a cache miss here would look like a pass.
+          GOPROXY: direct
+          GOFLAGS: -mod=mod
+        run: |
+          set -euo pipefail
+          sha="${{ github.event.pull_request.head.sha || github.sha }}"
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          go mod init example.com/stranger
+          cat > main.go <<'GO'
+          package main
+
+          import (
+          	"k8s.io/client-go/dynamic"
+
+          	"github.com/ConfigButler/krm-stream/gateway"
+          	"github.com/ConfigButler/krm-stream/gateway/kube"
+          )
+
+          // The one line an adopter writes: the adapter must satisfy the core's seam.
+          var _ gateway.Backend = kube.NewBackend(dynamic.Interface(nil))
+
+          func main() {}
+          GO
+          go get "github.com/ConfigButler/krm-stream/gateway/kube@${sha}"
+          go build ./...
+          echo "a stranger can go get and build the Kubernetes adapter."
+
   client:
     name: client (typescript)
     runs-on: ubuntu-latest

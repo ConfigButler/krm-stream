@@ -21,3 +21,6 @@ playwright-report/
 # A sibling repo checked out for reference (gitops-reverser: its e2e stands up the wardle
 # sample-apiserver, which is where the aggregated-API fixtures came from). It is NOT ours.
 external/
+
+# The workspace is committed (it is how gateway/kube builds locally); its sum file is not.
+go.work.sum
