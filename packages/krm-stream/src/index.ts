@@ -38,3 +38,4 @@ export type {
 } from "./types.ts";
 export type { ScopeQuery } from "./url.ts";
 export { resourceStreamURL } from "./url.ts";
+export { PROTOCOL_VERSION, VERSION } from "./version.ts";

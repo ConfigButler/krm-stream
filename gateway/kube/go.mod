@@ -10,6 +10,16 @@ module github.com/ConfigButler/krm-stream/gateway/kube
 
 go 1.26.0
 
+// The k8s.io/* floor is DELIBERATELY the lowest minor we support (1.36 == v0.36.x), and it stays
+// there. It is not a version to keep current.
+//
+// Go's minimal version selection means this line is a FLOOR, not a pin: a consumer already on
+// v0.36.2 keeps v0.36.2, and nothing here drags them backwards. But the reverse is not symmetric —
+// if we chased patch releases, every adopter would be forced up to whatever we happened to build
+// against last, and an adapter has no business dictating which Kubernetes libraries its host runs.
+// So we sit on the floor and let the consumer pick the ceiling.
+//
+// Raise these only to raise the SUPPORTED MINOR, and say why in the commit.
 require (
 	k8s.io/api v0.36.0
 	k8s.io/apimachinery v0.36.0

@@ -26,6 +26,31 @@ import (
 
 var update = flag.Bool("update", false, "rewrite the golden SSE transcripts in conformance/gen/sse/")
 
+// The protocol version, published by the side that DEFINES it.
+//
+// The client ships a PROTOCOL_VERSION too, and a vendored copy of the client is exactly the thing
+// that goes stale against the gateway it was built for — silently, because both halves keep working
+// right up until the wire changes. So the number is written here, by the Go const itself, into a file
+// the TypeScript suite reads back and asserts on. Neither side can bump it alone.
+func TestProtocolVersionIsPublished(t *testing.T) {
+	path := filepath.Join("..", "conformance", "gen", "protocol.json")
+	want := fmt.Appendf(nil, "{\n  \"protocolVersion\": %d\n}\n", ProtocolVersion)
+
+	if *update {
+		if err := os.WriteFile(path, want, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return
+	}
+	got, err := os.ReadFile(path) //nolint:gosec // a fixed path in our own repo
+	if err != nil {
+		t.Fatalf("read %s: %v (run `task fixtures`)", path, err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Errorf("conformance/gen/protocol.json is stale — run `task fixtures`:\ngot:  %s\nwant: %s", got, want)
+	}
+}
+
 func TestSSEGoldens(t *testing.T) {
 	c := corpus(t)
 	dir := filepath.Join("..", "conformance", "gen", "sse")
