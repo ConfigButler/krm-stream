@@ -64,17 +64,23 @@ flowchart LR
     end
 
     subgraph gw["⚙️ Your Go server"]
+        Principal["Principal(r)<br/><i>cookie → session → this user + their token</i>"]
         Loop["krm-stream gateway<br/><i>stream loop — absorbs every watch mechanic</i>"]
-        Authz["Authorizer<br/><i>may this principal see this scope?</i>"]
+        Authz["Authorizer<br/><i>may this principal see this scope?</i><br/>re-checked EVERY cycle"]
         Client["ClientFor(target, principal)<br/><i>a client acting AS them</i>"]
         Proj["projection<br/><i>removes managedFields · masks Secrets</i>"]
         Save["<b>your</b> save handler<br/><i>krm-stream has no write path</i><br/>MUST refuse a redacted path"]
     end
 
+    Dex[/"Dex — OIDC"/]
     K8S[("Kubernetes<br/>API server")]
 
-    Store <-. "SSE · text/event-stream — the READ path<br/><b>reset · added · modified · deleted · synced · error</b>" .-> Loop
+    UI -- "① log in" --> Dex
+    Dex -- "② your server custodies the token<br/><i>krm-stream never sees it</i>" --> Principal
+
+    Store <-. "SSE · text/event-stream — the READ path<br/>③ carries ONLY a same-origin HttpOnly cookie<br/><i>(EventSource cannot send an Authorization header)</i><br/><b>reset · added · modified · deleted · synced · error</b>" .-> Loop
     UI -- "patch() · merge-patch+json<br/><i>only what you changed</i>" --> Save
+    Principal --> Loop
     Loop --> Authz & Proj
     Loop <--> Client
     Client <-- "watch (streaming list)<br/>ADDED · MODIFIED · DELETED · BOOKMARK · 410 Gone" --> K8S
@@ -83,12 +89,30 @@ flowchart LR
     style Store fill:#2563eb,color:#fff
     style Loop fill:#2563eb,color:#fff
     style K8S fill:#326ce5,color:#fff
+    style Dex fill:#fff,color:#111,stroke:#6b7280,stroke-width:2px
     style Save fill:#fff,color:#111,stroke:#dc2626,stroke-width:2px,stroke-dasharray: 5 5
 ```
 
 The two boxes in blue are what this repo ships. The **wire between them** is
 [a written contract](spec/v1.md) with [a conformance suite both sides run](conformance/) — which is why
 they cannot drift, and why a Rust or Python gateway is a legitimate thing for someone else to write.
+
+## Auth, in one paragraph
+
+**krm-stream never holds a credential, and it is not an authorization boundary. Kubernetes is.**
+
+One physical constraint decides the shape of it: a browser's `EventSource` **cannot send an
+`Authorization` header**. So the browser logs in to *your* server (OIDC, via Dex), your server
+custodies the token, and the SSE request carries nothing but a **same-origin `HttpOnly` cookie** —
+nothing an XSS can read. Your `ClientFor` then opens the upstream watch **as that user**, so their own
+RBAC enforces: if they may not watch Secrets, the API server says no, and no bug in this library can
+change that. The `Authorizer` seam is fail-fast defence in depth — it denies *before* a watch opens,
+so an object's existence never leaks to someone who may not see it — and it is re-checked on **every
+snapshot cycle**, because a dashboard tab outlives an OIDC token and a revoked user's stream must
+actually stop.
+
+**→ [docs/auth.md](docs/auth.md)** for the flow, the bearer-vs-impersonation trade, what happens when
+a token expires under a long stream, and what you give up the moment you share a watch.
 
 Everything ugly about a Kubernetes watch stops at the gateway. The browser never hears the words
 `BOOKMARK`, `410 Gone`, `resourceVersion` or *relist*:

@@ -93,17 +93,6 @@ func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, 
 		projection = ProjectionEditor
 	}
 
-	// Denial comes FIRST, before any watch is opened. A gateway that opens the watch and filters
-	// afterwards has already leaked the object's existence — and, if it logs, its contents.
-	if err := g.Auth.Authorize(ctx, principal, scope); err != nil {
-		return emitTerminal(ctx, sink, err)
-	}
-
-	backend, err := g.Clients(scope.Target, principal)
-	if err != nil {
-		return emitTerminal(ctx, sink, err)
-	}
-
 	for cycles := 0; ; cycles++ {
 		if cycles > 0 {
 			// A new cycle on a live connection. Say so first: the consumer is about to be told a
@@ -115,7 +104,31 @@ func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, 
 			}
 		}
 
-		err := g.cycle(ctx, backend, scope, projection, sink)
+		// Authorization is re-checked on EVERY cycle, not once at open — and that is a fix, not a
+		// flourish. A stream lives as long as a dashboard tab: hours. The first version asked these
+		// two questions once and then ran forever on the answers, which meant a user whose access was
+		// REVOKED kept receiving objects from a watch that had been authorized long ago, and a
+		// credential captured at open was the credential used for the rest of the day.
+		//
+		// A snapshot cycle is the natural checkpoint: it is where continuity is re-established
+		// anyway, so it is where entitlement should be too. Denial here is TERMINAL — a browser's
+		// EventSource reconnects on its own, so a non-terminal refusal would have a revoked user
+		// hammering a forbidden scope forever.
+		//
+		// What this does NOT do, and docs/auth.md says so plainly: a perfectly quiet stream may not
+		// cycle for a long time, so revocation is noticed at the next cycle rather than instantly.
+		// The credential problem is solved properly on the other side of the seam — ClientFor is
+		// re-invoked here too, so a host that returns a client backed by a refreshing token source
+		// (the Dex route) never hands us a dead token in the first place.
+		if err := g.Auth.Authorize(ctx, principal, scope); err != nil {
+			return emitTerminal(ctx, sink, err)
+		}
+		backend, err := g.Clients(scope.Target, principal)
+		if err != nil {
+			return emitTerminal(ctx, sink, err)
+		}
+
+		err = g.cycle(ctx, backend, scope, projection, sink)
 		switch {
 		case err == nil:
 			// A cycle only ends by error or cancellation; nil would be a bug in the loop below.
