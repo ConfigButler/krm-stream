@@ -1,5 +1,22 @@
 # Changelog
 
+## [0.2.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.1.1...@configbutler/krm-stream-v0.2.0) (2026-07-14)
+
+
+### ⚠ BREAKING CHANGES
+
+* applyStreamEvent returns StreamChange rather than Path[], and onChange receives a StreamChange rather than Path[]. Read `.flashed` for the previous value.
+
+### Features
+
+* **client:** publish a single-file browser bundle as ./bundle ([#8](https://github.com/ConfigButler/krm-stream/issues/8)) ([5bbcdae](https://github.com/ConfigButler/krm-stream/commit/5bbcdae8f24be496ada9021ec86565fdd1f65816))
+* export gateway.Project, and return the whole StreamChange from applyStreamEvent ([#10](https://github.com/ConfigButler/krm-stream/issues/10)) ([915abff](https://github.com/ConfigButler/krm-stream/commit/915abff871d5553c69dd8792c4ab6277dbe50cce))
+
+
+### Documentation
+
+* add alternatives, glossary, and why-a-gateway ([#6](https://github.com/ConfigButler/krm-stream/issues/6)) ([d5d686c](https://github.com/ConfigButler/krm-stream/commit/d5d686cd135e000c970517e09b7ed1653d29abf0))
+
 ## [0.1.1](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.1.0...@configbutler/krm-stream-v0.1.1) (2026-07-14)
 
 
