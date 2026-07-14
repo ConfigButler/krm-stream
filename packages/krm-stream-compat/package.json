@@ -1,6 +1,6 @@
 {
   "name": "krm-stream",
-  "version": "0.0.0",
+  "version": "1.0.0",
   "description": "Compatibility forwarder for @configbutler/krm-stream.",
   "keywords": [
     "kubernetes",

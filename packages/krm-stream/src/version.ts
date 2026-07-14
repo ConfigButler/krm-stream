@@ -22,7 +22,7 @@
 // line together, and version.test.ts fails if they ever disagree.
 
 /** The npm package version of this build. Assert it against the copy you vendored. */
-export const VERSION = "0.0.0"; // x-release-please-version
+export const VERSION = "1.0.0"; // x-release-please-version
 
 /** The wire protocol this build speaks (spec/v1.md). The gateway sends it as `X-KRM-Stream-Protocol`. */
 export const PROTOCOL_VERSION = 1;
