@@ -150,9 +150,39 @@ type sharedScope struct {
 	subs   map[*subscriber]struct{}
 }
 
-// subscriber is one consumer's view of the shared watch: a bounded queue of events.
+// subscriber is one consumer's view of the shared watch: a SNAPSHOT, then a bounded queue of live
+// events.
+//
+// # Why two queues, and not one
+//
+// The first version put both through the bounded channel, and it was broken in a way that only a
+// realistic scope reveals: a namespace with more objects than the queue is deep (300 ConfigMaps;
+// sharedQueueDepth is 256) could not be served AT ALL. subscribe() fills the queue from the warm
+// cache while nobody is draining it yet, the 257th object overflows, the subscriber is told it "fell
+// behind" — and the stream loop's recovery for that is to resnapshot, which does the same thing
+// again. **An infinite resync loop, on a small namespace.** Both of my own tests used two objects.
+//
+// The two things were never the same, and conflating them was the bug:
+//
+//   - the SNAPSHOT is the consumer's STARTING STATE. It is finite, known in advance, and dropping any
+//     of it is not backpressure — it is a wrong answer, and the recovery for a wrong answer is to send
+//     it again, forever. It gets an unbounded slice, drained first.
+//   - LIVE EVENTS are open-ended. A consumer that cannot keep up with them genuinely is falling
+//     behind, and resnapshotting it from the warm cache is exactly right. They keep the bounded
+//     channel, and the backpressure it exists for.
 type subscriber struct {
-	ch chan WatchEvent
+	// pending is the snapshot: added* and the boundary bookmark. Guarded by sharedScope.mu, and
+	// drained by Next() before a single live event is read.
+	pending []WatchEvent
+	// ready wakes a reader that is already blocked on `ch` when the snapshot lands in `pending`.
+	//
+	// It is not decoration. The snapshot no longer travels through `ch`, so a consumer that called
+	// Next() before the upstream finished its first cycle parks on a channel that will never carry
+	// the thing it is waiting for — and waits forever. (It did. Every test that subscribed before the
+	// boundary bookmark hung for exactly the timeout.) Buffered 1: a missed signal is impossible,
+	// because a reader re-checks `pending` before parking again.
+	ready chan struct{}
+	ch    chan WatchEvent
 	// awaiting is true until this subscriber has been handed its snapshot. Live events are not
 	// delivered to it before then — it will receive the cache instead, which ALREADY contains them.
 	// Forwarding both would deliver an object twice, and the second copy could be older.
@@ -189,7 +219,11 @@ func (s *sharedScope) subscribe() (Watcher, error) {
 		return nil, ErrWatchClosed
 	}
 
-	sub := &subscriber{ch: make(chan WatchEvent, sharedQueueDepth), awaiting: true}
+	sub := &subscriber{
+		ch:       make(chan WatchEvent, sharedQueueDepth),
+		ready:    make(chan struct{}, 1),
+		awaiting: true,
+	}
 	s.subs[sub] = struct{}{}
 
 	// The warm cache, and the entire point of the exercise: if the upstream snapshot is already
@@ -202,17 +236,30 @@ func (s *sharedScope) subscribe() (Watcher, error) {
 	return &sharedWatcher{scope: s, sub: sub}, nil
 }
 
-// deliverSnapshotLocked hands one subscriber the cache as a snapshot, terminated by the boundary
-// bookmark. Called with s.mu held, which is what keeps it atomic with respect to live events: no
-// event can slip between the snapshot and the bookmark.
+// deliverSnapshotLocked hands one subscriber the whole cache as a snapshot, terminated by the
+// boundary bookmark. Called with s.mu held, which is what keeps it atomic with respect to live
+// events: no event can slip between the snapshot and the bookmark.
+//
+// It CANNOT overflow, and that is the point. The snapshot is the consumer's starting state, not a
+// backlog — see the subscriber comment. Its size is the size of the scope, which the operator chose
+// when they allowlisted it; a 5000-object namespace costs a 5000-element slice, once, per joiner.
 func (s *sharedScope) deliverSnapshotLocked(sub *subscriber) {
-	for _, obj := range s.cache {
-		if !sub.offer(WatchEvent{Type: WatchAdded, Object: obj}) {
-			return // overflowed; offer() has already told it to resnapshot
-		}
+	if sub.closed {
+		return
 	}
-	sub.offer(WatchEvent{Type: WatchBookmark, InitialEventsEnd: true})
+	sub.pending = make([]WatchEvent, 0, len(s.cache)+1)
+	for _, obj := range s.cache {
+		sub.pending = append(sub.pending, WatchEvent{Type: WatchAdded, Object: obj})
+	}
+	sub.pending = append(sub.pending, WatchEvent{Type: WatchBookmark, InitialEventsEnd: true})
 	sub.awaiting = false
+
+	// Wake a reader that is already parked on `ch` waiting for a snapshot that will never arrive
+	// there. Non-blocking: the buffer holds the one signal that matters.
+	select {
+	case sub.ready <- struct{}{}:
+	default:
+	}
 }
 
 // offer enqueues without blocking. A full queue means this consumer cannot keep up, and the honest
@@ -365,21 +412,45 @@ type sharedWatcher struct {
 	once  sync.Once
 }
 
+// nextPending pops one snapshot event, if any remain. `pending` is written under the scope's lock, so
+// it is read under it too — the critical section is a slice index, and it is not held across a block.
+func (w *sharedWatcher) nextPending() (WatchEvent, bool) {
+	w.scope.mu.Lock()
+	defer w.scope.mu.Unlock()
+
+	if len(w.sub.pending) == 0 {
+		return WatchEvent{}, false
+	}
+	ev := w.sub.pending[0]
+	w.sub.pending = w.sub.pending[1:]
+	return ev, true
+}
+
 func (w *sharedWatcher) Next(ctx context.Context) (WatchEvent, error) {
-	select {
-	case <-ctx.Done():
-		return WatchEvent{}, ctx.Err()
-	case ev, ok := <-w.sub.ch:
-		if !ok {
-			// Drained, and closed. `reason` was written before the close, so observing the close
-			// guarantees we see it — and it is what turns "your stream restarted" into "your stream
-			// restarted BECAUSE you fell behind", which is the only version anyone can act on.
-			if w.sub.reason != nil {
-				return WatchEvent{}, w.sub.reason
-			}
-			return WatchEvent{}, ErrWatchClosed
+	for {
+		// The snapshot first, to exhaustion, before a single live event. It is the consumer's starting
+		// state, and it is not allowed to be dropped, truncated or interleaved.
+		if ev, ok := w.nextPending(); ok {
+			return ev, nil
 		}
-		return ev, nil
+
+		select {
+		case <-ctx.Done():
+			return WatchEvent{}, ctx.Err()
+		case <-w.sub.ready:
+			continue // the snapshot landed in `pending`; go read it
+		case ev, ok := <-w.sub.ch:
+			if !ok {
+				// Drained, and closed. `reason` was written before the close, so observing the close
+				// guarantees we see it — and it is what turns "your stream restarted" into "your stream
+				// restarted BECAUSE you fell behind", which is the only version anyone can act on.
+				if w.sub.reason != nil {
+					return WatchEvent{}, w.sub.reason
+				}
+				return WatchEvent{}, ErrWatchClosed
+			}
+			return ev, nil
+		}
 	}
 }
 
