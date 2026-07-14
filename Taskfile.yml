@@ -201,8 +201,30 @@ tasks:
 
   # -------------------------------------------------------------------- lint --
   lint:
-    desc: "Vet + lint both languages."
-    deps: [lint-gateway, lint-kube, lint-client]
+    desc: "Vet + lint everything: both languages, the workflows, and the Dockerfile."
+    deps: [lint-gateway, lint-kube, lint-client, lint-actions, lint-dockerfiles]
+
+  # The two languages nobody counts as languages — and the two files that were, until now, the only
+  # ones in this repo with no linter pointed at them. That is not a coincidence: a CI workflow that
+  # packed a bundle it had never built is exactly the class of bug a reviewer's eye slides over and a
+  # linter does not.
+  lint-actions:
+    desc: "Lint the GitHub Actions workflows (actionlint: expressions, needs/runs-on, shellcheck on every run: block)."
+    sources:
+      - .github/workflows/*.yml
+      - .github/workflows/*.yaml
+    cmds:
+      # No path argument: actionlint discovers every workflow under .github/workflows/ on its own, so
+      # a new one is linted the day it lands rather than the day someone remembers to list it.
+      - actionlint
+
+  lint-dockerfiles:
+    desc: "Lint the devcontainer Dockerfile (hadolint)."
+    sources:
+      - .devcontainer/Dockerfile
+      - .hadolint.yaml
+    cmds:
+      - hadolint .devcontainer/Dockerfile
 
   lint-gateway:
     dir: gateway

@@ -1,0 +1,71 @@
+# CodeQL: static analysis for the two languages this repo actually ships.
+#
+# This is the SAST rung, and Scorecard scores its absence at 0 — but the reason to have it is not the
+# score. The gateway parses untrusted input from a browser (a scope query, a merge patch) and hands
+# back objects it has projected; the client parses a stream and merges it into a document a user is
+# editing. Those are exactly the shapes where a taint-tracking pass earns its runtime.
+#
+# `go` covers gateway/ and gateway/kube/ (two modules, one build). `javascript-typescript` covers the
+# client and the example. There is nothing else here to analyse.
+name: codeql
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    # Weekly, offset from the scorecard run so a bad Monday morning is not two jobs deep at once.
+    # The schedule matters more than it looks: it re-runs the CURRENT queries against UNCHANGED code,
+    # which is how a newly-published query finds an old bug that no push would have re-examined.
+    - cron: "40 4 * * 2"
+
+permissions: read-all
+
+jobs:
+  analyze:
+    name: analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      security-events: write # the whole point: write the findings to code scanning
+      packages: read
+      contents: read
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: go
+            build-mode: autobuild
+          - language: javascript-typescript
+            build-mode: none # interpreted; CodeQL reads the source directly
+
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # go.work ties gateway/ and gateway/kube/ together, and autobuild honours it — so this analyses
+      # BOTH modules. gateway/kube is a separate module precisely so adopters do not have to take
+      # client-go; that separation must not also make it the one module nobody scans.
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        if: matrix.language == 'go'
+        with:
+          go-version-file: gateway/go.mod
+          cache: false
+
+      - name: initialize codeql
+        uses: github/codeql-action/init@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended over the default suite: the default is tuned for a low false-positive
+          # rate on any codebase. This one has a disclosure boundary in it, and a false positive costs
+          # a few minutes while a missed leak costs a Secret.
+          queries: security-extended
+
+      - name: analyze
+        uses: github/codeql-action/analyze@99df26d4f13ea111d4ec1a7dddef6063f76b97e9 # v4.37.0
+        with:
+          category: /language:${{ matrix.language }}

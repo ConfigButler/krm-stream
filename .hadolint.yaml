@@ -1,0 +1,20 @@
+# hadolint configuration — https://github.com/hadolint/hadolint#configure
+#
+# Lint locally with `task lint-dockerfiles`; it is part of `task lint`.
+ignored:
+  # DL3008 — "pin versions in apt-get install".
+  #
+  # Deliberately not done, and not an oversight. .devcontainer/Dockerfile is a TOOLING image: it is
+  # not shipped, not published, and nothing a consumer of this library ever runs. What it installs
+  # from Debian (git, curl, jq, gh, docker-cli) comes from distributions we already trust to be the
+  # base image, and pinning those to exact Debian versions buys a rebuild that breaks the first time
+  # a security update lands upstream — while changing nothing about the artifacts this repo actually
+  # publishes.
+  #
+  # The versions that DO matter are pinned, in the ENV block: golangci-lint, task, yq, kubectl, k3d,
+  # node, and the base image itself by digest. That is the line: pin the tools whose behaviour the
+  # build depends on, not the distro packages underneath them.
+  - DL3008
+
+# Warnings and errors fail; info and style suggestions surface without blocking.
+failure-threshold: warning

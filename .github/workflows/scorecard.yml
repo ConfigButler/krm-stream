@@ -6,6 +6,17 @@
 # This is not decoration. A library whose whole pitch is "import this into your browser and trust what
 # it tells you about your cluster" is asking for a lot of trust, and it should be able to show its
 # working.
+#
+# # There is deliberately NO repo_token here, and that is the correct setup
+#
+# scorecard-action's docs offer a PAT (`repo_token`) as an option, and it is the one thing people
+# reflexively add. It is needed for exactly one reason: reading CLASSIC branch protection. This repo
+# protects `main` with a repository RULESET instead, which the default GITHUB_TOKEN can read — so the
+# Branch-Protection check scores without a PAT.
+#
+# That is not a shortcut, it is the better posture. A classic PAT with repo scope is a long-lived
+# credential that can write to the repository, stored as a secret, in a workflow whose entire purpose
+# is to tell you your supply chain is sound. Not creating it is worth more than the check it buys.
 name: scorecard
 
 on:

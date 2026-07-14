@@ -22,6 +22,43 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The two languages nobody counts as languages.
+  #
+  # Half this repo's supply-chain surface IS a workflow YAML and a Dockerfile, and until this job
+  # existed they were the only files here with no linter pointed at them. That is not a coincidence:
+  # the bug that packed a bundle it had never built lived in a workflow, and it was invisible to every
+  # Go and TypeScript check in this pipeline. actionlint also runs shellcheck over every `run:` block,
+  # which is where the `tar | grep -q` / pipefail class of bug hides.
+  hygiene:
+    name: workflows and Dockerfile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      # Versions come from the devcontainer's ENV block — ONE definition, so CI and a developer's
+      # shell cannot lint with different rules and disagree about whether the tree is clean. A second
+      # hand-copied version number here is exactly the drift this whole PR is about.
+      - name: install actionlint and hadolint (versions from .devcontainer/Dockerfile)
+        run: |
+          set -euo pipefail
+          actionlint_version="$(grep -oP 'ACTIONLINT_VERSION=\K[0-9.]+' .devcontainer/Dockerfile)"
+          hadolint_version="$(grep -oP 'HADOLINT_VERSION=\K[0-9.]+' .devcontainer/Dockerfile)"
+          echo "actionlint ${actionlint_version}, hadolint ${hadolint_version}"
+          curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${actionlint_version}/actionlint_${actionlint_version}_linux_amd64.tar.gz" \
+            | sudo tar -xzO actionlint > /tmp/actionlint
+          sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
+          sudo curl -fsSL -o /usr/local/bin/hadolint \
+            "https://github.com/hadolint/hadolint/releases/download/v${hadolint_version}/hadolint-Linux-x86_64"
+          sudo chmod +x /usr/local/bin/hadolint
+
+      # No path argument: actionlint discovers every workflow itself, so a new one is checked the day
+      # it lands rather than the day someone remembers to add it to a list.
+      - run: actionlint
+
+      - run: hadolint .devcontainer/Dockerfile
+
   # The point of the monorepo: one contract, and a change to it must be seen by BOTH
   # implementations in the same commit. Both jobs read conformance/gen/, which is built
   # from conformance/{bodies,fixtures}/*.yaml — so a protocol change that breaks either
