@@ -7,7 +7,7 @@ why: >
   consumer state machine, both scope types.
 suites: [gateway, client]
 scope: { target: demo, version: v1, resource: configmaps, namespace: app, name: app-config }
-projection: krm-editor/v1
+projection: krm-full/v1
 
 watch:
   - { op: list, bodies: [] }

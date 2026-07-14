@@ -17,7 +17,7 @@ import { clone, deepEqual, isPlainObject } from "./deep.ts";
 import { type MergeState, type Regions, reconcile } from "./merge.ts";
 import { get, has, isPrefix, parsePointer, pathKey, removeAt, setAt } from "./path.ts";
 import { defaultPolicy } from "./policy.ts";
-import type { Change, Conflict, EditabilityPolicy, KRMObject, Path } from "./types.ts";
+import type { Change, Conflict, EditabilityPolicy, KRMObject, Path, Redaction } from "./types.ts";
 
 /** What one server event did, for a host that wants to animate it. `flashed` is an OUTPUT, not
  * state: the host highlights those paths and forgets them. */
@@ -33,15 +33,14 @@ export interface ApplyResult {
 }
 
 export interface ApplyOptions {
-  /** RFC 6901 JSON Pointers (`"/data/token"`, as they arrive on the wire) or segment arrays. The
-   * paths this object's values were masked at: read-only, never dirtiable, never in a patch. */
-  redactedPaths?: (string | Path)[];
+  /** Values the projection withheld. Their paths are read-only, never dirtiable, and never in a patch. */
+  redacted?: (Redaction | { path: Path; rev: number })[];
 }
 
 interface Resource {
   server: KRMObject;
   draft: KRMObject;
-  redacted: Path[];
+  redacted: { path: Path; rev: number }[];
   conflicts: Map<string, Conflict>;
 }
 
@@ -66,7 +65,10 @@ export class LiveResourceStore {
   applyServerEvent(object: KRMObject, opts: ApplyOptions = {}): ApplyResult {
     const id = object.metadata.uid;
     const incoming = clone(object);
-    const redacted = (opts.redactedPaths ?? []).map((p) => (typeof p === "string" ? parsePointer(p) : [...p]));
+    const redacted = (opts.redacted ?? []).map((entry) => ({
+      path: typeof entry.path === "string" ? parsePointer(entry.path) : [...entry.path],
+      rev: entry.rev,
+    }));
 
     this.#seen?.add(id);
 
@@ -80,7 +82,10 @@ export class LiveResourceStore {
     }
 
     const state: MergeState = {
-      regions: this.#regionsFor(incoming, redacted),
+      regions: this.#regionsFor(
+        incoming,
+        redacted.map((r) => r.path),
+      ),
       conflicts: existing.conflicts,
       flashed: [],
     };
@@ -223,7 +228,16 @@ export class LiveResourceStore {
   changes(id: string): Change[] {
     const res = this.#must(id);
     const out: Change[] = [];
-    this.#diff(this.#regionsFor(res.server, res.redacted), [], res.server, res.draft, out);
+    this.#diff(
+      this.#regionsFor(
+        res.server,
+        res.redacted.map((r) => r.path),
+      ),
+      [],
+      res.server,
+      res.draft,
+      out,
+    );
     return out;
   }
 
@@ -244,7 +258,10 @@ export class LiveResourceStore {
    * same reason `status` is: it is not the user's to change — and here, they never even saw it. */
   isEditable(id: string, path: Path): boolean {
     const res = this.#must(id);
-    return this.#regionsFor(res.server, res.redacted).editable(path);
+    return this.#regionsFor(
+      res.server,
+      res.redacted.map((r) => r.path),
+    ).editable(path);
   }
 
   /**
@@ -255,14 +272,14 @@ export class LiveResourceStore {
    * UI showing `token ••••••` reads it from HERE, not from the object:
    *
    * ```ts
-   * for (const path of store.redactedPaths(uid)) row(path, "••••••", { readOnly: true });
+   * for (const { path } of store.redactions(uid)) row(path, "••••••", { readOnly: true });
    * ```
    *
    * That is deliberate. A placeholder sitting in the object is a value a browser can save back — and
    * a merge patch carrying it writes the placeholder over the real Secret.
    */
-  redactedPaths(id: string): Path[] {
-    return this.#must(id).redacted.map((p) => [...p]);
+  redactions(id: string): { path: Path; rev: number }[] {
+    return this.#must(id).redacted.map((r) => ({ path: [...r.path], rev: r.rev }));
   }
 
   /** An RFC 7386 merge patch of the editable changes, or null when there is nothing to save.

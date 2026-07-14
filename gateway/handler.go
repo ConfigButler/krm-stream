@@ -50,9 +50,13 @@ type Options struct {
 	// nothing, so forgetting it fails closed.
 	Scopes ScopePolicy
 
-	// Projection defaults to ProjectionEditor — the safe one. A gateway that defaulted to raw and
+	// Projection defaults to ProjectionFull — the safe one. A gateway that defaulted to raw and
 	// streamed Secret values because someone omitted a line would have a vulnerability, not a bug.
 	Projection Projection
+
+	// Projections authorizes a requested projection for a principal and scope. It is optional only
+	// because Projection supplies a safe static policy for hosts that expose one view.
+	Projections ProjectionPolicy
 
 	// Ordering defaults to OrderingStrict (Kubernetes 1.35+ conformance). See stream.go.
 	Ordering ResourceVersionOrdering
@@ -77,10 +81,11 @@ func Handler(o Options) http.Handler {
 	}
 
 	g := &Gateway{
-		Auth:       o.Authorizer,
-		Clients:    o.Clients,
-		Projection: o.Projection,
-		Ordering:   o.Ordering,
+		Auth:        o.Authorizer,
+		Clients:     o.Clients,
+		Projection:  o.Projection,
+		Projections: o.Projections,
+		Ordering:    o.Ordering,
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -102,12 +107,12 @@ func Handler(o Options) http.Handler {
 			return
 		}
 
-		g.ServeStream(w, r, principal, scope)
+		g.ServeStreamProjection(w, r, principal, scope, Projection(r.URL.Query().Get("projection")))
 	})
 }
 
 // refuse writes a terminal error as a well-formed one-event stream, and closes.
 func refuse(w http.ResponseWriter, serr *StreamError) {
 	WriteSSEHeaders(w)
-	_ = NewSSESink(w).Emit(context.Background(), serr.Event())
+	_ = (&sequenceSink{sink: NewSSESink(w)}).Emit(context.Background(), serr.Event())
 }

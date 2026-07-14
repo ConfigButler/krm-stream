@@ -150,12 +150,12 @@ func cm(uid, rv string, data map[string]any) KRMObject {
 // Emit `synced` for every bookmark and a consumer prunes mid-cycle — which is the one thing pruning
 // is gated on `synced` to prevent.
 func TestBookmarksAreAbsorbedExceptTheSnapshotBoundary(t *testing.T) {
-	got := run(t, ProjectionEditor, AllowAll{}, []WatchEvent{
-		{Type: WatchAdded, Object: cm("u1", "1", nil)},
-		{Type: WatchBookmark},                             // a routine bookmark, mid-snapshot
-		{Type: WatchBookmark, InitialEventsEnd: true},     // THE boundary
-		{Type: WatchBookmark},                             // a routine bookmark, live
-		{Type: WatchModified, Object: cm("u1", "2", nil)}, //
+	got := run(t, ProjectionFull, AllowAll{}, []WatchEvent{
+		{Type: WatchAdded, Object: cm("u1", "1", map[string]any{"v": "one"})},
+		{Type: WatchBookmark},                         // a routine bookmark, mid-snapshot
+		{Type: WatchBookmark, InitialEventsEnd: true}, // THE boundary
+		{Type: WatchBookmark},                         // a routine bookmark, live
+		{Type: WatchModified, Object: cm("u1", "2", map[string]any{"v": "two"})},
 	}, 4)
 
 	if !equalTypes(types(got), EventReset, EventAdded, EventSynced, EventModified) {
@@ -167,7 +167,7 @@ func TestBookmarksAreAbsorbedExceptTheSnapshotBoundary(t *testing.T) {
 // `deleted`. It begins a new snapshot cycle instead and lets reset…synced prune. Guessing here
 // deletes the wrong object out of somebody's browser.
 func TestDegenerateTombstoneResnapshotsRatherThanGuessing(t *testing.T) {
-	got := run(t, ProjectionEditor, AllowAll{}, []WatchEvent{
+	got := run(t, ProjectionFull, AllowAll{}, []WatchEvent{
 		{Type: WatchAdded, Object: cm("u1", "1", nil)},
 		{Type: WatchBookmark, InitialEventsEnd: true},
 		// An informer tombstone that lost the object: no uid, no name.
@@ -190,7 +190,7 @@ func TestDegenerateTombstoneResnapshotsRatherThanGuessing(t *testing.T) {
 // Spec §2: a metadata-only / partial object is never forwarded as added/modified. The consumer's
 // model is REPLACE, so a fragment would blank its state for that uid.
 func TestPartialObjectIsNeverForwarded(t *testing.T) {
-	got := run(t, ProjectionEditor, AllowAll{}, []WatchEvent{
+	got := run(t, ProjectionFull, AllowAll{}, []WatchEvent{
 		{Type: WatchAdded, Object: cm("u1", "1", nil)},
 		{Type: WatchBookmark, InitialEventsEnd: true},
 		{Type: WatchModified, Object: KRMObject{"kind": "ConfigMap", "metadata": map[string]any{"name": "c"}}}, // no uid
@@ -204,7 +204,7 @@ func TestPartialObjectIsNeverForwarded(t *testing.T) {
 // Spec §6: within one cycle, never emit a state for a uid older than one already emitted. This is
 // what makes coalescing safe, and an informer that relists WILL replay an older version.
 func TestStaleResourceVersionIsDropped(t *testing.T) {
-	got := run(t, ProjectionEditor, AllowAll{}, []WatchEvent{
+	got := run(t, ProjectionFull, AllowAll{}, []WatchEvent{
 		{Type: WatchAdded, Object: cm("u1", "10", map[string]any{"v": "a"})},
 		{Type: WatchBookmark, InitialEventsEnd: true},
 		{Type: WatchModified, Object: cm("u1", "7", map[string]any{"v": "STALE"})}, // older: must not be emitted
@@ -262,7 +262,7 @@ func TestCompareResourceVersion(t *testing.T) {
 // what we were told it is, and a consumer that was promised per-object monotonicity is silently no
 // longer getting it. Say so, and stop.
 func TestStrictOrderingRefusesAnUnorderableResourceVersion(t *testing.T) {
-	got := run(t, ProjectionEditor, AllowAll{}, []WatchEvent{
+	got := run(t, ProjectionFull, AllowAll{}, []WatchEvent{
 		{Type: WatchAdded, Object: cm("u1", "opaque-1", nil)},
 	}, 2)
 
@@ -337,7 +337,7 @@ func TestProjectionRemovesMachineryAndNothingElse(t *testing.T) {
 		},
 		"data": map[string]any{"a": "1"},
 	}
-	out, paths := project(ProjectionEditor, obj)
+	out, paths := project(ProjectionFull, obj)
 	meta := out["metadata"].(map[string]any)
 
 	if _, ok := meta["managedFields"]; ok {
@@ -351,7 +351,7 @@ func TestProjectionRemovesMachineryAndNothingElse(t *testing.T) {
 		t.Error("the projection removed something it does not declare")
 	}
 	if len(paths) != 0 {
-		t.Errorf("removal is not redaction: redactedPaths must be empty here, got %v", paths)
+		t.Errorf("removal is not redaction: redacted must be empty here, got %v", paths)
 	}
 	// Removal must not mutate the caller's object: an informer hands the same pointer to every
 	// subscriber, so an in-place edit here corrupts the object for every other browser on this scope.
@@ -363,7 +363,7 @@ func TestProjectionRemovesMachineryAndNothingElse(t *testing.T) {
 // An annotations map that is empty ONLY because the projection emptied it is our artifact, not the
 // server's state — and "has an empty annotation map" is a different fact from "has none".
 func TestProjectionDoesNotLeaveAnEmptyAnnotationsMap(t *testing.T) {
-	out, _ := project(ProjectionEditor, KRMObject{
+	out, _ := project(ProjectionFull, KRMObject{
 		"apiVersion": "v1", "kind": "ConfigMap",
 		"metadata": map[string]any{"uid": "u1", "name": "c", "annotations": map[string]any{lastAppliedAnnotation: "{...}"}},
 	})
@@ -375,7 +375,7 @@ func TestProjectionDoesNotLeaveAnEmptyAnnotationsMap(t *testing.T) {
 // Redaction is decided by the KIND, never by what a value looks like. A ConfigMap holding a string
 // that happens to read like a mask is an ordinary ConfigMap holding an ordinary string.
 func TestRedactionIsDecidedByKindAndNeverByAValuesShape(t *testing.T) {
-	out, paths := project(ProjectionEditor, cm("u1", "1", map[string]any{"greeting": "**REDACTED**"}))
+	out, paths := project(ProjectionFull, cm("u1", "1", map[string]any{"greeting": "**REDACTED**"}))
 	if len(paths) != 0 {
 		t.Errorf("a ConfigMap value was reported as redacted because of how it LOOKS: %v", paths)
 	}
@@ -384,7 +384,7 @@ func TestRedactionIsDecidedByKindAndNeverByAValuesShape(t *testing.T) {
 	}
 }
 
-// Keys-only disclosure, after proposal 0003: you learn THAT `token` exists — from redactedPaths — and
+// Keys-only disclosure: you learn THAT `token` exists — from redacted — and
 // the value is not on the wire in any form. Not even as a mask.
 //
 // The mask is what this test used to assert, and it was the one poisoned value in the system: a
@@ -398,7 +398,7 @@ func TestSecretDisclosureIsKeysOnlyAndTheValueIsGone(t *testing.T) {
 		// and the assertion below is that neither ever reaches the wire, in any form.
 		"data": map[string]any{"token": "aHVudGVyMg==", "user~name": "Ym9i"}, //nolint:gosec // fixture data, and that is the test
 	}
-	out, paths := project(ProjectionEditor, secret)
+	out, paths := project(ProjectionFull, secret)
 
 	// `data` is GONE, not left behind as an empty map. Every value in it was redacted, so the map
 	// emptied, so the map goes with them — the same rule the annotations block applies, and for the
@@ -413,8 +413,8 @@ func TestSecretDisclosureIsKeysOnlyAndTheValueIsGone(t *testing.T) {
 	// RFC 6901: `~` escapes to `~0`. A key with a tilde in it is legal, and an unescaped pointer
 	// silently addresses the wrong field — the same class of bug as the client's dotted paths.
 	want := []string{"/data/token", "/data/user~0name"}
-	if len(paths) != 2 || paths[0] != want[0] || paths[1] != want[1] {
-		t.Errorf("redactedPaths: want %v, got %v", want, paths)
+	if len(paths) != 2 || paths[0].path != want[0] || paths[1].path != want[1] {
+		t.Errorf("redacted: want %v, got %v", want, paths)
 	}
 	if _, ok := out["metadata"].(map[string]any)["labels"]; !ok {
 		t.Error("labels must stay editable on a redacted Secret — that is the point of keys-only")
@@ -438,7 +438,7 @@ func TestSecretDisclosureIsKeysOnlyAndTheValueIsGone(t *testing.T) {
 // nothing else. A Secret that genuinely arrived with an empty `data` map KEEPS it — that emptiness is
 // the server's fact, not our artifact, and deleting it would be inventing a removal we did not make.
 func TestAnEmptyDataMapTheServerSentIsKept(t *testing.T) {
-	out, paths := project(ProjectionEditor, KRMObject{
+	out, paths := project(ProjectionFull, KRMObject{
 		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
 		"metadata": map[string]any{"uid": "s2", "name": "empty"},
 		"data":     map[string]any{}, // the SERVER's empty map
@@ -449,7 +449,71 @@ func TestAnEmptyDataMapTheServerSentIsKept(t *testing.T) {
 			"and removing it reports a removal that did not happen")
 	}
 	if len(paths) != 0 {
-		t.Errorf("redactedPaths = %v, want empty: there was nothing to redact", paths)
+		t.Errorf("redacted = %v, want empty: there was nothing to redact", paths)
+	}
+}
+
+func TestSpecProjectionSuppressesStatusOnlyUpdates(t *testing.T) {
+	base := KRMObject{
+		"apiVersion": "apps/v1", "kind": "Deployment",
+		"metadata": map[string]any{"uid": "d1", "name": "web", "resourceVersion": "1"},
+		"spec":     map[string]any{"replicas": 2},
+		"status":   map[string]any{"readyReplicas": 1},
+	}
+	changed := deepCopyObject(base)
+	changed["metadata"].(map[string]any)["resourceVersion"] = "2"
+	changed["status"].(map[string]any)["readyReplicas"] = 2
+
+	got := run(t, ProjectionSpec, AllowAll{}, []WatchEvent{
+		{Type: WatchAdded, Object: base},
+		{Type: WatchBookmark, InitialEventsEnd: true},
+		{Type: WatchModified, Object: changed},
+	}, 3)
+	if !equalTypes(types(got), EventReset, EventAdded, EventSynced) {
+		t.Fatalf("status-only update escaped krm-spec/v1 suppression: %v", types(got))
+	}
+	if _, ok := got[1].Object["status"]; ok {
+		t.Fatal("krm-spec/v1 sent status")
+	}
+}
+
+func TestRedactedValueChangeBumpsRevisionAndIsNotSuppressed(t *testing.T) {
+	secret := func(rv, token string) KRMObject {
+		return KRMObject{
+			"apiVersion": "v1", "kind": "Secret",
+			"metadata": map[string]any{"uid": "s1", "name": "credentials", "resourceVersion": rv},
+			"data":     map[string]any{"token": token},
+		}
+	}
+	got := run(t, ProjectionFull, AllowAll{}, []WatchEvent{
+		{Type: WatchAdded, Object: secret("1", "old")},
+		{Type: WatchBookmark, InitialEventsEnd: true},
+		{Type: WatchModified, Object: secret("2", "new")},
+	}, 4)
+	if got[1].Redacted[0] != (Redaction{Path: "/data/token", Rev: 1}) ||
+		got[3].Redacted[0] != (Redaction{Path: "/data/token", Rev: 2}) {
+		t.Fatalf("redaction revisions = %#v then %#v, want 1 then 2", got[1].Redacted, got[3].Redacted)
+	}
+}
+
+func TestSequenceIsGapFreeAndProjectionRequestIsAuthorized(t *testing.T) {
+	got := run(t, ProjectionFull, AllowAll{}, []WatchEvent{
+		{Type: WatchBookmark, InitialEventsEnd: true},
+	}, 2)
+	for i, event := range got {
+		if event.Seq != uint64(i+1) {
+			t.Fatalf("event %d sequence = %d, want %d", i, event.Seq, i+1)
+		}
+	}
+
+	backend := &stubBackend{events: []WatchEvent{{Type: WatchBookmark, InitialEventsEnd: true}}}
+	gw := &Gateway{Auth: AllowAll{}, Projection: ProjectionFull, Clients: func(string, Principal) (Backend, error) { return backend, nil }}
+	sink := &recordingSink{}
+	if err := gw.StreamProjection(t.Context(), nil, Scope{Target: "demo"}, ProjectionRaw, sink); err == nil {
+		t.Fatal("an unauthorized raw projection request succeeded")
+	}
+	if backend.watches != 0 || len(sink.events) != 1 || sink.events[0].Code != CodeForbidden {
+		t.Fatalf("raw request opened a watch or was not refused: watches=%d events=%#v", backend.watches, sink.events)
 	}
 }
 

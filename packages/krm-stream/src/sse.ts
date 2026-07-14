@@ -43,6 +43,20 @@ export class SSEDecoder {
   }
 }
 
+/** Tracks the mandatory per-connection event sequence. The first missing frame is enough to make
+ * state uncertain, so transports close and reconnect rather than applying a possibly stale tail. */
+export class StreamSequence {
+  #next = 1;
+
+  observe(event: StreamEvent): { expected: number; received: number } | null {
+    if (!Number.isSafeInteger(event.seq) || event.seq !== this.#next) {
+      return { expected: this.#next, received: event.seq };
+    }
+    this.#next++;
+    return null;
+  }
+}
+
 /** One SSE frame -> one event, or null for a frame that carries none (a heartbeat, a comment).
  *
  * A comment is not an error and not an event: it is how a heartbeat is invisible to a consumer while
@@ -85,7 +99,7 @@ export function applyStreamEvent(store: LiveResourceStore, ev: StreamEvent): Pat
     case "added":
     case "modified":
       if (!ev.object) return [];
-      return store.applyServerEvent(ev.object, { redactedPaths: ev.redactedPaths }).flashed;
+      return store.applyServerEvent(ev.object, { redacted: ev.redacted }).flashed;
     case "deleted":
       if (ev.identity?.uid) store.removeResource(ev.identity.uid);
       return [];
@@ -107,6 +121,8 @@ export interface StreamOptions {
   onSynced?: () => void;
   /** Called after any change, with the paths that flashed. */
   onChange?: (flashed: Path[]) => void;
+  /** A missing or duplicated event was observed. The connection is closed; reconnect for a snapshot. */
+  onGap?: (expected: number, received: number) => void;
   /** Abort the stream from outside. */
   signal?: AbortSignal;
   /** Injectable for tests. Defaults to the global fetch. */
@@ -141,12 +157,13 @@ export function connectResourceStream(url: string, store: LiveResourceStore, opt
 
     const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
     const decoder = new SSEDecoder();
+    const sequence = new StreamSequence();
     try {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) return;
         for (const ev of decoder.push(value)) {
-          if (feed(store, ev, opts)) {
+          if (feed(store, sequence, ev, opts)) {
             controller.abort(); // terminal: stop, and do NOT come back
             return;
           }
@@ -174,6 +191,7 @@ export function connectWithEventSource(
   opts: Omit<StreamOptions, "fetch" | "headers"> = {},
 ): StreamHandle {
   const es = new EventSource(url, { withCredentials: true });
+  const sequence = new StreamSequence();
   let resolve: () => void;
   const closed = new Promise<void>((r) => {
     resolve = r;
@@ -191,7 +209,7 @@ export function connectWithEventSource(
     } catch {
       return; // an unparseable frame is not a reason to tear down a live stream
     }
-    if (feed(store, ev, opts)) shut();
+    if (feed(store, sequence, ev, opts)) shut();
   };
 
   // EventSource's `error` is also fired on a transport hiccup, where its OWN reconnect is the
@@ -206,7 +224,12 @@ export function connectWithEventSource(
 }
 
 /** Apply one event; returns true if the stream must now be closed. */
-function feed(store: LiveResourceStore, ev: StreamEvent, opts: StreamOptions): boolean {
+function feed(store: LiveResourceStore, sequence: StreamSequence, ev: StreamEvent, opts: StreamOptions): boolean {
+  const gap = sequence.observe(ev);
+  if (gap) {
+    opts.onGap?.(gap.expected, gap.received);
+    return true;
+  }
   if (ev.type === "error") {
     opts.onError?.(ev.code ?? "INTERNAL", ev.message ?? "", ev.terminal ?? false);
     return ev.terminal === true;

@@ -13,7 +13,7 @@ why: >
   layered ABOVE that — never in place of it.
 suites: [gateway, client]
 scope: { target: demo, group: apps, version: v1, resource: deployments, namespace: app }
-projection: krm-editor/v1
+projection: krm-full/v1
 
 watch:
   - { op: list, bodies: [deploy-web.v1] }

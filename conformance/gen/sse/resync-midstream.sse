@@ -1,20 +1,20 @@
 : connection 1
 
-data: {"type":"reset","target":"demo","scope":{"target":"demo","version":"v1","resource":"configmaps","namespace":"app"},"projection":"krm-editor/v1"}
+data: {"seq":1,"type":"reset","target":"demo","scope":{"target":"demo","version":"v1","resource":"configmaps","namespace":"app"},"projection":"krm-full/v1"}
 
-data: {"type":"added","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"3"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1001","uid":"cm-app-0001"}},"redactedPaths":[]}
+data: {"seq":2,"type":"added","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"3"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1001","uid":"cm-app-0001"}},"redacted":[]}
 
-data: {"type":"added","object":{"apiVersion":"v1","data":{"checkout-v2":"false"},"kind":"ConfigMap","metadata":{"name":"feature-flags","namespace":"app","resourceVersion":"1010","uid":"cm-flags-0001"}},"redactedPaths":[]}
+data: {"seq":3,"type":"added","object":{"apiVersion":"v1","data":{"checkout-v2":"false"},"kind":"ConfigMap","metadata":{"name":"feature-flags","namespace":"app","resourceVersion":"1010","uid":"cm-flags-0001"}},"redacted":[]}
 
-data: {"type":"synced"}
+data: {"seq":4,"type":"synced"}
 
-data: {"type":"modified","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"5"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1002","uid":"cm-app-0001"}},"redactedPaths":[]}
+data: {"seq":5,"type":"modified","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"5"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1002","uid":"cm-app-0001"}},"redacted":[]}
 
-data: {"type":"error","code":"RESYNC_REQUIRED","message":"upstream continuity lost; a new snapshot cycle follows","terminal":false}
+data: {"seq":6,"type":"error","code":"RESYNC_REQUIRED","message":"upstream continuity lost; a new snapshot cycle follows","terminal":false}
 
-data: {"type":"reset","target":"demo","scope":{"target":"demo","version":"v1","resource":"configmaps","namespace":"app"},"projection":"krm-editor/v1"}
+data: {"seq":7,"type":"reset","target":"demo","scope":{"target":"demo","version":"v1","resource":"configmaps","namespace":"app"},"projection":"krm-full/v1"}
 
-data: {"type":"added","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"5"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1002","uid":"cm-app-0001"}},"redactedPaths":[]}
+data: {"seq":8,"type":"added","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"5"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1002","uid":"cm-app-0001"}},"redacted":[]}
 
-data: {"type":"synced"}
+data: {"seq":9,"type":"synced"}
 

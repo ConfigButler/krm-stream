@@ -227,7 +227,7 @@ Borrowed from voter design doc §14, the concerns separate cleanly:
 api/       HTTP handlers, request parsing, auth integration, SSE endpoint
 auth/      authenticate caller; authorize a StreamRequest → an AuthorizedScope (normalized key)
 watcher/   backend (streaming-list | list-watch | informer), lifecycle, per-uid RV cursors
-project/   named projections: removal + redaction, and the redactedPaths they must declare
+project/   named projections: removal + redaction, and the redacted entries they must declare
 stream/    SSE framing, broadcaster, per-subscriber lifecycle, coalescing buffers
 write/     apply-as-user (patch), redaction guard, and the reason→commit binding
 ```
@@ -344,46 +344,46 @@ it was built. Mark it clearly so the extracted library carries no kcp assumption
 ### 7a. Projections are declared, named, and machine-readable
 
 The gateway does **not** get an unspecified field-dropping policy. Each projection is a named object
-that declares exactly what it removes and what it redacts, and it emits `redactedPaths` (RFC 6901 JSON
+that declares exactly what it removes and what it redacts, and it emits `redacted` (RFC 6901 JSON
 Pointers) per object so a consumer can tell "absent" from "hidden" from "masked" (protocol §3).
 
 | projection | removes | redacts |
 |---|---|---|
 | `krm-raw/v1` | `metadata.managedFields`, `kubectl.kubernetes.io/last-applied-configuration` | — |
-| `krm-editor/v1` | the above | per the Secret disclosure policy below |
+| `krm-full/v1` | the above | Secret values, by default |
+| `krm-spec/v1` | the above plus `status` | Secret values, by default |
 
-Everything else is carried **verbatim** — all of `spec`, **all of `status`**, `data`, `type`, and any
+Everything else is carried **verbatim** — all of `spec`, `data`, `type`, and any
 root field a CRD invents. The projection exists so a human editor is never shown machinery; it must
 never be so aggressive that it prunes substance. (Both prior examples do exactly this much:
 gitops-api's `configMapView`, voter's `toCoffeeConfig`.)
 
-**`status` is a first-class product surface, not a leftover.** Never omit it, not even for an "editing"
-client — the editor and the status view are the *same stream*, and the reconcile engine simply treats
-`status` as a read-only region. Not every resource *has* a `status` (`ConfigMap`, `Secret`); the rule is
-"never remove it", not "always synthesize it".
+**`status` is a first-class product surface when a projection sends it.** `krm-full/v1` keeps it
+read-only and live; `krm-spec/v1` ignores it and suppresses status-only updates. Not every resource
+has a `status` (`ConfigMap`, `Secret`), and projections never synthesize one.
 
 ### 7b. Secrets — the gateway must choose a disclosure policy
 
 `Secret.data` is base64-encoded **sensitive** material. Streaming it to a browser is a deliberate
 decision, never a default, and it is **the gateway's** decision — the protocol just carries the result
-plus the `redactedPaths` that make it safe. Pick one, per kind or per scope, and make it explicit:
+plus the `redacted` entries that make it safe. Pick one, per kind or per scope, and make it explicit:
 
 | policy | when | on the wire |
 |---|---|---|
-| **keys only** (values omitted) | **default.** The UI shows *what* keys exist and can edit labels/annotations, without disclosing values. | value **deleted**, path in `redactedPaths` |
-| **elevated auth** (values only for an authorized principal / re-auth) | operator consoles. | full value, path **not** in `redactedPaths` |
-| **full values** | trusted, narrowly-scoped operator UI only — and say so loudly. | full value, empty `redactedPaths` |
+| **keys only** (values omitted) | **default.** The UI shows *what* keys exist and can edit labels/annotations, without disclosing values. | value **deleted**, `{path, rev}` in `redacted` |
+| **elevated auth** (values only for an authorized principal / re-auth) | operator consoles. | full value, path absent from `redacted` |
+| **full values** | trusted, narrowly-scoped operator UI only — and say so loudly. | full value, empty `redacted` |
 
 > **There used to be a fourth policy here — "masked": put `"••••"` in the value.** It is gone, and
 > spec §3.1 now **forbids** it. A placeholder in the object is a value a browser can **save back**, and
 > a merge patch carrying `"••••"` writes that literal string **over the real Secret**. It was the only
 > poisoned value in the system, and we invented it (proposal 0003).
 >
-> Nothing was lost by deleting it: `redactedPaths` is mandatory and authoritative, so it already
+> Nothing was lost by deleting it: `redacted` is mandatory and authoritative, so it already
 > carries the one thing the mask carried — that the key exists and is withheld. **A mask is something
 > a UI draws. It is not something the wire carries.**
 
-`redactedPaths` is therefore the *only* evidence of redaction, which is exactly why it is mandatory
+`redacted` is therefore the *only* evidence of redaction, which is exactly why it is mandatory
 and not "nice for debugging": a real value that merely *looks* like a mask is not redacted, and
 redaction is never inferred from a value's shape.
 
@@ -400,7 +400,7 @@ editable text, so a text input cannot corrupt them.
 
 2. **The redaction guard — non-negotiable.** Before the patch leaves the gateway, it is validated
    against the **same projection object** that produced the stream:
-   - a patch touching any path in that object's `redactedPaths` → **reject** (`400`), never write;
+   - a patch touching any path in that object's `redacted` → **reject** (`400`), never write;
    - a patch touching any path the projection *removed* → **reject**;
    - a whole-object `PUT` → **not supported at all**. A projected object must never be sent back as if
      it were complete: the omitted fields would be interpreted as deletions.
@@ -504,13 +504,13 @@ A fake watch/informer + a fake API suffice for most of these.
 | 16 | an **editing** client is connected | it still receives `status` — never omitted for "editors" |
 | 17 | a CRD with deeply nested / unknown `spec`, `status`, and a **custom root field** | carried **verbatim**: no flattening, reordering, coercion, schema-check, or dropping of the unknown root field (assert JSON round-trip equality) |
 | 18 | a resource with **no `status`** (`ConfigMap`) | no `status` synthesized; object streamed as-is |
-| 19 | object carries `managedFields` + last-applied annotation | removed by the projection; `redactedPaths` unaffected (removal ≠ redaction) |
+| 19 | object carries `managedFields` + last-applied annotation | removed by the projection; `redacted` unaffected (removal ≠ redaction) |
 | **Projection, redaction & the write guard** |
-| 20 | `Secret` under **keys-only** policy | keys present, values absent, each value path listed in `redactedPaths`; labels/annotations still editable |
+| 20 | `Secret` under **keys-only** policy | keys present, values absent, each value path listed in `redacted`; labels/annotations still editable |
 | 21 | save patches a Secret value the caller was **never shown** | **rejected** (`400`); no write reaches the API server |
 | 22 | save patches a field the **projection removed** (e.g. `managedFields`) | **rejected**; no write |
 | 23 | save with a whole projected object as a `PUT` | **unsupported** — the endpoint accepts patches only |
-| 24 | a real value that happens to look like a mask (`"••••••"`) | **not** treated as redacted — redaction is decided by the KIND and declared in `redactedPaths`, never inferred from a value's shape |
+| 24 | a real value that happens to look like a mask (`"••••••"`) | **not** treated as redacted — redaction is decided by the KIND and declared in `redacted`, never inferred from a value's shape |
 | 25 | `ConfigMap.binaryData` / non-UTF-8 value | streamed opaque (`N bytes`), never as editable text |
 | **Authorization & lifecycle** |
 | 26 | unauthorized scope request | denied before any watch opens |

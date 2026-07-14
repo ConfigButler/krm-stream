@@ -40,6 +40,7 @@
       "extensions": [
         "golang.go",
         "anthropic.claude-code",
+        "openai.chatgpt",
         "redhat.vscode-yaml"
       ]
     }
@@ -59,12 +60,16 @@
   //      cannot write to it at all. post-create.sh chowns /home/vscode for exactly this reason.
   //      Without it: `claude` cannot log in, `gh auth login` cannot store a token, and the symptom
   //      gives you no clue why.
+  //
+  // Codex is kinder than Claude here: it keeps BOTH its config and its login (auth.json) inside
+  // ~/.codex, so the one volume is the whole story — no symlink into persisted-home needed.
   "mounts": [
     "source=krm-stream-gomodcache,target=/go/pkg/mod,type=volume",
     "source=krm-stream-gobuildcache,target=/home/vscode/.cache/go-build,type=volume",
     "source=krm-stream-dotkube,target=/home/vscode/.kube,type=volume",
     "source=krm-stream-ghconfig,target=/home/vscode/.config/gh,type=volume",
     "source=krm-stream-claudeconfig,target=/home/vscode/.claude,type=volume",
+    "source=krm-stream-codexconfig,target=/home/vscode/.codex,type=volume",
     "source=krm-stream-persisted-home,target=/home/vscode/persisted-home,type=volume"
   ],
   "containerEnv": {

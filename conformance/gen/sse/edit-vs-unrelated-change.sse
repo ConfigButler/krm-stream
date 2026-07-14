@@ -1,10 +1,10 @@
 : connection 1
 
-data: {"type":"reset","target":"demo","scope":{"target":"demo","version":"v1","resource":"configmaps","namespace":"app"},"projection":"krm-editor/v1"}
+data: {"seq":1,"type":"reset","target":"demo","scope":{"target":"demo","version":"v1","resource":"configmaps","namespace":"app"},"projection":"krm-full/v1"}
 
-data: {"type":"added","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"3"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1001","uid":"cm-app-0001"}},"redactedPaths":[]}
+data: {"seq":2,"type":"added","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"3"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1001","uid":"cm-app-0001"}},"redacted":[]}
 
-data: {"type":"synced"}
+data: {"seq":3,"type":"synced"}
 
-data: {"type":"modified","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"5"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1002","uid":"cm-app-0001"}},"redactedPaths":[]}
+data: {"seq":4,"type":"modified","object":{"apiVersion":"v1","data":{"log-level":"info","replicas":"5"},"kind":"ConfigMap","metadata":{"annotations":{"note":"keep"},"labels":{"app.kubernetes.io/name":"shop"},"name":"app-config","namespace":"app","resourceVersion":"1002","uid":"cm-app-0001"}},"redacted":[]}
 

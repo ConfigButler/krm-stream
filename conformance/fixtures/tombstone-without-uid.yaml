@@ -14,7 +14,7 @@ why: >
   Paying for a relist is the cheap option here. Guessing is not.
 suites: [gateway]
 scope: { target: demo, version: v1, resource: configmaps, namespace: app }
-projection: krm-editor/v1
+projection: krm-full/v1
 
 watch:
   - { op: list, bodies: [cm-app.v1, cm-flags.v1] }

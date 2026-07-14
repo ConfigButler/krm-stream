@@ -6,7 +6,10 @@
 // without a cluster anywhere in sight.
 package gateway
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // ProtocolVersion is carried in the endpoint path (…/resource-stream/v1). There is no in-band
 // negotiation in v1; a breaking change gets a new path segment.
@@ -61,10 +64,20 @@ const (
 	// ProjectionRaw removes only machinery a human editor must never see or round-trip:
 	// metadata.managedFields and the last-applied-configuration annotation.
 	ProjectionRaw Projection = "krm-raw/v1"
-	// ProjectionEditor removes the above, plus the gateway's declared Secret disclosure policy
-	// (keys-only by default: you may see that `token` exists; you may not see or overwrite it).
-	ProjectionEditor Projection = "krm-editor/v1"
+	// ProjectionFull removes the machinery above and redacts Secret values. It is the safe default:
+	// callers see a complete editable KRM object, including live status, without Secret values.
+	ProjectionFull Projection = "krm-full/v1"
+	// ProjectionSpec removes status as well as the machinery above, so status-only upstream changes
+	// produce no downstream event. Secret values remain redacted.
+	ProjectionSpec Projection = "krm-spec/v1"
 )
+
+// Redaction says a path exists but its value never left the gateway. Rev starts at one for a newly
+// observed path and increases when its withheld value changes during this connection.
+type Redaction struct {
+	Path string `json:"path"`
+	Rev  uint64 `json:"rev"`
+}
 
 // KRMObject is the complete, unstructured JSON of a Kubernetes object, minus exactly what the
 // declared projection removed.
@@ -103,6 +116,9 @@ type Scope struct {
 // Event is one framed message on the stream. Heartbeats are SSE comments (": heartbeat"), not
 // events, and are a no-op to consumers.
 type Event struct {
+	// Seq is per connection, starts at one, and is assigned immediately before emission. It lets a
+	// consumer detect a dropped SSE frame even when suppression intentionally removed other updates.
+	Seq  uint64    `json:"seq"`
 	Type EventType `json:"type"`
 
 	// reset
@@ -112,10 +128,9 @@ type Event struct {
 
 	// added / modified
 	Object KRMObject `json:"object,omitempty"`
-	// RedactedPaths is a REQUIRED array on every added/modified (empty, not absent, when nothing is
-	// redacted) — RFC 6901 JSON Pointers into Object. It is mandatory precisely so that a consumer
-	// never has to infer redaction from a value that merely looks like a placeholder.
-	RedactedPaths []string `json:"redactedPaths,omitempty"`
+	// Redacted is REQUIRED on every added/modified (empty, not absent, when nothing is redacted).
+	// It is the authoritative description of values the projection withheld.
+	Redacted []Redaction `json:"redacted,omitempty"`
 
 	// deleted
 	Identity *Identity `json:"identity,omitempty"`
@@ -130,7 +145,7 @@ type Event struct {
 // MarshalJSON exists for two fields, and for one reason: a consumer must never have to INFER
 // something the protocol makes it responsible for.
 //
-//   - `redactedPaths` is REQUIRED on every added/modified. `omitempty` would silently drop the empty
+//   - `redacted` is REQUIRED on every added/modified. `omitempty` would silently drop the empty
 //     array — which is exactly the case the requirement is about: "nothing is redacted in this
 //     object" must be SAID, not inferred from a value that happens to look like a placeholder.
 //     (The conformance suite caught this the first time it ran. That is the corpus doing its job.)
@@ -149,15 +164,15 @@ func (e Event) MarshalJSON() ([]byte, error) {
 
 	switch e.Type {
 	case EventAdded, EventModified:
-		paths := e.RedactedPaths
-		if paths == nil {
-			paths = []string{}
+		redacted := e.Redacted
+		if redacted == nil {
+			redacted = []Redaction{}
 		}
-		inner.RedactedPaths = nil // the outer, non-omitempty field carries it (shallower field wins)
+		inner.Redacted = nil // the outer, non-omitempty field carries it (shallower field wins)
 		return json.Marshal(struct {
 			base
-			RedactedPaths []string `json:"redactedPaths"`
-		}{inner, paths})
+			Redacted []Redaction `json:"redacted"`
+		}{inner, redacted})
 
 	case EventError:
 		inner.Terminal = false // ditto: the outer field is the one that gets marshalled
@@ -169,6 +184,19 @@ func (e Event) MarshalJSON() ([]byte, error) {
 	default:
 		return json.Marshal(inner)
 	}
+}
+
+// sequenceSink owns the sequence number for one SSE connection. Wrapping the sink keeps every
+// normal, recovery and error path honest without asking each call site to remember a counter.
+type sequenceSink struct {
+	sink Sink
+	seq  uint64
+}
+
+func (s *sequenceSink) Emit(ctx context.Context, event Event) error {
+	s.seq++
+	event.Seq = s.seq
+	return s.sink.Emit(ctx, event)
 }
 
 // UID reads metadata.uid out of an object. The empty string means "this object has no usable

@@ -1,10 +1,10 @@
 : connection 1
 
-data: {"type":"reset","target":"demo","scope":{"target":"demo","group":"apps","version":"v1","resource":"deployments","namespace":"app"},"projection":"krm-editor/v1"}
+data: {"seq":1,"type":"reset","target":"demo","scope":{"target":"demo","group":"apps","version":"v1","resource":"deployments","namespace":"app"},"projection":"krm-full/v1"}
 
-data: {"type":"added","object":{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"generation":4,"labels":{"app.kubernetes.io/name":"web"},"name":"web","namespace":"app","resourceVersion":"3001","uid":"deploy-web-0001"},"spec":{"paused":false,"replicas":2,"selector":{"matchLabels":{"app":"web"}},"template":{"metadata":{"labels":{"app":"web"}},"spec":{"containers":[{"image":"ghcr.io/configbutler/web:v1.2.3","name":"web","ports":[{"containerPort":8080}]}]}}},"status":{"conditions":[{"reason":"MinimumReplicasUnavailable","status":"False","type":"Available"}],"observedGeneration":4,"readyReplicas":1,"replicas":2}},"redactedPaths":[]}
+data: {"seq":2,"type":"added","object":{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"generation":4,"labels":{"app.kubernetes.io/name":"web"},"name":"web","namespace":"app","resourceVersion":"3001","uid":"deploy-web-0001"},"spec":{"paused":false,"replicas":2,"selector":{"matchLabels":{"app":"web"}},"template":{"metadata":{"labels":{"app":"web"}},"spec":{"containers":[{"image":"ghcr.io/configbutler/web:v1.2.3","name":"web","ports":[{"containerPort":8080}]}]}}},"status":{"conditions":[{"reason":"MinimumReplicasUnavailable","status":"False","type":"Available"}],"observedGeneration":4,"readyReplicas":1,"replicas":2}},"redacted":[]}
 
-data: {"type":"synced"}
+data: {"seq":3,"type":"synced"}
 
-data: {"type":"modified","object":{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"generation":5,"labels":{"app.kubernetes.io/name":"web"},"name":"web","namespace":"app","resourceVersion":"3003","uid":"deploy-web-0001"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"web"}},"template":{"metadata":{"labels":{"app":"web"}},"spec":{"containers":[{"image":"ghcr.io/configbutler/web:v1.2.3","name":"web","ports":[{"containerPort":8080}]}]}}},"status":{"conditions":[{"reason":"MinimumReplicasAvailable","status":"True","type":"Available"}],"observedGeneration":5,"readyReplicas":2,"replicas":2}},"redactedPaths":[]}
+data: {"seq":4,"type":"modified","object":{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"generation":5,"labels":{"app.kubernetes.io/name":"web"},"name":"web","namespace":"app","resourceVersion":"3003","uid":"deploy-web-0001"},"spec":{"replicas":2,"selector":{"matchLabels":{"app":"web"}},"template":{"metadata":{"labels":{"app":"web"}},"spec":{"containers":[{"image":"ghcr.io/configbutler/web:v1.2.3","name":"web","ports":[{"containerPort":8080}]}]}}},"status":{"conditions":[{"reason":"MinimumReplicasAvailable","status":"True","type":"Available"}],"observedGeneration":5,"readyReplicas":2,"replicas":2}},"redacted":[]}
 

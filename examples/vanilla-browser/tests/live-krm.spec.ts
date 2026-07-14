@@ -98,7 +98,7 @@ test("an unrelated server change never disturbs the field you are editing", asyn
 
 test("a redacted Secret value is not in the page at all — the mask is drawn, not received", async ({ page }) => {
   // The rule that makes a Secret safe to display: a value you never RECEIVED cannot round-trip over
-  // the real one. The mask is something this page DRAWS from `redactedPaths` — it is not a value the
+  // the real one. The mask is something this page DRAWS from `redacted` — it is not a value the
   // wire carried, and there is therefore nothing to save back (proposal 0003).
   await page.goto("/?fixture=secret-redaction&pace=0ms");
   await expect(page.locator("#status-line")).toHaveText(/synced/);

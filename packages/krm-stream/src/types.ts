@@ -44,7 +44,14 @@ export type ErrorCode =
 
 /** What the gateway removed from every object in this stream. On the wire, per cycle, because a
  * consumer must be able to distinguish "absent upstream" from "the gateway took it away". */
-export type Projection = "krm-raw/v1" | "krm-editor/v1";
+export type Projection = "krm-raw/v1" | "krm-full/v1" | "krm-spec/v1";
+
+/** A path whose value exists upstream but was withheld by the projection. `rev` starts at one and
+ * increments whenever that hidden value changes during this stream connection. */
+export interface Redaction {
+  path: string;
+  rev: number;
+}
 
 export interface Scope {
   target: string;
@@ -67,6 +74,8 @@ export interface Identity {
 }
 
 export interface StreamEvent {
+  /** Per-connection event sequence. A gap means the consumer must reconnect for a fresh snapshot. */
+  seq: number;
   type: EventType;
   // reset
   target?: string;
@@ -74,9 +83,8 @@ export interface StreamEvent {
   projection?: Projection;
   // added / modified
   object?: KRMObject;
-  /** RFC 6901 JSON Pointers into `object` whose values are masked. Always present on
-   * added/modified — empty when nothing is redacted. */
-  redactedPaths?: string[];
+  /** Always present on added/modified — empty when nothing is redacted. */
+  redacted?: Redaction[];
   // deleted
   identity?: Identity;
   // error

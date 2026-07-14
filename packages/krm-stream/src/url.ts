@@ -1,4 +1,4 @@
-import type { Scope } from "./types.ts";
+import type { Projection, Scope } from "./types.ts";
 
 // The request half of the wire.
 //
@@ -10,7 +10,7 @@ import type { Scope } from "./types.ts";
 
 /** A scope as a CALLER supplies it. `target` is optional here (a single-cluster host may never set
  * one) though it is always present on the `reset` event the gateway sends back. */
-export type ScopeQuery = Omit<Scope, "target"> & { target?: string };
+export type ScopeQuery = Omit<Scope, "target"> & { target?: string; projection?: Projection };
 
 /**
  * Build the URL for a resource stream.
@@ -46,6 +46,7 @@ export function resourceStreamURL(base: string, scope: ScopeQuery): string {
   set("namespace", scope.namespace);
   set("name", scope.name);
   set("labelSelector", scope.labelSelector);
+  set("projection", scope.projection);
 
   return `${base}${base.includes("?") ? "&" : "?"}${q.toString()}`;
 }

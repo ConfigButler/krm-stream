@@ -18,11 +18,11 @@ import { body } from "./conformance.ts";
 const CM = "cm-app.v1"; // ConfigMap: data.log-level=info, data.replicas="3", one dotted label
 const DEPLOY = "deploy-web.v1"; // Deployment: nested spec, a container array, a live status
 
-function seeded(ref: string, redactedPaths: string[] = []): [LiveResourceStore, string] {
+function seeded(ref: string, redacted: { path: string; rev: number }[] = []): [LiveResourceStore, string] {
   const store = new LiveResourceStore();
   const obj = body(ref);
   store.beginSnapshot();
-  store.applyServerEvent(obj, { redactedPaths });
+  store.applyServerEvent(obj, { redacted });
   store.endSnapshot();
   return [store, obj.metadata.uid];
 }
@@ -164,7 +164,10 @@ test("adoptSaved — the save landed; stop showing it as dirty without waiting f
 });
 
 test("I-REDACT — a redacted value is ABSENT, is read-only, and cannot reach a patch", () => {
-  const [store, id] = seeded("secret-token.v1-wire", ["/data/token", "/data/username"]);
+  const [store, id] = seeded("secret-token.v1-wire", [
+    { path: "/data/token", rev: 1 },
+    { path: "/data/username", rev: 1 },
+  ]);
   assert.equal(store.isEditable(id, ["data", "token"]), false);
   assert.throws(() => store.setValue(id, ["data", "token"], "hunter2"), /read-only/);
   assert.throws(() => store.removeKey(id, ["data", "token"]), /read-only/);
@@ -175,11 +178,11 @@ test("I-REDACT — a redacted value is ABSENT, is read-only, and cannot reach a 
   // real secret. The hazard cannot arise rather than being guarded.
   assert.equal(store.draft(id).data, undefined, "`data` survived the projection");
 
-  // …and keys-only disclosure survives, because `redactedPaths` carries it: the consumer still knows
+  // …and keys-only disclosure survives, because `redacted` carries it: the consumer still knows
   // `token` exists, which is what a UI renders `token ••••••` from.
-  assert.deepEqual(store.redactedPaths(id), [
-    ["data", "token"],
-    ["data", "username"],
+  assert.deepEqual(store.redactions(id), [
+    { path: ["data", "token"], rev: 1 },
+    { path: ["data", "username"], rev: 1 },
   ]);
 
   store.setValue(id, ["metadata", "labels", "app.kubernetes.io/name"], "checkout");

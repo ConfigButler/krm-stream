@@ -120,9 +120,9 @@ func TestSnapshotFraming(t *testing.T) {
 	}
 }
 
-// redactedPaths is REQUIRED on every added/modified — present, not merely optional — so that a
+// redacted is REQUIRED on every added/modified — present, not merely optional — so that a
 // consumer never has to infer redaction from a value that happens to look like a placeholder.
-func TestRedactedPathsAlwaysPresent(t *testing.T) {
+func TestRedactedAlwaysPresent(t *testing.T) {
 	c := corpus(t)
 	for _, f := range c.Fixtures {
 		for i, fe := range f.Events {
@@ -137,8 +137,8 @@ func TestRedactedPathsAlwaysPresent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s event %d: %v", f.ID, i, err)
 			}
-			if !strings.Contains(string(b), `"redactedPaths"`) {
-				t.Errorf("%s event %d: added/modified must carry redactedPaths (empty is fine, absent is not)", f.ID, i)
+			if !strings.Contains(string(b), `"redacted"`) {
+				t.Errorf("%s event %d: added/modified must carry redacted (empty is fine, absent is not)", f.ID, i)
 			}
 		}
 	}

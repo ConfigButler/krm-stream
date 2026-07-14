@@ -10,9 +10,9 @@ import (
 //
 //	1. a field that does not exist upstream
 //	2. a field the gateway REMOVED (never shown, never named)
-//	3. a field that EXISTS but whose value was withheld — the path is named in redactedPaths
+//	3. a field that EXISTS but whose value was withheld — the path is named in redacted
 //
-// Nothing about a VALUE distinguishes those, which is why redactedPaths is on the wire, per object,
+// Nothing about a VALUE distinguishes those, which is why redacted is on the wire, per object,
 // mandatory, and authoritative.
 //
 // # A redacted value is OMITTED. There is no placeholder, and that is the point (proposal 0003)
@@ -22,10 +22,10 @@ import (
 // token should be can send it back on an ordinary save, and the literal string is written OVER the
 // real secret. The token is destroyed, and from the browser it looked like a green tick.
 //
-// So we do not invent it. The value is simply not there, and `redactedPaths` says why — which is all
+// So we do not invent it. The value is simply not there, and `redacted` says why — which is all
 // the information the mask ever carried:
 //
-//   - the CONSUMER still knows the key exists and is withheld: `/data/token` is in redactedPaths. A
+//   - the CONSUMER still knows the key exists and is withheld: `/data/token` is in redacted. A
 //     UI renders `••••••` from that, exactly as it did before.
 //   - the DRAFT never contains a redacted value, so a merge patch cannot carry one back. The hazard
 //     does not need a guard, because it can no longer arise.
@@ -42,9 +42,14 @@ const lastAppliedAnnotation = "kubectl.kubernetes.io/last-applied-configuration"
 // cache hands the same pointer to every subscriber, and the conformance corpus hands the same map to
 // both sides of the assertion) — mutating it in place would corrupt state we do not own, and in the
 // informer case would corrupt it for every other browser watching the same scope.
-func project(p Projection, in KRMObject) (KRMObject, []string) {
+type redactedValue struct {
+	path  string
+	value any
+}
+
+func project(p Projection, in KRMObject) (KRMObject, []redactedValue) {
 	out := deepCopyObject(in)
-	paths := []string{}
+	redacted := []redactedValue{}
 
 	// Both projections remove the machinery. There is no unspecified "other server-side
 	// bookkeeping": if a gateway removes a field, that removal is part of a NAMED projection or it
@@ -62,31 +67,31 @@ func project(p Projection, in KRMObject) (KRMObject, []string) {
 		}
 	}
 
-	// krm-editor/v1 additionally applies the Secret disclosure policy: keys-only.
+	// krm-full/v1 and krm-spec/v1 additionally apply the Secret disclosure policy: keys-only.
 	//
-	// The value is DELETED, not masked. You learn that `token` exists — from redactedPaths, which names
+	// The value is DELETED, not masked. You learn that `token` exists — from redacted, which names
 	// `/data/token` — and you never learn or carry what it is.
 	//
 	// And when we empty a map, we REMOVE it, exactly as the annotations block above already does and
 	// for exactly the same reason: **a `data: {}` that is empty only because WE emptied it is our
 	// artifact, not the server's state.** Leaving it behind tells the consumer "this Secret has an
 	// empty data map", which is a *different fact* from "this Secret's data is not yours to see" —
-	// and the second is what happened. redactedPaths carries that, and it is the only thing that does.
+	// and the second is what happened. redacted carries that, and it is the only thing that does.
 	//
 	// (An earlier version left `data: {}`, which contradicted the rule written four lines above it.
 	// The reductio that settles it: under three verbs (proposal 0004), `ignore` on `status` must
 	// obviously not leave `status: {}` behind. The same is true here, and it always was.)
-	if p == ProjectionEditor && isSecret(out) {
+	if (p == ProjectionFull || p == ProjectionSpec) && isSecret(out) {
 		for _, field := range []string{"data", "stringData"} {
 			m, ok := out[field].(map[string]any)
 			if !ok {
 				continue
 			}
 			redactedAny := false
-			for k := range m {
+			for k, v := range m {
 				delete(m, k)
 				redactedAny = true
-				paths = append(paths, "/"+escapePointer(field)+"/"+escapePointer(k))
+				redacted = append(redacted, redactedValue{path: "/" + escapePointer(field) + "/" + escapePointer(k), value: v})
 			}
 			// Only when the emptiness is OURS. A Secret that genuinely arrived with `data: {}` keeps
 			// it: we are removing what we removed, and nothing else.
@@ -95,11 +100,14 @@ func project(p Projection, in KRMObject) (KRMObject, []string) {
 			}
 		}
 	}
+	if p == ProjectionSpec {
+		delete(out, "status")
+	}
 
 	// Sorted so the wire is deterministic: two gateways given the same object emit the same bytes,
 	// and a golden transcript is a golden transcript.
-	sort.Strings(paths)
-	return out, paths
+	sort.Slice(redacted, func(i, j int) bool { return redacted[i].path < redacted[j].path })
+	return out, redacted
 }
 
 func isSecret(o KRMObject) bool {

@@ -84,7 +84,7 @@ function assign(container: Record<string, unknown> | unknown[], seg: string | nu
   else container[String(seg)] = value;
 }
 
-/** An RFC 6901 JSON Pointer -> a segment array. This is the form `redactedPaths` arrives in on the
+/** An RFC 6901 JSON Pointer -> a segment array. This is the form `redacted[].path` arrives in on the
  * wire (spec §3); inside the engine everything is a segment array.
  *
  * Segments stay STRINGS. `/data/0` on a map whose key is literally "0" must not become the number

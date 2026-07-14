@@ -136,7 +136,7 @@ So `I-BASESHIFT` is a *replacement*, not a merge — and `prune()` in §4 exists
 server dropped does not survive in the draft either (unless the user is actively editing it, which is a
 conflict, not a ghost).
 
-**Redacted paths never enter a patch.** Every `added`/`modified` carries `redactedPaths` (RFC 6901
+**Redacted paths never enter a patch.** Every `added`/`modified` carries `redacted` (RFC 6901
 pointers — protocol §3). The engine marks those paths **read-only and non-dirtiable**: the mask is
 displayed but can never become a draft value, and `patch(id)` MUST NOT contain a redacted path. A
 gateway that receives one rejects the whole save, so this is a correctness requirement, not a courtesy.
@@ -318,7 +318,7 @@ createEngine(policy?: EditabilityPolicy, opts?: { deepEqual?, isBinary? }): Engi
 
 interface Engine {
   // stream in — the four protocol events, and nothing else
-  applyServerEvent(obj: KRMObject, opts?: { redactedPaths?: Path[] })   // ← added / modified (REPLACES base, §2.3)
+  applyServerEvent(obj: KRMObject, opts?: { redacted?: { path: string, rev: number }[] })   // ← added / modified (REPLACES base, §2.3)
     : { added?:boolean, structural:boolean, flashed:Path[], conflicts:Path[] }
   removeResource(id): void                            // ← deleted (identity.uid; a tombstone carries no object)
   beginSnapshot(): void; endSnapshot(): void          // ← reset / synced. MAY repeat many times on one
@@ -358,10 +358,10 @@ handling.
 
 - **I-REPLACE** — the server object (`server(id)`, the merge base) is **replaced** by each incoming
   object, never merged into: a key the server removed must not survive in `server(id)` (§2.3).
-- **I-REDACT** — a path in `redactedPaths` is read-only, never dirty, never conflicted, and never
+- **I-REDACT** — a path in `redacted` is read-only, never dirty, never conflicted, and never
   appears in `patch(id)`. There is no placeholder to become a draft value: the redacted value is not
   on the wire at all (spec §3.1), so `patch()` *cannot* carry one back over the real Secret. The mask
-  a UI shows is drawn from `store.redactedPaths(id)` (§2.3).
+  a UI shows is drawn from `store.redactions(id)` (§2.3).
 - **I-DERIVED** — `isDirty(f)` ⟺ `!deepEqual(get(server,f), get(draft,f))`; no cached dirty state.
 - **I-THREEWAY** — reconcile uses base = previous server; removing the base term must fail a test.
 - **I-DEEP** — the merge recurses through nested objects and arrays; a change deep in `spec` reconciles
@@ -413,7 +413,7 @@ handling.
 | 17 | two objects; snapshot replays one | begin/apply/end | the other is pruned; survivor three-way reconciled (I-RESYNC) |
 | 18 | save built for edited spec | server echoes the saved spec | no phantom conflict (I-IDEMPOTENT) |
 | 19 | server spec `{a:1,b:2}`, user untouched | server → spec `{a:1}` (b **removed**) | `server(id).spec` = `{a:1}`; **no ghost `b`** in server or draft (I-REPLACE) |
-| 20 | Secret, `redactedPaths:["/data/password"]`, user edits a label | build `patch(id)` | patch contains the label only; `/data/password` absent; the mask never became a value (I-REDACT) |
+| 20 | Secret, `redacted:[{path:"/data/password",rev:1}]`, user edits a label | build `patch(id)` | patch contains the label only; `/data/password` absent; the mask never became a value (I-REDACT) |
 | 21 | user tries to edit a redacted path | `setValue` on `/data/password` | rejected, like any read-only path (I-REDACT, I-READONLY) |
 | 22 | `beginSnapshot()`, one `applyServerEvent`, **connection drops** (no `endSnapshot`) | — | **nothing pruned**; pre-snapshot state and in-flight drafts intact (I-RESYNC) |
 

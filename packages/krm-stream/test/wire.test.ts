@@ -17,7 +17,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { applyStreamEvent, LiveResourceStore, SSEDecoder } from "../src/index.ts";
+import { applyStreamEvent, LiveResourceStore, SSEDecoder, StreamSequence } from "../src/index.ts";
 import type { Path, StreamEvent } from "../src/types.ts";
 import { clientFixtures, resolve } from "./conformance.ts";
 import { applyEdit, check } from "./expect.ts";
@@ -94,9 +94,8 @@ test("the transcript on the wire IS the fixture's events — same order, same co
  * toward emitting nothing, which is worse for whoever debugs it at 3am. The Go suite draws the line
  * in exactly the same place; if it ever moves, it moves on both sides. */
 function wireForm(ev: StreamEvent): StreamEvent {
-  if (ev.type !== "error") return ev;
-  const { message: _message, ...rest } = ev;
-  return rest as StreamEvent;
+  const { message: _message, seq: _seq, ...rest } = ev;
+  return { ...rest, seq: 0 } as StreamEvent;
 }
 
 test("a heartbeat is not an event, and neither is any other comment", () => {
@@ -115,6 +114,13 @@ test("a heartbeat is not an event, and neither is any other comment", () => {
     events.map((e) => e.type),
     ["reset", "synced"],
   );
+});
+
+test("a sequence gap is detected before the later event is applied", () => {
+  const sequence = new StreamSequence();
+  assert.equal(sequence.observe({ seq: 1, type: "reset" }), null);
+  assert.deepEqual(sequence.observe({ seq: 3, type: "synced" }), { expected: 2, received: 3 });
+  assert.deepEqual(sequence.observe({ seq: Number.NaN, type: "synced" }), { expected: 2, received: Number.NaN });
 });
 
 test("an unknown event type and an unknown field are ignored, not fatal", () => {

@@ -93,7 +93,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -145,7 +145,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -246,7 +246,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -396,7 +396,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -474,7 +474,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -563,7 +563,7 @@
       "namespace": "app",
       "name": "app-config"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -602,7 +602,7 @@
       "resource": "deployments",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -702,7 +702,7 @@
       "resource": "deployments",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -763,7 +763,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -833,7 +833,7 @@
       "resource": "flunders",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -881,7 +881,7 @@
       "resource": "flunders",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -915,7 +915,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -984,7 +984,7 @@
   {
     "id": "secret-redaction",
     "title": "A redacted value is not on the wire at all — the key is disclosed, the value is withheld.",
-    "why": "Keys-only disclosure, and the reason it is now SAFE by construction rather than by discipline.\nThe projection used to substitute a mask — `**REDACTED**` — for a Secret's value. That mask was the only poisoned value in the system, and we invented it: a browser holding it can send it back on an ordinary save, and the literal string `**REDACTED**` is written OVER the real secret. The token is destroyed, and from the browser it looked like a green tick. It needed a guard on every adopter's save endpoint, forever, correctly (proposal 0003).\nSo we stopped inventing it. Two obligations now, and neither is belt-and-braces:\n\n  1. the gateway DELETES the value and declares the path (RFC 6901 pointers) in `redactedPaths` —\n     on the wire, per object, mandatory, authoritative. That array is where the consumer learns\n     `token` exists at all, and it carries everything the mask used to carry;\n  2. the client marks those paths read-only: no draft, no dirty, no conflict, never in a patch.\n\nThe third obligation — \"the server must reject a patch touching a redacted path\" — is GONE, because the thing it defended against cannot happen: there is no redacted value anywhere for a draft to hold or a patch to carry.\nEditing an UNREDACTED field of the same object must still work — that is the whole point of keys-only disclosure. You can see that `token` exists, you can rename the object's labels, and you can never learn or clobber the token itself.\n",
+    "why": "Keys-only disclosure, and the reason it is now SAFE by construction rather than by discipline.\nThe projection used to substitute a mask — `**REDACTED**` — for a Secret's value. That mask was the only poisoned value in the system, and we invented it: a browser holding it can send it back on an ordinary save, and the literal string `**REDACTED**` is written OVER the real secret. The token is destroyed, and from the browser it looked like a green tick. It needed a guard on every adopter's save endpoint, forever, correctly (proposal 0003).\nSo we stopped inventing it. Two obligations now, and neither is belt-and-braces:\n\n  1. the gateway DELETES the value and declares the path (RFC 6901 pointers) in `redacted` —\n     on the wire, per object, mandatory, authoritative. That array is where the consumer learns\n     `token` exists at all, and it carries everything the mask used to carry;\n  2. the client marks those paths read-only: no draft, no dirty, no conflict, never in a patch.\n\nThe third obligation — \"the server must reject a patch touching a redacted path\" — is GONE, because the thing it defended against cannot happen: there is no redacted value anywhere for a draft to hold or a patch to carry.\nEditing an UNREDACTED field of the same object must still work — that is the whole point of keys-only disclosure. You can see that `token` exists, you can rename the object's labels, and you can never learn or clobber the token itself.\n",
     "suites": [
       "gateway",
       "client"
@@ -995,7 +995,7 @@
       "resource": "secrets",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -1011,9 +1011,15 @@
       {
         "type": "added",
         "body": "secret-token.v1-wire",
-        "redactedPaths": [
-          "/data/token",
-          "/data/username"
+        "redacted": [
+          {
+            "path": "/data/token",
+            "rev": 1
+          },
+          {
+            "path": "/data/username",
+            "rev": 1
+          }
         ]
       },
       {
@@ -1077,7 +1083,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -1132,8 +1138,8 @@
   },
   {
     "id": "status-only-churn",
-    "title": "status follows the server live, and is never dirty, never conflicted, never in a patch.",
-    "why": "This is the product thesis in one fixture. `status` is controller-owned: it must update live (that is the whole live-status-watch use case — read-only is NOT ignored, it flashes and re-renders), and it must be structurally incapable of becoming an edit. Meanwhile the user is editing `spec.replicas`, and a status heartbeat must not touch it.\nOn a real workload this — not editing — is the dominant traffic on the stream.\n",
+    "title": "A status-only update produces no event when the selected projection ignores status.",
+    "why": "`krm-spec/v1` ignores `status`, so a controller-only update must emit no event at all. Meanwhile the user is editing `spec.replicas`; the suppressed status heartbeat must not touch that draft.\nOn a real workload this — not editing — is the dominant traffic on the stream.\n",
     "suites": [
       "gateway",
       "client"
@@ -1145,7 +1151,7 @@
       "resource": "deployments",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-spec/v1",
     "watch": [
       {
         "op": "list",
@@ -1164,14 +1170,10 @@
       },
       {
         "type": "added",
-        "body": "deploy-web.v1"
+        "body": "deploy-web.v1-spec"
       },
       {
         "type": "synced"
-      },
-      {
-        "type": "modified",
-        "body": "deploy-web.v2"
       }
     ],
     "client": {
@@ -1198,27 +1200,13 @@
         "draftSubset": {
           "spec": {
             "replicas": 4
-          },
-          "status": {
-            "readyReplicas": 2,
-            "observedGeneration": 4
           }
         },
         "patch": {
           "spec": {
             "replicas": 4
           }
-        },
-        "flashed": [
-          [
-            "status",
-            "readyReplicas"
-          ],
-          [
-            "status",
-            "conditions"
-          ]
-        ]
+        }
       }
     }
   },
@@ -1235,7 +1223,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",

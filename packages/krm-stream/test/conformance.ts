@@ -5,7 +5,17 @@
 // "contract" is just two implementations agreeing to disagree.
 
 import { readFileSync } from "node:fs";
-import type { ErrorCode, EventType, Identity, KRMObject, Path, Projection, Scope, StreamEvent } from "../src/types.ts";
+import type {
+  ErrorCode,
+  EventType,
+  Identity,
+  KRMObject,
+  Path,
+  Projection,
+  Redaction,
+  Scope,
+  StreamEvent,
+} from "../src/types.ts";
 
 // Resolved relative to THIS file, not to the working directory — so `node --test` works from
 // anywhere, and so does an editor's inline test runner.
@@ -41,7 +51,7 @@ export interface FixtureCheckpoint extends FixtureExpect {
 export interface FixtureEvent {
   type: EventType;
   body?: string;
-  redactedPaths?: string[];
+  redacted?: Redaction[];
   identity?: Identity;
   code?: ErrorCode;
   terminal?: boolean;
@@ -89,16 +99,16 @@ export function allBodies(): Record<string, KRMObject> {
 export function resolve(f: Fixture, fe: FixtureEvent): StreamEvent {
   switch (fe.type) {
     case "reset":
-      return { type: "reset", target: f.scope?.target, scope: f.scope, projection: f.projection };
+      return { seq: 0, type: "reset", target: f.scope?.target, scope: f.scope, projection: f.projection };
     case "added":
     case "modified":
-      return { type: fe.type, object: body(fe.body!), redactedPaths: fe.redactedPaths ?? [] };
+      return { seq: 0, type: fe.type, object: body(fe.body!), redacted: fe.redacted ?? [] };
     case "deleted":
-      return { type: "deleted", identity: fe.identity };
+      return { seq: 0, type: "deleted", identity: fe.identity };
     case "synced":
-      return { type: "synced" };
+      return { seq: 0, type: "synced" };
     case "error":
-      return { type: "error", code: fe.code, terminal: fe.terminal ?? false };
+      return { seq: 0, type: "error", code: fe.code, terminal: fe.terminal ?? false };
     default:
       throw new Error(`conformance: unknown event type ${JSON.stringify(fe.type)}`);
   }

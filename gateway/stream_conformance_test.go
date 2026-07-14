@@ -162,6 +162,7 @@ func assertEventsEqual(t *testing.T, want, got []Event) {
 // and would push a gateway towards emitting nothing, which is worse for whoever has to debug it at
 // 3am. So: the code and the terminal flag are pinned exactly, the prose must merely exist.
 func wireForm(ev Event) Event {
+	ev.Seq = 0
 	if ev.Type == EventError {
 		ev.Message = ""
 	}

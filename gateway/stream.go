@@ -2,7 +2,11 @@ package gateway
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"reflect"
 	"strings"
 )
 
@@ -72,10 +76,14 @@ type Gateway struct {
 	Auth Authorizer
 	// Clients resolves (target, principal) to an upstream. Required.
 	Clients ClientFor
-	// Projection is what this stream removes and masks. Defaults to krm-editor/v1 — the safe one:
+	// Projection is what this stream removes and masks. Defaults to krm-full/v1 — the safe one:
 	// a gateway that defaults to raw and streams Secret values because someone forgot a config line
 	// has a vulnerability, not a bug.
 	Projection Projection
+	// Projections selects a projection authorized for this principal and scope. If nil, Projection is
+	// used as a safe static policy (defaulting to krm-full/v1). A browser may request a name but never
+	// supplies the projection rules themselves.
+	Projections ProjectionPolicy
 	// Ordering is how far the upstream's resourceVersions may be trusted. The zero value is
 	// OrderingStrict: this library targets Kubernetes 1.35+, where orderability is a conformance
 	// requirement, and it says so rather than degrading quietly on every cluster to accommodate one.
@@ -88,9 +96,19 @@ type Gateway struct {
 // connection. A browser's EventSource reconnects automatically otherwise, and would hammer a
 // forbidden scope forever.
 func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, sink Sink) error {
-	projection := g.Projection
-	if projection == "" {
-		projection = ProjectionEditor
+	return g.StreamProjection(ctx, principal, scope, "", sink)
+}
+
+// StreamProjection runs a stream with a caller-requested projection name. The host policy selects
+// the effective view; callers never provide projection rules or bypass authorization.
+func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, scope Scope, requested Projection, sink Sink) error {
+	sink = &sequenceSink{sink: sink}
+	// Redaction revisions are per connection. Unlike suppression state they survive resync cycles, so
+	// the first snapshot after a gap can report a withheld value that changed while disconnected.
+	revisions := map[string]map[string]redactionState{}
+	policy := g.Projections
+	if policy == nil {
+		policy = StaticProjection(g.Projection)
 	}
 
 	for cycles := 0; ; cycles++ {
@@ -123,12 +141,19 @@ func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, 
 		if err := g.Auth.Authorize(ctx, principal, scope); err != nil {
 			return emitTerminal(ctx, sink, err)
 		}
+		projection, err := policy.SelectProjection(ctx, principal, scope, requested)
+		if err != nil {
+			return emitTerminal(ctx, sink, err)
+		}
+		if !isBuiltinProjection(projection) {
+			return emitTerminal(ctx, sink, &StreamError{Code: CodeInternal, Terminal: true, Message: "projection policy selected an unknown projection: " + string(projection)})
+		}
 		backend, err := g.Clients(scope.Target, principal)
 		if err != nil {
 			return emitTerminal(ctx, sink, err)
 		}
 
-		err = g.cycle(ctx, backend, scope, projection, sink)
+		err = g.cycle(ctx, backend, scope, projection, revisions, sink)
 		switch {
 		case err == nil:
 			// A cycle only ends by error or cancellation; nil would be a bug in the loop below.
@@ -150,9 +175,18 @@ func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, 
 	}
 }
 
+func isBuiltinProjection(projection Projection) bool {
+	switch projection {
+	case ProjectionRaw, ProjectionFull, ProjectionSpec:
+		return true
+	default:
+		return false
+	}
+}
+
 // cycle runs exactly one snapshot cycle and the live tail that follows it, returning when upstream
 // continuity is lost (or the context is done).
-func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, projection Projection, sink Sink) error {
+func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, projection Projection, revisions map[string]map[string]redactionState, sink Sink) error {
 	w, err := backend.Watch(ctx, scope)
 	if err != nil {
 		return err
@@ -169,6 +203,9 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 	// across cycles would silently swallow the snapshot of an object whose resourceVersion had not
 	// moved — the object would simply never arrive, and the consumer would prune it.
 	emitted := map[string]string{}
+	// Suppression state is also per cycle. A reset tells the client to mark every resource unseen, so
+	// suppressing an unchanged snapshot object would make synced prune a real resource.
+	digests := map[string]string{}
 
 	for {
 		ev, err := w.Next(ctx)
@@ -201,7 +238,7 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 				// the truth instead of guessing at it.
 				return ResyncRequired(reason)
 			}
-			obj, redacted := project(projection, ev.Object)
+			obj, values := project(projection, ev.Object)
 			uid := obj.UID()
 			stale, err := isStale(g.Ordering, emitted, uid, obj)
 			if err != nil {
@@ -210,10 +247,19 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 			if stale {
 				continue
 			}
-			out := Event{Type: EventAdded, Object: obj, RedactedPaths: redacted}
+			redacted := observeRedactions(revisions, uid, values)
+			out := Event{Type: EventAdded, Object: obj, Redacted: redacted}
 			if ev.Type == WatchModified {
 				out.Type = EventModified
 			}
+			digest, err := visibleDigest(out)
+			if err != nil {
+				return err
+			}
+			if digests[uid] == digest {
+				continue
+			}
+			digests[uid] = digest
 			if err := sink.Emit(ctx, out); err != nil {
 				return err
 			}
@@ -233,6 +279,8 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 				return err
 			}
 			delete(emitted, id.UID)
+			delete(digests, id.UID)
+			delete(revisions, id.UID)
 
 		case WatchError:
 			if ev.Err != nil {
@@ -241,6 +289,51 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 			return ResyncRequired("upstream error")
 		}
 	}
+}
+
+type redactionState struct {
+	value any
+	rev   uint64
+}
+
+func observeRedactions(all map[string]map[string]redactionState, uid string, values []redactedValue) []Redaction {
+	previous := all[uid]
+	if previous == nil {
+		previous = map[string]redactionState{}
+	}
+	next := make(map[string]redactionState, len(values))
+	out := make([]Redaction, 0, len(values))
+	for _, value := range values {
+		state, known := previous[value.path]
+		if !known {
+			state = redactionState{value: deepCopyValue(value.value), rev: 1}
+		} else if !reflect.DeepEqual(state.value, value.value) {
+			state.value = deepCopyValue(value.value)
+			state.rev++
+		}
+		next[value.path] = state
+		out = append(out, Redaction{Path: value.path, Rev: state.rev})
+	}
+	all[uid] = next
+	return out
+}
+
+func visibleDigest(event Event) (string, error) {
+	object := deepCopyObject(event.Object)
+	if meta, ok := object["metadata"].(map[string]any); ok {
+		delete(meta, "resourceVersion")
+	}
+	// encoding/json sorts map keys, so equivalent projected views have one deterministic byte form.
+	view := struct {
+		Object   KRMObject   `json:"object"`
+		Redacted []Redaction `json:"redacted"`
+	}{Object: object, Redacted: event.Redacted}
+	b, err := json.Marshal(view)
+	if err != nil {
+		return "", err
+	}
+	digest := sha256.Sum256(b)
+	return hex.EncodeToString(digest[:]), nil
 }
 
 // partialReason says why an object must not be forwarded as added/modified, or "" if it may be.

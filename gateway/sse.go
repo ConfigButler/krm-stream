@@ -113,6 +113,12 @@ func WriteSSEHeaders(w http.ResponseWriter) {
 // stream ends — at which point the caller returning from its handler closes the connection, which is
 // what a terminal error requires.
 func (g *Gateway) ServeStream(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope) {
+	g.ServeStreamProjection(w, r, principal, scope, "")
+}
+
+// ServeStreamProjection writes a stream using a caller-requested projection name. Projection
+// authorization happens inside StreamProjection so direct callers and HTTP share the same rule.
+func (g *Gateway) ServeStreamProjection(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope, projection Projection) {
 	WriteSSEHeaders(w)
 
 	sink := NewSSESink(w)
@@ -125,5 +131,5 @@ func (g *Gateway) ServeStream(w http.ResponseWriter, r *http.Request, principal 
 	// The error is already ON the wire by the time Stream returns — emitting it is how the consumer
 	// learns anything. There is nothing left to tell the HTTP layer: the status line went out with
 	// the very first byte, long before we could have known.
-	_ = g.Stream(ctx, principal, scope, sink)
+	_ = g.StreamProjection(ctx, principal, scope, projection, sink)
 }

@@ -39,7 +39,7 @@ test("every event resolves to a well-formed wire event", () => {
         assert.ok(ev.object?.metadata?.uid, `${f.id} event ${i}: an object on the wire has a uid`);
         // Required, not optional: a consumer must never have to INFER redaction from a value that
         // merely looks like a placeholder.
-        assert.ok(Array.isArray(ev.redactedPaths), `${f.id} event ${i}: redactedPaths must be present`);
+        assert.ok(Array.isArray(ev.redacted), `${f.id} event ${i}: redacted must be present`);
       }
       if (ev.type === "deleted") {
         assert.ok(ev.identity?.uid, `${f.id} event ${i}: a tombstone carries a trustworthy uid`);

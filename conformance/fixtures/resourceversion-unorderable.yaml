@@ -27,7 +27,7 @@ why: >
   resource versions look like when the first object arrives. It cannot know from the scope alone.
 suites: [gateway]
 scope: { target: demo, group: wardle.example.com, version: v1alpha1, resource: flunders, namespace: app }
-projection: krm-editor/v1
+projection: krm-full/v1
 
 watch:
   - { op: list, bodies: [flunder.v3-opaque] }

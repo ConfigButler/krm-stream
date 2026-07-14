@@ -52,7 +52,7 @@ title: A server change to a key you are NOT editing must not disturb the key you
 why: R-THREEWAY — the base is the PREVIOUS server object, not the draft.
 suites: [gateway, client]
 scope: { target: demo, version: v1, resource: configmaps, namespace: app }
-projection: krm-editor/v1
+projection: krm-full/v1
 
 watch:                                    # see "The watch ops" below
   - { op: list, bodies: [cm-app.v1] }

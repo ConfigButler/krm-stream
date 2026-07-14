@@ -68,12 +68,12 @@ type WatchOp struct {
 // FixtureEvent is an Event with its object given by REFERENCE into bodies/, so a scenario stays
 // readable. Resolve() turns it into the real thing.
 type FixtureEvent struct {
-	Type          EventType `json:"type"`
-	Body          string    `json:"body"`
-	RedactedPaths []string  `json:"redactedPaths"`
-	Identity      *Identity `json:"identity"`
-	Code          ErrorCode `json:"code"`
-	Terminal      bool      `json:"terminal"`
+	Type     EventType   `json:"type"`
+	Body     string      `json:"body"`
+	Redacted []Redaction `json:"redacted"`
+	Identity *Identity   `json:"identity"`
+	Code     ErrorCode   `json:"code"`
+	Terminal bool        `json:"terminal"`
 }
 
 // Suite reports whether this fixture is one the given suite must run.
@@ -123,9 +123,9 @@ func (c Corpus) Resolve(scope *Scope, projection Projection, fe FixtureEvent) (E
 		ev.Object = obj
 		// The protocol requires the array to be PRESENT, never merely optional — so a nil one
 		// becomes empty here rather than vanishing from the JSON.
-		ev.RedactedPaths = fe.RedactedPaths
-		if ev.RedactedPaths == nil {
-			ev.RedactedPaths = []string{}
+		ev.Redacted = fe.Redacted
+		if ev.Redacted == nil {
+			ev.Redacted = []Redaction{}
 		}
 	case EventDeleted:
 		ev.Identity = fe.Identity
