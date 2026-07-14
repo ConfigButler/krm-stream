@@ -54,6 +54,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
 
 	"github.com/ConfigButler/krm-stream/gateway"
@@ -73,6 +74,13 @@ const initialEventsEndAnnotation = metav1.InitialEventsAnnotationKey
 type Backend struct {
 	client dynamic.Interface
 
+	// host is what this backend dialed, for error messages ONLY — it is never sent to a browser and
+	// never parsed. An upstream error that names neither the server nor the resource path reads like
+	// "that resource does not exist", when what actually happened may be "you built the wrong URL".
+	// A kcp workspace, whose kubeconfig carries a path prefix, is exactly where the two are
+	// indistinguishable without this.
+	host string
+
 	// mu guards listThenWatch, which is a per-GroupVersion memory of "this API refused the
 	// streaming list". It is a cache of a fact about the SERVER, not about a request, so it is
 	// shared across every stream this Backend serves.
@@ -81,11 +89,52 @@ type Backend struct {
 }
 
 // NewBackend wraps a dynamic client as a gateway upstream.
+//
+// The client alone cannot say what server it points at, so errors from this constructor name the
+// resource path but not the host. Prefer NewBackendForConfig, which knows both.
 func NewBackend(client dynamic.Interface) *Backend {
 	return &Backend{
 		client:        client,
 		listThenWatch: map[schema.GroupVersion]bool{},
 	}
+}
+
+// NewBackendForConfig builds the dynamic client AND remembers the address it will dial, so that an
+// upstream failure can say where it happened.
+//
+// Path-prefixed hosts work, and this is the constructor that makes them debuggable: a kcp workspace
+// URL (https://kcp.example/clusters/root:org:ws) is an ordinary rest.Config.Host as far as client-go
+// is concerned, and the dynamic client appends /apis/... to it correctly. If you build that URL
+// wrongly — two /clusters/ segments, say — the API server answers "the server could not find the
+// requested resource", which is indistinguishable from "that CRD is not installed" until the error
+// tells you which URL it dialed. Now it does.
+func NewBackendForConfig(cfg *rest.Config) (*Backend, error) {
+	client, err := dynamic.NewForConfig(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("krm-stream/kube: dynamic client for %s: %w", cfg.Host, err)
+	}
+	b := NewBackend(client)
+	b.host = cfg.Host
+	return b, nil
+}
+
+// upstream describes what a failing call was actually reaching for: the server, and the resource path
+// built from the scope. Both halves are what a "could not find the requested resource" needs before
+// it can be diagnosed rather than guessed at.
+func (b *Backend) upstream(scope gateway.Scope) string {
+	path := "/api/" + scope.Version
+	if scope.Group != "" {
+		path = "/apis/" + scope.Group + "/" + scope.Version
+	}
+	if scope.Namespace != "" {
+		path += "/namespaces/" + scope.Namespace
+	}
+	path += "/" + scope.Resource
+
+	if b.host == "" {
+		return path
+	}
+	return strings.TrimSuffix(b.host, "/") + path
 }
 
 var _ gateway.Backend = (*Backend)(nil)
@@ -114,7 +163,7 @@ func (b *Backend) Watch(ctx context.Context, scope gateway.Scope) (gateway.Watch
 		// is NOT ours to paper over. Falling back on every failure would turn "you may not watch
 		// Secrets" into a second, differently-worded permission denial, which is how a gateway ends
 		// up lying about why it could not open a stream.
-		return nil, fmt.Errorf("krm-stream/kube: streaming list for %s: %w", scope.Resource, err)
+		return nil, fmt.Errorf("krm-stream/kube: streaming list for %s: %w", b.upstream(scope), err)
 	}
 
 	// F6, in production. This API is aggregated (or otherwise has WatchList off); §3b is not a
@@ -181,7 +230,7 @@ func (b *Backend) rememberListThenWatch(gv schema.GroupVersion) {
 func (b *Backend) listThenWatchStream(ctx context.Context, ri dynamic.ResourceInterface, scope gateway.Scope) (gateway.Watcher, error) {
 	list, err := ri.List(ctx, selectors(scope))
 	if err != nil {
-		return nil, fmt.Errorf("krm-stream/kube: list %s: %w", scope.Resource, err)
+		return nil, fmt.Errorf("krm-stream/kube: list %s: %w", b.upstream(scope), err)
 	}
 
 	o := selectors(scope)
@@ -190,7 +239,7 @@ func (b *Backend) listThenWatchStream(ctx context.Context, ri dynamic.ResourceIn
 	w, err := ri.Watch(ctx, o)
 	if err != nil {
 		return nil, fmt.Errorf("krm-stream/kube: watch %s from resourceVersion %q: %w",
-			scope.Resource, list.GetResourceVersion(), err)
+			b.upstream(scope), list.GetResourceVersion(), err)
 	}
 
 	// The snapshot, in the shape §3a would have delivered it — including the boundary bookmark,

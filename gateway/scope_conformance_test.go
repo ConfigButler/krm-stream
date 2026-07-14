@@ -2,6 +2,7 @@ package gateway_test
 
 import (
 	"encoding/json"
+	"errors"
 	"net/url"
 	"os"
 	"testing"
@@ -48,11 +49,17 @@ func TestScopeFromQueryConformance(t *testing.T) {
 				t.Fatalf("the fixture's own query does not parse: %v", err)
 			}
 
-			got, serr := gateway.ScopeFromQuery(q)
+			got, err := gateway.ScopeFromQuery(q)
 
 			if c.Code != "" {
-				if serr == nil {
+				if err == nil {
 					t.Fatalf("expected %s (%s), but the scope was ACCEPTED as %+v", c.Code, c.Because, got)
+				}
+				// errors.As, because the exported surface speaks `error` — see ScopePolicy.Validate on
+				// why. This is the pattern a host copies to get at the wire code.
+				var serr *gateway.StreamError
+				if !errors.As(err, &serr) {
+					t.Fatalf("rejection was not a *StreamError: %v", err)
 				}
 				if string(serr.Code) != c.Code {
 					t.Errorf("code = %s, want %s", serr.Code, c.Code)
@@ -65,8 +72,8 @@ func TestScopeFromQueryConformance(t *testing.T) {
 				return
 			}
 
-			if serr != nil {
-				t.Fatalf("valid scope was rejected: %v (%s)", serr, c.Because)
+			if err != nil {
+				t.Fatalf("valid scope was rejected: %v (%s)", err, c.Because)
 			}
 			if got != c.Scope {
 				t.Errorf("scope = %+v, want %+v", got, c.Scope)

@@ -32,13 +32,15 @@ var forbiddenParams = []string{"server", "apiserver", "api-server", "url", "endp
 
 // ScopeFromQuery parses and validates a scope from a URL query, or explains why it will not.
 //
-// The error is a *StreamError with CodeScopeInvalid and Terminal set: a browser's EventSource
-// reconnects on its own, so a non-terminal rejection would have it hammer a malformed scope forever.
+// It returns `error`, not `*StreamError`, and that is deliberate — see the note on ScopePolicy.Validate.
+// The concrete value IS a *StreamError with CodeScopeInvalid and Terminal set (a browser's EventSource
+// reconnects on its own, so a non-terminal rejection would have it hammer a malformed scope forever);
+// reach it with errors.As when you need the code.
 //
 // Unknown parameters are TOLERATED (a host may carry its own — the replay server has `fixture` and
 // `pace`) except for the ones in forbiddenParams, which are the ones that would mean something
 // dangerous if we were the kind of gateway that honoured them.
-func ScopeFromQuery(q url.Values) (Scope, *StreamError) {
+func ScopeFromQuery(q url.Values) (Scope, error) {
 	for _, p := range forbiddenParams {
 		for key := range q {
 			if strings.EqualFold(key, p) {
@@ -181,7 +183,29 @@ type ScopePolicy struct {
 }
 
 // Validate reports whether a scope is one this gateway will stream at all.
-func (p ScopePolicy) Validate(s Scope) *StreamError {
+//
+// # Why this returns `error` and not `*StreamError`
+//
+// Because returning a concrete pointer type from a fallible exported function is the Go typed-nil
+// trap, and this one is a security control. A caller writing the ordinary thing:
+//
+//	var err error          // …or an err already in scope from something else
+//	if err = policy.Validate(scope); err != nil {
+//		return err     // FIRES ON SUCCESS. Always.
+//	}
+//
+// gets a non-nil `error` holding a nil *StreamError, because an interface holding a typed nil is not
+// nil. Validate said yes and the caller read no. That version fails safe, and it is the lucky one: an
+// authorizer written the same way refuses everyone and someone notices in a minute. Invert the check —
+// `if err == nil { serve() }` — and the same bug admits everyone, silently, and nobody notices at all.
+//
+// So the exported surface speaks `error`, which callers cannot get wrong. The concrete value is still
+// a *StreamError, and the gateway still switches on it internally; a host that wants the wire code
+// asks for it explicitly:
+//
+//	var se *gateway.StreamError
+//	if errors.As(err, &se) { … se.Code … }
+func (p ScopePolicy) Validate(s Scope) error {
 	if s.LabelSelector != "" && !p.AllowLabelSelector {
 		return ScopeInvalid("label selectors are not enabled for this stream endpoint")
 	}

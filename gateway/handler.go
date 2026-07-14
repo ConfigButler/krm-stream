@@ -108,12 +108,12 @@ func Handler(o Options) http.Handler {
 			return
 		}
 
-		scope, serr := ScopeFromQuery(r.URL.Query())
-		if serr == nil {
-			serr = o.Scopes.Validate(scope)
+		scope, err := ScopeFromQuery(r.URL.Query())
+		if err == nil {
+			err = o.Scopes.Validate(scope)
 		}
-		if serr != nil {
-			refuse(w, serr)
+		if err != nil {
+			refuse(w, asStreamError(err))
 			return
 		}
 

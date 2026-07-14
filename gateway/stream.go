@@ -497,9 +497,16 @@ func isDecimalResourceVersion(rv string) bool {
 	return true
 }
 
+// asStreamError finds the *StreamError a host meant to send, or makes one.
+//
+// The `se == nil` arm is the typed-nil trap seen from the other side. A host whose Authorizer is
+// declared to return `error` and returns a nil *StreamError hands us a non-nil error interface
+// wrapping nothing: errors.As matches, sets se to nil, and every path downstream would dereference it
+// to build the event. That is a panic in the gateway caused by a bug in a host — so it is refused as
+// an internal error instead, which is the honest description and does not take the process down.
 func asStreamError(err error) *StreamError {
 	var se *StreamError
-	if !errors.As(err, &se) {
+	if !errors.As(err, &se) || se == nil {
 		return &StreamError{Code: CodeInternal, Message: err.Error(), Terminal: true}
 	}
 	return se
