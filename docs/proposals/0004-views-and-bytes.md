@@ -37,8 +37,9 @@ changed. Nothing derived from the secret ever leaves the process, and the entire
 — HMACs, per-stream keys, offline-cracking risk — **evaporates**. §4.
 
 Both cases then collapse into one vocabulary: a projection decides, per path, whether to **send**,
-**redact** (you learn the path exists and when it changes, never what it is) or **remove** (it is as
-if it never existed). **"Redaction" was never a feature — it is one of three verbs.** §2.
+**redact** (you learn the path exists and when it changes, never what it is) or **ignore** (it is as
+if it never existed, and it never wakes you). **"Redaction" was never a feature — it is one of three
+verbs.** §2.
 
 ---
 
@@ -80,26 +81,48 @@ path.**
 > |---|---|---|---|
 > | **`send`** | you get it | — | ✅ |
 > | **`redact`** | **never leaves the gateway** | ✅ (`redacted[].path`) | ✅ (`redacted[].rev`) |
-> | **`remove`** | never leaves the gateway | ❌ — it is as if it never existed | ❌ **never. Zero events.** |
+> | **`ignore`** | never leaves the gateway | ❌ — it is as if it never existed | ❌ **never. Zero events.** |
 
-### On the naming, because an earlier draft got it wrong
+### On the naming, because two earlier drafts got it wrong
 
-That draft called these `withhold` and `drop`. **`redact` is the right word and it was already ours.**
-A redacted document has a *black bar*: you can see that something was taken, and you cannot see what.
-That is precisely `redact` — and it is exactly what `redactedPaths` has always meant. Inventing
-`withhold` was inventing a word for a concept that already had one.
+The first draft called these `withhold` and `drop`. The second, `redact` and `remove`. The candidates
+were then `send` / `inform` / `ignore`. Working through it is worth recording, because the two verbs
+are decided by *different* arguments:
 
-And the silent case already has a word too, in spec §3's own text: a field the gateway **removed** —
-*"never shown, and never named"*. So the vocabulary is `send` / `redact` / `remove`, all three of them
-words the spec is already using. **The generalisation is real; the neologism was not.**
+**`redact`, not `inform` or `withhold`.** A redacted document has a *black bar*: you can see something
+was taken, and you cannot see what. That is exactly this verb, and exactly what `redactedPaths` has
+always meant — so `withhold` was inventing a word for a concept that already had one.
+
+`inform` is the more interesting rival, and it loses on two counts. It is **ambiguous** — read
+`Inform: ["/data/token"]` cold and ask *inform whom, of what?*; `Redact: ["/data/token"]` is
+unmistakable. And, more importantly, **`redact` is a security term of art, and that is the point**:
+the word is what catches a reviewer's eye scanning a diff, and it carries *"this is secret"* without
+anybody reading the documentation. `inform` sounds like a notification preference. It is the same
+argument that keeps the disclosing projection called `raw` rather than `verbose` (§2.1) — **the scary
+word does its work precisely on the person who is not reading carefully.**
+
+*(`inform` does name one real thing that `redact` does not: our redaction now tells you **when the
+value changed**, which plain redaction does not imply. But that gap closes for free in the envelope —
+`redacted: [{path, rev}]`, with the counter right there, self-documenting. The security legibility
+`inform` would cost cannot be bought back that way, because its whole value is working on someone who
+is not reading.)*
+
+**`ignore`, not `remove`.** Here the owner's word is simply better, and it took a moment to see why.
+`remove` describes what happens to the **object** — the key is gone. But the thing this proposal is
+*about* is what happens to the **events**: a change there must **never wake you**. `remove` merely
+*implies* that (by way of suppression); **`ignore` states it.** It is the stronger claim and the one a
+reader actually needs.
+
+So: **`send` / `redact` / `ignore`** — one verb chosen for what it does to the object's *value*, one
+for what it does to the *stream*, and both for saying so out loud.
 
 Everything in this document collapses into the table:
 
 | path | verb | why |
 |---|---|---|
-| `metadata.managedFields` | `remove` | nobody wants it, and nobody wants to be woken by it |
+| `metadata.managedFields` | `ignore` | nobody wants it, and nobody wants to be woken by it |
 | `Secret` `/data/*` values | **`redact`** | *"I may not see it, but I want to know it rotated"* — the owner's case, exactly |
-| `status`, for a status-blind editor | `remove` | the motivating case: **zero traffic** |
+| `status`, for a status-blind editor | `ignore` | the motivating case: **zero traffic** |
 | `status`, for an editor or a dashboard | `send` | the product's headline |
 
 `redactedPaths` becomes `redacted[]` and carries the `rev` from §4 for free. **One concept, one
@@ -107,9 +130,9 @@ envelope field, one code path** — instead of a Secret-shaped special case bolt
 
 ### It makes the central trade *explicit* rather than hidden
 
-`redact` and `remove` differ in exactly one way, and it is the finding from §0:
+`redact` and `ignore` differ in exactly one way, and it is the finding from §0:
 
-- **`remove` = zero events.** A change you were never told about cannot wake you.
+- **`ignore` = zero events.** A change you were never told about cannot wake you.
 - **`redact` = one small event per change.** You asked to know, so you get told — and *being told costs
   an event*, which is the whole thing §0 warns about.
 
@@ -128,9 +151,9 @@ Short list, on purpose. Each one is a **code change** to add, which is the point
 |---|---|---|---|---|---|
 | `krm-raw/v1` | send | send | send | **send** ⚠️ | an operator console that is *meant* to disclose |
 | **`krm-full/v1`** *(default)* | send | send | send | **redact** | the editing case, and the live-status case. Both. |
-| **`krm-spec/v1`** | send | send | **remove** | redact | an editor that never renders status → **zero traffic** under status churn |
+| **`krm-spec/v1`** | send | send | **ignore** | redact | an editor that never renders status → **zero traffic** under status churn |
 
-*(All three `remove` `managedFields` and the last-applied annotation. Nothing wants those.)*
+*(All three `ignore` `managedFields` and the last-applied annotation. Nothing wants those.)*
 
 ### Two naming notes, one of which is a safety property
 
@@ -149,7 +172,7 @@ never edits. **Dropped, and the owner's instinct was right for a reason worth wr
 resource and is not one — you cannot round-trip it, you cannot diff it against the cluster, and every
 consumer that receives one has to know it is holding half a thing. This project's entire thesis is
 *"the payload is a Kubernetes object — not an abstracted document"* (spec §0). A projection that
-removes `spec` quietly abandons that.
+ignores `spec` quietly abandons that.
 
 **And the byte argument for it does not survive contact with §5.** The obvious case for it is: under
 `I-REPLACE`, every status event re-sends the whole object, *including a `spec` that did not change* —
@@ -158,7 +181,7 @@ stream with one sliding window**: the previous event's `spec` is still in that w
 an identical `spec` costs **almost nothing on the wire.** Compression eats this problem for free,
 without inventing a payload that is not a KRM object.
 
-So: pay for `remove` when you want **zero events** (that is `krm-spec/v1`, and it is a real win that
+So: pay for `ignore` when you want **zero events** (that is `krm-spec/v1`, and it is a real win that
 compression cannot give you). Do not pay for it merely to shave repeated bytes — gzip already did.
 
 ## 2.2 Custom projections: yes, but only the **host** may define one
@@ -176,7 +199,7 @@ the thing that redacts Secrets.
   ```go
   gateway.Handler(gateway.Options{
       Projections: map[gateway.Projection]gateway.Rules{
-          "acme-console/v1": {Remove: []string{"/status", "/metadata/annotations"}},
+          "acme-console/v1": {Ignore: []string{"/status"}, Redact: []string{"/data"}},
       },
       // …and the caller may only ASK for a name that is registered.
   })
