@@ -1,22 +1,55 @@
+[![CI](https://github.com/ConfigButler/krm-stream/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/ConfigButler/krm-stream/actions/workflows/ci.yml)
+[![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/ConfigButler/krm-stream/badge)](https://scorecard.dev/viewer/?uri=github.com/ConfigButler/krm-stream)
+[![CodeQL](https://github.com/ConfigButler/krm-stream/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/ConfigButler/krm-stream/actions/workflows/codeql.yml)
+[![npm](https://img.shields.io/npm/v/%40configbutler%2Fkrm-stream?logo=npm&color=cb3837)](https://www.npmjs.com/package/@configbutler/krm-stream)
+[![Runtime dependencies](https://img.shields.io/badge/runtime%20deps-0-2ea44f)](packages/krm-stream/package.json)
+[![Go](https://img.shields.io/badge/go-1.26-blue?logo=go)](gateway/go.mod)
+[![TypeScript](https://img.shields.io/badge/typescript-ESM-3178c6?logo=typescript&logoColor=white)](packages/krm-stream)
+[![License](https://img.shields.io/github/license/ConfigButler/krm-stream)](https://www.apache.org/licenses/LICENSE-2.0)
+[![Open Issues](https://img.shields.io/github/issues/ConfigButler/krm-stream)](https://github.com/ConfigButler/krm-stream/issues)
+
 # krm-stream
 
-Live Kubernetes resource updates for browser apps, with three-way merges for form edits.
+Live Kubernetes resource updates for browser apps.
 
 `krm-stream` turns a Kubernetes watch into a small, browser-safe stream. It ships a Go gateway, a
-headless TypeScript store, and shared conformance fixtures so your product can show live state while
-people are editing it.
+headless TypeScript store with zero runtime dependencies, and shared conformance fixtures, so your
+product can show live cluster state while people are editing it.
 
-## KRM, briefly
+## Is this for you?
 
-KRM means **Kubernetes Resource Model**: the API objects that describe a system, such as a
-`Deployment`, `Service`, `ConfigMap`, or a custom resource. Each object has identity and desired
-state, and Kubernetes continuously reports observed state. Kubernetes calls these objects records
-of intent; [its object model is a good starting point](https://kubernetes.io/docs/concepts/overview/working-with-objects/).
+**Yes, if:**
 
-That model is useful far beyond infrastructure. A platform can model an application, an environment,
-a database request, a feature rollout, access policy, or a business workflow as KRM resources. The
-same live, conflict-aware editing experience should work wherever a resource expresses intent and a
-controller reports what became true.
+- You want to consume a Kubernetes **watch from a browser**, without handing the browser a cluster
+  credential or turning on CORS across your API server.
+- You want to **live-edit Kubernetes resources**, where a concurrent server change is merged into
+  what the user is typing rather than clobbering it, and a genuine conflict is surfaced instead of
+  silently resolved. That is the [three-way merge](docs/glossary.md).
+- You want to **bound the number of real watches** on your API server. Ten tabs on one namespace
+  should be one upstream watch, not ten.
+- You are building a **product**, not a Kubernetes dashboard. The store is headless and picks no UI
+  framework.
+
+**Probably not, if:**
+
+- You just want a **generic three-way merge library**. This one knows what a `resourceVersion` is,
+  that `spec.containers` is keyed by `name` and not by index, and that a redacted field must never be
+  written back. That knowledge is the whole point; if you do not want it, it is weight.
+- You want a **ready-made Kubernetes dashboard**. Use [Headlamp](https://headlamp.dev/). See
+  [alternatives](docs/alternatives.md).
+- You want to **write to the cluster from the browser**. krm-stream is the read-and-edit half: it
+  hands your application a validated merge patch, and your application performs the write. Though if
+  you are doing that, you probably want this library anyway, because it is the thing that tells you
+  the patch is safe to apply. See [saving edits safely](docs/saving.md).
+
+## What is KRM?
+
+**KRM** is the Kubernetes Resource Model: the shape every Kubernetes object has (`apiVersion`,
+`kind`, `metadata`, a desired `spec`, an observed `status`). Custom resources use the same shape,
+which is why this works for your product's own objects, a `Database`, a `FeatureFlag`, a `Tenant`,
+and not only for cluster infrastructure.
+
+Never touched a cluster? The [glossary for frontend developers](docs/glossary.md).
 
 ## Why a gateway
 
@@ -65,6 +98,41 @@ credential or a raw API-server URL.
 
 ## Start here
 
+There are two halves, and they are usually two different people.
+
+### The browser half
+
+No bundler, no framework, no Kubernetes client. `EventSource` is native, and the store is plain ESM:
+
+```ts
+import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "@configbutler/krm-stream";
+
+const store = new LiveResourceStore();
+
+connectWithEventSource(
+  resourceStreamURL("/resource-stream/v1", {
+    target: "production",
+    version: "v1",
+    resource: "configmaps",
+    namespace: "app",
+  }),
+  store,
+  {
+    onChange: (change) => render(change.uid), // what moved, and which resource it moved on
+  },
+);
+
+// The user edits. The server keeps changing underneath them. Neither wins by accident.
+store.setValue(uid, ["spec", "replicas"], 3);
+store.conflicts(uid); // paths where the server disagreed with an edit the user actually made
+store.patch(uid); // an RFC 7386 merge patch of just their changes, or null
+```
+
+If you have no bundler at all and vendor the library by copying it, import
+[`@configbutler/krm-stream/bundle`](packages/krm-stream/README.md): the same API in one file.
+
+### The server half
+
 Mount a scoped stream endpoint in an existing Go application:
 
 ```go
@@ -84,26 +152,12 @@ mux.Handle("/resource-stream/v1", gateway.Handler(gateway.Options{
 }))
 ```
 
-Consume the stream without choosing a UI framework:
+The Go side owns identity, authorization, the Kubernetes credential, and the scope a caller is
+allowed to ask for. It never lets the browser choose which cluster to talk to.
 
-```ts
-import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "@configbutler/krm-stream";
-
-const store = new LiveResourceStore();
-connectWithEventSource(
-  resourceStreamURL("/resource-stream/v1", {
-    target: "production",
-    version: "v1",
-    resource: "configmaps",
-    namespace: "app",
-  }),
-  store,
-);
-```
-
-`LiveResourceStore` keeps server truth and a local draft separate, reconciles live updates with a
-three-way merge, records conflicts, and builds RFC 7386 merge patches. The host applies any patch
-through its own save endpoint.
+`LiveResourceStore` keeps server truth and the local draft separate, reconciles live updates with a
+three-way merge, records conflicts, and builds RFC 7386 merge patches. Your application applies any
+patch through its own save endpoint, which is the one place a write can happen.
 
 ## Packages
 

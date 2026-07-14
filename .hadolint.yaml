@@ -1,0 +1,12 @@
+# hadolint configuration: https://github.com/hadolint/hadolint#configure
+#
+# Lint locally with `task lint-dockerfiles`; it is part of `task lint`.
+ignored:
+  # DL3008, "pin versions in apt-get install". Deliberately not done. .devcontainer/Dockerfile is a
+  # tooling image: not shipped, not published, and in the supply chain of nothing this repo publishes.
+  # Pinning distro packages buys a rebuild that breaks the first time a security update lands. The
+  # versions that matter are pinned in the ENV block, and the base image by digest.
+  - DL3008
+
+# Warnings and errors fail; info and style suggestions surface without blocking.
+failure-threshold: warning

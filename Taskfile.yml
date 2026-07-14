@@ -1,7 +1,24 @@
 version: "3"
 
 # Everything in this repository is driven by `task`.
-# `task` with no argument lists what there is.
+# `task` with no argument lists what there is; `task verify` is the whole gate.
+#
+# # A cache that lies is worse than no cache
+#
+# Task skips work by CHECKSUMMING `sources`. That says nothing about whether the outputs still exist.
+# Two real failures came out of that gap: `rm dist/krm-stream.js && task build-client` reported "up to
+# date" and rebuilt nothing, and `npm install` silently pruned a devDependency when run from a branch
+# that predated it, so a later build died on `sh: 1: esbuild: not found`. Both are the CI bug this all
+# started from: a step reporting success about a thing it never looked at. Hence:
+#
+#   - Every cache-worthy task delivers a file, named individually in `generates`, never a glob.
+#   - Every such task also carries a `status:` that probes the filesystem. That is the check a
+#     checksum cannot do, and it makes a deleted artifact or a pruned dependency self-heal.
+#   - `npm ci`, never `npm install`: the tree is then a pure function of two committed files.
+#   - One definition of a thing. CI runs the same `task pack-client` a developer does.
+#
+# Go's build/test cache is deliberately left alone. It is content-addressed and sound, so a cached
+# `ok` means those exact inputs really did pass. `task clean` does not touch it.
 
 run: once
 
@@ -58,6 +75,19 @@ tasks:
     cmds:
       - git diff --exit-code -- conformance/gen || (echo "conformance/gen is stale — run 'task fixtures' and commit" && exit 1)
 
+  # ------------------------------------------------------------------ verify --
+  verify:
+    desc: "The whole gate, in the order CI runs it. If this passes, CI passes."
+    cmds:
+      # Sequential on purpose: the first failure is the one you want to read, not the fourth.
+      - task: fixtures-check
+      - task: lint
+      - task: test
+      - task: e2e-wire
+      - task: e2e-browser
+      # Last, because nothing else proves it: what we upload contains what the exports map advertises.
+      - task: pack-client
+
   # -------------------------------------------------------------------- test --
   test:
     desc: "Run both suites against the shared conformance fixtures."
@@ -84,7 +114,7 @@ tasks:
 
   test-client:
     desc: "TypeScript: the client + its half of the conformance suite (node --test, no deps)."
-    deps: [fixtures]
+    deps: [fixtures, _client-deps]
     dir: "{{.CLIENT_DIR}}"
     cmds:
       - node --test
@@ -128,18 +158,18 @@ tasks:
         cd {{.CLIENT_DIR}} && REPLAY_URL=http://{{.REPLAY_ADDR}} node e2e/wire.ts
 
   e2e-browser:
-    desc: "End to end in a REAL browser: native EventSource, unbundled ESM, no cluster."
+    desc: "End to end in a REAL browser: native EventSource, unbundled ESM AND the bundle, no cluster."
     # build-client, because playwright's webServer rebuilds the library from packages/krm-stream —
     # and it cannot do that with no node_modules there. On a developer's machine that directory is
     # already populated by `task test`, which is exactly why this gap survived until the first CI run
     # on a clean checkout found it.
-    deps: [fixtures, build-client]
+    deps: [fixtures, build-client, _example-deps]
     dir: examples/vanilla-browser
     cmds:
       # The only place the library's central promise is actually tested: that the published ESM
       # imports in a browser with no bundler. Node importing it proves nothing — Node is not a browser.
-      # Playwright lives in the EXAMPLE's package, so the library keeps its three devDependencies.
-      - npm install --no-audit --no-fund
+      # Playwright lives in the EXAMPLE's package, so the library keeps its four devDependencies.
+      # Runs the suite twice, once per entry point (per-module and ./bundle).
       - npx --no-install playwright install chromium --with-deps
       - npx --no-install playwright test {{.CLI_ARGS}}
 
@@ -155,8 +185,28 @@ tasks:
 
   # -------------------------------------------------------------------- lint --
   lint:
-    desc: "Vet + lint both languages."
-    deps: [lint-gateway, lint-kube, lint-client]
+    desc: "Vet + lint everything: both languages, the workflows, and the Dockerfile."
+    deps: [lint-gateway, lint-kube, lint-client, lint-actions, lint-dockerfiles]
+
+  # A workflow YAML and a Dockerfile were the only files here with no linter, and a workflow is where
+  # the bundle-that-was-never-built bug lived. actionlint also shellchecks every `run:` block.
+  lint-actions:
+    desc: "Lint the GitHub Actions workflows (actionlint: expressions, needs/runs-on, shellcheck on every run: block)."
+    sources:
+      - .github/workflows/*.yml
+      - .github/workflows/*.yaml
+    cmds:
+      # No path argument: actionlint discovers every workflow itself, so a new one is linted the day it
+      # lands rather than the day someone remembers to list it.
+      - actionlint
+
+  lint-dockerfiles:
+    desc: "Lint the devcontainer Dockerfile (hadolint)."
+    sources:
+      - .devcontainer/Dockerfile
+      - .hadolint.yaml
+    cmds:
+      - hadolint .devcontainer/Dockerfile
 
   lint-gateway:
     dir: gateway
@@ -172,6 +222,7 @@ tasks:
       - golangci-lint run --build-tags e2e ./...
 
   lint-client:
+    deps: [_client-deps]
     dir: "{{.CLIENT_DIR}}"
     cmds:
       # Two tsconfigs, on purpose. The first is the BUILD (src only — its rootDir is what ships);
@@ -185,26 +236,112 @@ tasks:
 
   fmt-client:
     desc: "Format and auto-fix the TypeScript (the gofmt of this side)."
+    deps: [_client-deps]
     dir: "{{.CLIENT_DIR}}"
     cmds:
       - npx --no-install biome check --write
 
+  # -------------------------------------------------------------------- deps --
+  # node_modules is shared mutable state across git branches and nothing in git tracks it.
+  # `npm install` reconciles it to the CURRENT branch's package.json, which means it prunes: run it
+  # from a branch predating a devDependency and that dependency is gone, leaving a later build to die
+  # on `sh: 1: esbuild: not found`. `npm ci` installs exactly the lockfile instead, so the tree cannot
+  # drift from the branch you are on. `generates` is npm's own record of what it installed.
+  _client-deps:
+    internal: true
+    dir: "{{.CLIENT_DIR}}"
+    sources: ["package.json", "package-lock.json"]
+    generates: ["node_modules/.package-lock.json"]
+    status:
+      # The checksum never looks at the filesystem, so without this an `rm -rf node_modules` is
+      # invisible to Task and the next build fails on a missing binary.
+      - test -x node_modules/.bin/tsc
+      - test -x node_modules/.bin/esbuild
+      - test -x node_modules/.bin/biome
+    cmds:
+      - npm ci --no-audit --no-fund
+
+  _example-deps:
+    internal: true
+    dir: examples/vanilla-browser
+    sources: ["package.json", "package-lock.json"]
+    generates: ["node_modules/.package-lock.json"]
+    status:
+      - test -x node_modules/.bin/playwright
+    cmds:
+      - npm ci --no-audit --no-fund
+
   # ------------------------------------------------------------------- build --
   build-client:
     desc: "Emit the dependency-free ESM a browser can <script type=module> import — per-module, and flattened."
+    deps: [_client-deps]
     dir: "{{.CLIENT_DIR}}"
     sources: ["src/**/*.ts", "tsconfig.json", "package.json"]
-    generates: ["dist/**/*.js"]
+    # Named individually, not as a `dist/**/*.js` glob. A glob is only a checksum key, and Task never
+    # asks whether the files exist: `rm dist/krm-stream.js && task build-client` used to say "up to
+    # date" and rebuild nothing.
+    generates:
+      - dist/index.js
+      - dist/krm-stream.js
+    status:
+      # The existence check a checksum cannot do.
+      - test -f dist/index.js
+      - test -f dist/krm-stream.js
     cmds:
-      - npm install --no-audit --no-fund
       # Two artifacts, both published: dist/index.js keeps its relative imports (tree-shakeable, for
-      # bundler-based consumers), and dist/krm-stream.js is the same public API flattened into one
-      # file, for a host that vendors the library by copying it and serving it with no bundler.
+      # bundlers), and dist/krm-stream.js is the same API flattened into one file, for a host that
+      # vendors the library with no bundler.
       #
-      # `npm run build` and not `npx tsc`: it resolves from node_modules/.bin, so it cannot reach the
-      # network. Bare `npx tsc` with no node_modules silently downloads a REGISTRY package named `tsc`
-      # (which is not TypeScript) and runs it.
+      # `npm run build`, not `npx tsc`: one definition of the build, shared with package.json and CI.
+      # A hand-copied `npx tsc` kept doing half of it once esbuild was added, and CI packed a tarball
+      # whose exports map pointed at a file that was not in it.
       - npm run --silent build
+
+  pack-client:
+    desc: "Pack the npm tarball and PROVE it contains every entry point the exports map advertises."
+    deps: [build-client]
+    vars:
+      # CI passes PACK_DIR=/tmp/npm and uploads what lands there; release.yml publishes those bytes
+      # without rebuilding.
+      PACK_DIR: '{{.PACK_DIR | default "/tmp/krm-stream-pack"}}'
+    cmds:
+      # The gap between "the build works" and "the thing we upload contains what we said it does".
+      # Every other rung builds its own dist and never looks at the tarball, so a missing ./bundle
+      # packs green, publishes green, and fails for the first consumer who imports it. CI runs this
+      # same task, so the local gate and the release gate cannot drift.
+      - |
+        set -euo pipefail
+        mkdir -p "{{.PACK_DIR}}"
+        rm -f "{{.PACK_DIR}}"/*.tgz
+        npm pack --pack-destination "{{.PACK_DIR}}" ./{{.CLIENT_DIR}} >/dev/null
+        tarball="$(ls "{{.PACK_DIR}}"/*.tgz)"
+
+        # List once into a variable. `tar | grep -q` under pipefail reports failure on a MATCH: grep
+        # exits early, tar takes SIGPIPE, and the pipeline inherits tar's status. This guard failed a
+        # perfectly good tarball that way on its first run.
+        listing="$(tar -tzf "$tarball")"
+        for entry in package/dist/index.js package/dist/krm-stream.js; do
+          if ! grep -qxF "$entry" <<<"$listing"; then
+            echo "✗ ${entry#package/} is in the exports map but NOT in the tarball. Publishing this ships a broken import."
+            echo "$listing"
+            exit 1
+          fi
+        done
+        echo "✓ every entry point in the exports map is present in $(basename "$tarball")."
+
+  # ------------------------------------------------------------------- clean --
+  # The escape hatch for when a cache lies to you. It should be rare: the `status:` guards above exist
+  # so the two failures that used to need it (a pruned node_modules, a half-deleted dist/) self-heal.
+  clean:
+    desc: "Drop every local cache: Task's fingerprints, node_modules, dist. Next run is cold."
+    cmds:
+      # .task/ is Task's checksum store: what makes a task say "up to date". Remove it when one is wrong.
+      - rm -rf .task
+      - rm -rf {{.CLIENT_DIR}}/node_modules {{.CLIENT_DIR}}/dist
+      - rm -rf examples/vanilla-browser/node_modules
+      # Go's test cache is content-addressed and sound: a cached `ok` means those inputs really did
+      # pass. Use `go test -count=1` to watch a suite run; `go clean -cache` buys nothing but minutes.
+      - echo "clean. (Go's test cache is deliberately untouched.)"
 
   # ---------------------------------------------------------------- cluster --
   # The one rung a fake watch cannot reach. Everything the gateway BELIEVES about Kubernetes — that a

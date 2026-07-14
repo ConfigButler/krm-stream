@@ -15,9 +15,12 @@ FROM golang:1.26.5-bookworm@sha256:18aedc16aa19b3fd7ded7245fc14b109e054d65d22ed5
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# shellcheck is here for actionlint, which shells out to it to check every `run:` block. Without it
+# actionlint silently skips that half of its job and still exits 0, so the local lint passes on a
+# workflow CI rejects. Found exactly that way: `task lint` green, CI red, same commit.
 RUN apt-get update \
     && apt-get -y install --no-install-recommends \
-    git curl ca-certificates vim less jq sudo acl gnupg unzip openssh-client \
+    git curl ca-certificates vim less jq sudo acl gnupg unzip openssh-client shellcheck \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
@@ -40,13 +43,19 @@ RUN apt-get update \
 #   here behaves identically to the one the gateway will really run against.
 # NODE_MAJOR            -> the current Node LTS line. 22 runs `.ts` under `node --test`
 #   natively (type stripping), which is why this repo's client suite needs ZERO test deps.
+# ACTIONLINT_VERSION    -> https://github.com/rhysd/actionlint/releases
+# HADOLINT_VERSION      -> https://github.com/hadolint/hadolint/releases
+#   A workflow YAML and a Dockerfile were the only files here with no linter, which is how CI came to
+#   pack a bundle it had never built.
 ENV PATH="/go/bin:/usr/local/go/bin:${PATH}" \
     GOLANGCI_LINT_VERSION=v2.12.2 \
     TASK_VERSION=v3.51.1 \
     YQ_VERSION=v4.48.1 \
     KUBECTL_VERSION=v1.36.2 \
     K3D_VERSION=v5.9.0 \
-    NODE_MAJOR=22
+    NODE_MAJOR=22 \
+    ACTIONLINT_VERSION=1.7.7 \
+    HADOLINT_VERSION=2.14.0
 
 RUN test "$(dpkg --print-architecture)" = "amd64" \
     || (echo "This devcontainer currently supports amd64 only." && exit 1)
@@ -64,6 +73,19 @@ RUN curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VE
 
 RUN curl -fsSL -o /usr/local/bin/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64" \
     && chmod +x /usr/local/bin/k3d
+
+# actionlint: typechecks `${{ }}` expressions, catches invalid `runs-on`/`needs`, and shellchecks
+# every `run:` block.
+RUN curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
+    | tar -xzO actionlint > /usr/local/bin/actionlint \
+    && chmod +x /usr/local/bin/actionlint \
+    && actionlint --version
+
+# hadolint: the same for this file. Config in .hadolint.yaml. The `# hadolint ignore=` comments below
+# have, until now, been talking to a linter that was not installed.
+RUN curl -fsSL -o /usr/local/bin/hadolint "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
+    && chmod +x /usr/local/bin/hadolint \
+    && hadolint --version
 
 # Node.js — the client's test runner AND its build (tsc). Nothing else needs it.
 RUN curl -fsSL https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key \
