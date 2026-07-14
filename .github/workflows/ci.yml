@@ -235,25 +235,8 @@ jobs:
       - run: npx tsc
         working-directory: packages/krm-stream
 
-      # The unscoped package is a tiny forwarder. Its version and dependency on the real scoped
-      # package must match the release that is being packed, so derive both from the scoped
-      # package.json immediately before packing. This edits only the CI workspace; release-please
-      # owns the committed version bumps.
-      - name: synchronize the unscoped forwarder
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require("node:fs");
-          const real = JSON.parse(fs.readFileSync("packages/krm-stream/package.json", "utf8"));
-          const compatPath = "packages/krm-stream-compat/package.json";
-          const compat = JSON.parse(fs.readFileSync(compatPath, "utf8"));
-          compat.version = real.version;
-          compat.dependencies["@configbutler/krm-stream"] = real.version;
-          fs.writeFileSync(compatPath, `${JSON.stringify(compat, null, 2)}\n`);
-          NODE
-
-      # Pack the tarballs HERE, in the job that just tested them, and hand them to the release
-      # workflow as artifacts. release.yml publishes these exact bytes rather than rebuilding them:
+      # Pack the official client HERE, in the job that just tested it, and hand it to the release
+      # workflow as an artifact. release.yml publishes these exact bytes rather than rebuilding it:
       # the things on npm are then the things this pipeline proved, and not a second build that
       # merely ought to match.
       #
@@ -265,7 +248,6 @@ jobs:
           set -euo pipefail
           mkdir -p /tmp/npm
           npm pack --pack-destination /tmp/npm ./packages/krm-stream
-          npm pack --pack-destination /tmp/npm ./packages/krm-stream-compat
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: npm-packages

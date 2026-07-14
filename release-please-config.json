@@ -14,11 +14,6 @@
         }
       ]
     },
-    "packages/krm-stream-compat": {
-      "release-type": "node",
-      "component": "krm-stream",
-      "package-name": "krm-stream"
-    },
     "gateway": {
       "release-type": "go",
       "component": "gateway",
@@ -34,7 +29,7 @@
     {
       "type": "linked-versions",
       "groupName": "krm-stream",
-      "components": ["@configbutler/krm-stream", "krm-stream", "gateway", "gateway/kube"]
+      "components": ["@configbutler/krm-stream", "gateway", "gateway/kube"]
     }
   ],
   "changelog-sections": [

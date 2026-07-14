@@ -56,7 +56,7 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # Publish the tarballs that ci.yml PACKED AND TESTED in this same run — not a second build of the
+  # Publish the tarball that ci.yml PACKED AND TESTED in this same run — not a second build of the
   # same source. `npm pack` ran in the `client` job after the type check, the lint and the browser
   # e2e's build; those exact bytes are what land on the registry.
   #
@@ -65,9 +65,8 @@ jobs:
   # long-lived registry secret that could leak, and npm attaches SLSA provenance to the release
   # automatically — the published package can be traced back to this commit and this workflow.
   #
-  # It requires a one-time setup on npmjs.com (Settings -> Trusted publisher for BOTH
-  # `@configbutler/krm-stream` and `krm-stream`: repo ConfigButler/krm-stream, workflow
-  # `release.yml`). See docs/releasing.md.
+  # It requires a one-time setup on npmjs.com for `@configbutler/krm-stream`: repo
+  # ConfigButler/krm-stream, workflow `release.yml`. See docs/releasing.md.
   npm:
     name: publish to npm
     runs-on: ubuntu-latest
@@ -99,20 +98,15 @@ jobs:
         run: |
           set -euo pipefail
           scoped="/tmp/npm/configbutler-krm-stream-${VERSION}.tgz"
-          compat="/tmp/npm/krm-stream-${VERSION}.tgz"
-          if [ ! -f "$scoped" ] || [ ! -f "$compat" ]; then
-            echo "::error::expected ${scoped} and ${compat}, but ci.yml packed: $(ls /tmp/npm)"
+          if [ ! -f "$scoped" ]; then
+            echo "::error::expected ${scoped}, but ci.yml packed: $(ls /tmp/npm)"
             echo "the tarball and the tag disagree about what this release is — refusing to publish."
             exit 1
           fi
           echo "scoped_tarball=${scoped}" >> "$GITHUB_ENV"
-          echo "compat_tarball=${compat}" >> "$GITHUB_ENV"
 
-      - name: publish the scoped package first
+      - name: publish the official package
         run: npm publish "$scoped_tarball" --provenance --access public
-
-      - name: publish the unscoped forwarder
-        run: npm publish "$compat_tarball" --provenance --access public
 
   # A Go module is published by its TAG, and until something outside this repository resolves that
   # tag, "published" is a hope. This is the same check as ci.yml's `consumable`, aimed at the thing an

@@ -1,10 +1,55 @@
 # krm-stream
 
-`krm-stream` turns Kubernetes resource watches into a small, browser-safe SSE protocol. It ships a
-Go gateway, a headless TypeScript store, and a shared conformance corpus.
+Live Kubernetes resource updates for browser apps, with three-way merges for form edits.
 
-The library owns the read stream. Your application owns identity, authorization policy, Kubernetes
-credentials, and writes.
+`krm-stream` turns a Kubernetes watch into a small, browser-safe stream. It ships a Go gateway, a
+headless TypeScript store, and shared conformance fixtures so your product can show live state while
+people are editing it.
+
+## KRM, briefly
+
+KRM means **Kubernetes Resource Model**: the API objects that describe a system, such as a
+`Deployment`, `Service`, `ConfigMap`, or a custom resource. Each object has identity and desired
+state, and Kubernetes continuously reports observed state. Kubernetes calls these objects records
+of intent; [its object model is a good starting point](https://kubernetes.io/docs/concepts/overview/working-with-objects/).
+
+That model is useful far beyond infrastructure. A platform can model an application, an environment,
+a database request, a feature rollout, access policy, or a business workflow as KRM resources. The
+same live, conflict-aware editing experience should work wherever a resource expresses intent and a
+controller reports what became true.
+
+## How it fits
+
+```mermaid
+flowchart LR
+  person["Person\nediting a form"]
+  browser["Your browser app\n@configbutler/krm-stream"]
+  store["LiveResourceStore\nbase + local draft + live update\nthree-way merge"]
+  host["Your Go application\nidentity, authorization, scope\nprojection and redaction"]
+  api["Kubernetes API\nand resource watch"]
+  resources["KRM resources\napps, policies, databases,\nplatform and business objects"]
+  save["Your save endpoint\nvalidates and applies a patch"]
+
+  person --> browser --> store
+  store <-->|"snapshots and live deltas (SSE)"| host
+  host <-->|"read and watch"| api --> resources
+  store -->|"draft, conflicts, merge patch"| browser
+  browser -->|"explicit save"| save --> api
+
+  classDef person fill:#fff3cd,stroke:#d39e00,color:#3f3000;
+  classDef browser fill:#dff3ff,stroke:#1677a4,color:#062f45;
+  classDef host fill:#e4f7e8,stroke:#27834c,color:#113d23;
+  classDef api fill:#f8e0ef,stroke:#a83970,color:#4b1230;
+  classDef store fill:#ede7ff,stroke:#6750a4,color:#2d1e5c;
+  class person person;
+  class browser,store browser;
+  class host,save host;
+  class api,resources api;
+```
+
+The library owns the read stream and browser reconciliation. Your application owns identity,
+authorization policy, Kubernetes credentials, and writes. The browser never receives a Kubernetes
+credential or a raw API-server URL.
 
 ## Start here
 
@@ -55,7 +100,7 @@ through its own save endpoint.
 | `github.com/ConfigButler/krm-stream/gateway` | Dependency-free Go stream gateway and SSE handler. |
 | `github.com/ConfigButler/krm-stream/gateway/kube` | Optional `client-go` backend and SSAR authorizer. |
 | `@configbutler/krm-stream` | Official dependency-free ESM client store and transports. |
-| `krm-stream` | Compatibility forwarder to the official scoped npm package. |
+| `krm-stream@0.1.0` | Deprecated, frozen compatibility name claim. Use the scoped package instead. |
 | [`spec/v1.md`](spec/v1.md) | Normative protocol contract. |
 | [`conformance/`](conformance/) | Shared fixtures exercised by the Go gateway and TypeScript client. |
 
@@ -81,7 +126,7 @@ browser. Use [`gateway.ValidateMergePatch`](gateway/patch.go) in the host save h
 
 ## Requirements and maturity
 
-The project is pre-1.0. Protocol and API changes may still be made before the first release.
+The project is pre-1.0. Protocol and API changes may still be made before 1.0.
 
 - Go 1.26 for the gateway.
 - Node 22 for client development and tests.
