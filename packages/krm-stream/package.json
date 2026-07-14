@@ -5,6 +5,7 @@
   "keywords": [
     "kubernetes",
     "krm",
+    "config-as-data",
     "sse",
     "watch",
     "live",
