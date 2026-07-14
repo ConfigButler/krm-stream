@@ -25,6 +25,10 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
+    },
+    "./bundle": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/krm-stream.js"
     }
   },
   "files": [
@@ -35,16 +39,19 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && npm run build:bundle",
+    "//build:bundle": "Flatten the emitted module graph into ONE file for hosts with no bundler and no node_modules — the ones that vendor the library by copying it and serving it. Bundling dist/index.js (not src/) keeps a single source of truth: the file a bundler-based consumer imports is the file this flattens. --target=es2022 pins it to the same output tsconfig emits, so a bundle can never quietly acquire a polyfill the per-module build does not have. No sourcemap: a host serving this publicly should not have to also serve a .map, or field a console warning for not doing so.",
+    "build:bundle": "esbuild dist/index.js --bundle --format=esm --target=es2022 --legal-comments=none --outfile=dist/krm-stream.js",
     "test": "node --test",
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
     "lint": "biome check",
     "format": "biome check --write"
   },
-  "//": "ZERO dependencies, and that one is absolute: the engine emits plain ESM a browser imports with no bundler, and gitops-api has no bundler and is not getting one. devDependencies ship NOTHING and are kept to the three that pay for themselves: typescript (the compiler), @types/node (without it `tsc` cannot see test/ at all, because the tests import node:test — and `node --test` STRIPS types rather than checking them, so the suite that IS the contract check would be the one unverified file in the repo), and biome (lint + format in one binary, the TypeScript half of what gofmt/go vet/golangci-lint do for the gateway).",
+  "//": "ZERO dependencies, and that one is absolute: the engine emits plain ESM a browser imports with no bundler, and gitops-api has no bundler and is not getting one. devDependencies ship NOTHING and are kept to the four that pay for themselves: typescript (the compiler), @types/node (without it `tsc` cannot see test/ at all, because the tests import node:test — and `node --test` STRIPS types rather than checking them, so the suite that IS the contract check would be the one unverified file in the repo), biome (lint + format in one binary, the TypeScript half of what gofmt/go vet/golangci-lint do for the gateway), and esbuild (flattens dist/ into the single-file ./bundle — it runs ONCE per release here, so that every no-bundler consumer does not each reinvent it, and it is the reason a host can vendor ONE file instead of eleven; it emits no polyfill and no runtime dependency, and if it ever needs to, the bundle is wrong).",
   "devDependencies": {
     "@biomejs/biome": "^2.5.3",
     "@types/node": "^26.1.1",
+    "esbuild": "^0.25.0",
     "typescript": "^5.9.0"
   }
 }
