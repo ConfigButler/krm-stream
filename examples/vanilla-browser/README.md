@@ -1,7 +1,8 @@
 # Vanilla browser example
 
-The example renders the real `krm-stream` ESM client in a browser with native `EventSource`. It runs
-against the replay gateway and the shared conformance corpus; no Kubernetes cluster is required.
+The example renders the official `@configbutler/krm-stream` ESM client in a browser with native
+`EventSource`. It runs against the replay gateway and the shared conformance corpus; no Kubernetes
+cluster is required.
 
 ```bash
 task demo

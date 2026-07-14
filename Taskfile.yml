@@ -148,7 +148,7 @@ tasks:
     deps: [build-client]
     cmds:
       - |
-        echo "→ http://127.0.0.1:8100/?fixture=status-only-churn&pace=800ms"
+        echo "→ http://127.0.0.1:8100/?fixture=status-follow-live&pace=800ms"
         echo "  (also: conflict-and-converge, secret-redaction, edit-vs-unrelated-change — /fixtures lists them)"
         cd gateway && go run ./cmd/replay --addr 127.0.0.1:8100 --corpus ../conformance \
           --static ../examples/vanilla-browser --dist ../packages/krm-stream/dist

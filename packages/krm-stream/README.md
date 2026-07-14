@@ -1,7 +1,7 @@
-# krm-stream client
+# @configbutler/krm-stream
 
-The `krm-stream` client is a dependency-free ESM package for consuming a KRM resource stream in a
-browser or JavaScript application. It provides:
+`@configbutler/krm-stream` is the official dependency-free ESM client for consuming a KRM resource
+stream in a browser or JavaScript application. It provides:
 
 - `LiveResourceStore` for server state, local drafts, conflicts, redactions, and merge patches.
 - `connectWithEventSource` for same-origin browser streams.
@@ -12,7 +12,7 @@ The package is headless and does not choose a UI framework. It works with the Go
 repository or any conforming producer.
 
 ```ts
-import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "krm-stream";
+import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
 connectWithEventSource(
@@ -21,6 +21,6 @@ connectWithEventSource(
 );
 ```
 
-This project is pre-1.0 and has not been published to npm yet. See the repository
-[README](../../README.md), [client state model](../../docs/client-state-model.md), and
-[release guide](../../docs/releasing.md).
+The unscoped `krm-stream` package is a compatibility forwarder. This project is pre-1.0 and has not
+been published to npm yet. See the repository [README](../../README.md),
+[client state model](../../docs/client-state-model.md), and [release guide](../../docs/releasing.md).

@@ -34,7 +34,7 @@ test("the built ESM imports in a browser with no bundler at all", async ({ page 
 test("status follows the server live and FLASHES what moved — and never becomes an edit", async ({ page }) => {
   // deploy-web.v1 -> v2 is a status-only change: readyReplicas 1 -> 2, Available False -> True.
   // The spec is byte-identical. This is the dominant traffic on a real stream, and the demo.
-  await page.goto("/?fixture=status-only-churn&pace=250ms");
+  await page.goto("/?fixture=status-follow-live&pace=250ms");
 
   const ready = page.getByTestId(`value:${path("status", "readyReplicas")}`);
   await expect(ready).toHaveText(/^1/); // the snapshot

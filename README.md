@@ -30,7 +30,7 @@ mux.Handle("/resource-stream/v1", gateway.Handler(gateway.Options{
 Consume the stream without choosing a UI framework:
 
 ```ts
-import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "krm-stream";
+import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
 connectWithEventSource(
@@ -48,13 +48,14 @@ connectWithEventSource(
 three-way merge, records conflicts, and builds RFC 7386 merge patches. The host applies any patch
 through its own save endpoint.
 
-## What ships
+## Packages
 
-| Component | Purpose |
+| Package | Purpose |
 |---|---|
-| [`gateway/`](gateway/) | Dependency-free Go stream gateway and SSE handler. |
-| [`gateway/kube/`](gateway/kube/) | Optional `client-go` backend and SSAR authorizer. |
-| [`packages/krm-stream/`](packages/krm-stream/) | Dependency-free ESM client store and transports. |
+| `github.com/ConfigButler/krm-stream/gateway` | Dependency-free Go stream gateway and SSE handler. |
+| `github.com/ConfigButler/krm-stream/gateway/kube` | Optional `client-go` backend and SSAR authorizer. |
+| `@configbutler/krm-stream` | Official dependency-free ESM client store and transports. |
+| `krm-stream` | Compatibility forwarder to the official scoped npm package. |
 | [`spec/v1.md`](spec/v1.md) | Normative protocol contract. |
 | [`conformance/`](conformance/) | Shared fixtures exercised by the Go gateway and TypeScript client. |
 

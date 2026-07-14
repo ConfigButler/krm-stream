@@ -39,7 +39,7 @@ The gateway compares these as arbitrary-precision decimals (longer-is-greater, t
 
 YES: 5 MODIFIED events, 5 of them status-only, 0 touched spec. The rollout completed: replicas=2 readyReplicas=2
 
-So `status-only-churn` describes real traffic: a controller reconciling a Deployment rewrites status repeatedly, watching readyReplicas climb to the requested count, and never touches spec. That is the demo, and it is real.
+So `status-follow-live` describes real traffic: a controller reconciling a Deployment rewrites status repeatedly, watching readyReplicas climb to the requested count, and never touches spec. That is the demo, and it is real.
 
 ### F6 — An AGGREGATED API (wardle `Flunder`): orderable resourceVersion? streaming list?
 

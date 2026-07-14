@@ -56,7 +56,7 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # Publish the tarball that ci.yml PACKED AND TESTED in this same run — not a second build of the
+  # Publish the tarballs that ci.yml PACKED AND TESTED in this same run — not a second build of the
   # same source. `npm pack` ran in the `client` job after the type check, the lint and the browser
   # e2e's build; those exact bytes are what land on the registry.
   #
@@ -65,8 +65,9 @@ jobs:
   # long-lived registry secret that could leak, and npm attaches SLSA provenance to the release
   # automatically — the published package can be traced back to this commit and this workflow.
   #
-  # It requires a one-time setup on npmjs.com (Settings -> Trusted publisher for `krm-stream`:
-  # repo ConfigButler/krm-stream, workflow `release.yml`). See docs/releasing.md.
+  # It requires a one-time setup on npmjs.com (Settings -> Trusted publisher for BOTH
+  # `@configbutler/krm-stream` and `krm-stream`: repo ConfigButler/krm-stream, workflow
+  # `release.yml`). See docs/releasing.md.
   npm:
     name: publish to npm
     runs-on: ubuntu-latest
@@ -79,7 +80,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: npm-package
+          name: npm-packages
           path: /tmp/npm
 
       - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
@@ -92,20 +93,26 @@ jobs:
       # Trusted publishing needs npm >= 11.5.1; Node 22 ships an older npm.
       - run: npm install -g npm@latest
 
-      - name: the tarball must be the version that was just released
+      - name: the tarballs must be the version that was just released
         env:
           VERSION: ${{ needs.release-please.outputs.version }}
         run: |
           set -euo pipefail
-          tgz="/tmp/npm/krm-stream-${VERSION}.tgz"
-          if [ ! -f "$tgz" ]; then
-            echo "::error::expected ${tgz}, but ci.yml packed: $(ls /tmp/npm)"
+          scoped="/tmp/npm/configbutler-krm-stream-${VERSION}.tgz"
+          compat="/tmp/npm/krm-stream-${VERSION}.tgz"
+          if [ ! -f "$scoped" ] || [ ! -f "$compat" ]; then
+            echo "::error::expected ${scoped} and ${compat}, but ci.yml packed: $(ls /tmp/npm)"
             echo "the tarball and the tag disagree about what this release is — refusing to publish."
             exit 1
           fi
-          echo "tarball=${tgz}" >> "$GITHUB_ENV"
+          echo "scoped_tarball=${scoped}" >> "$GITHUB_ENV"
+          echo "compat_tarball=${compat}" >> "$GITHUB_ENV"
 
-      - run: npm publish "$tarball" --provenance --access public
+      - name: publish the scoped package first
+        run: npm publish "$scoped_tarball" --provenance --access public
+
+      - name: publish the unscoped forwarder
+        run: npm publish "$compat_tarball" --provenance --access public
 
   # A Go module is published by its TAG, and until something outside this repository resolves that
   # tag, "published" is a hope. This is the same check as ci.yml's `consumable`, aimed at the thing an

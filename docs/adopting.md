@@ -71,7 +71,7 @@ import {
   connectWithEventSource,
   resourceStreamURL,
   withOpenAPIKeyedLists,
-} from "krm-stream";
+} from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
 const url = resourceStreamURL("/resource-stream/v1", {

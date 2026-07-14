@@ -66,7 +66,7 @@ Kubernetes associative lists can merge by identity when the host provides the st
 schema for the exact GroupVersionKind:
 
 ```ts
-import { defaultPolicy, LiveResourceStore, withOpenAPIKeyedLists } from "krm-stream";
+import { defaultPolicy, LiveResourceStore, withOpenAPIKeyedLists } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore(withOpenAPIKeyedLists(defaultPolicy, deploymentSchema));
 ```
