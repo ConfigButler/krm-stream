@@ -10,7 +10,7 @@
 
 # krm-stream
 
-Live Kubernetes resource updates for browser apps, with three-way merges for form edits.
+Live Kubernetes resource updates for browser apps.
 
 `krm-stream` turns a Kubernetes watch into a small, browser-safe stream. It ships a Go gateway, a
 headless TypeScript store with zero runtime dependencies, and shared conformance fixtures, so your
@@ -42,15 +42,14 @@ product can show live cluster state while people are editing it.
   you are doing that, you probably want this library anyway, because it is the thing that tells you
   the patch is safe to apply. See [saving edits safely](docs/saving.md).
 
-## KRM in one line
+## What is KRM?
 
 **KRM** is the Kubernetes Resource Model: the shape every Kubernetes object has (`apiVersion`,
 `kind`, `metadata`, a desired `spec`, an observed `status`). Custom resources use the same shape,
 which is why this works for your product's own objects, a `Database`, a `FeatureFlag`, a `Tenant`,
 and not only for cluster infrastructure.
 
-Never touched a cluster? The [glossary for frontend developers](docs/glossary.md) is the dozen words
-you need, and nothing else.
+Never touched a cluster? The [glossary for frontend developers](docs/glossary.md).
 
 ## Why a gateway
 
