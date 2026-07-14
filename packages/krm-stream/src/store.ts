@@ -326,10 +326,11 @@ export class LiveResourceStore {
   }
 
   #regionsFor(object: KRMObject, redacted: Path[]): Regions {
-    const isRedacted = (path: Path) => redacted.some((r) => isPrefix(r, path));
+    const insideRedacted = (path: Path) => redacted.some((r) => isPrefix(r, path));
+    const containsRedacted = (path: Path) => redacted.some((r) => isPrefix(path, r));
     return {
-      editable: (path) => !isRedacted(path) && this.#policy.isEditable(object, path),
-      container: (path) => this.#policy.containsEditable(object, path),
+      editable: (path) => !insideRedacted(path) && !containsRedacted(path) && this.#policy.isEditable(object, path),
+      container: (path) => !insideRedacted(path) && this.#policy.containsEditable(object, path),
       listMapKeys: (path) => this.#policy.listMapKeys?.(object, path),
     };
   }

@@ -316,6 +316,8 @@ test("I-REDACT — a redacted value is ABSENT, is read-only, and cannot reach a 
   assert.equal(store.isEditable(id, ["data", "token"]), false);
   assert.throws(() => store.setValue(id, ["data", "token"], "hunter2"), /read-only/);
   assert.throws(() => store.removeKey(id, ["data", "token"]), /read-only/);
+  assert.equal(store.isEditable(id, ["data"]), false, "an ancestor could overwrite withheld values");
+  assert.throws(() => store.setValue(id, ["data"], { token: "hunter2" }), /read-only/);
 
   // The value is GONE — not masked (proposal 0003), and `data` does not survive as an empty map
   // either: a map that is empty only because the gateway emptied it is the gateway's artifact, not

@@ -125,12 +125,19 @@ func (g *Gateway) ServeStreamProjection(w http.ResponseWriter, r *http.Request, 
 	ctx := r.Context()
 
 	hb, stopHeartbeat := context.WithCancel(ctx)
-	defer stopHeartbeat()
 	interval := g.HeartbeatInterval
 	if interval <= 0 {
 		interval = HeartbeatInterval
 	}
-	go sink.Heartbeat(hb, interval)
+	heartbeatDone := make(chan struct{})
+	go func() {
+		defer close(heartbeatDone)
+		sink.Heartbeat(hb, interval)
+	}()
+	defer func() {
+		stopHeartbeat()
+		<-heartbeatDone
+	}()
 
 	// The error is already ON the wire by the time Stream returns — emitting it is how the consumer
 	// learns anything. There is nothing left to tell the HTTP layer: the status line went out with
