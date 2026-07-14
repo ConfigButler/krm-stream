@@ -485,11 +485,15 @@ again. That is the actual argument for doing it *now*.
 
 ## 7. Open questions
 
-- **`data: {}` versus no `data` at all.** Today a fully-redacted Secret arrives with `data: {}`. Under
-  the subset rule (§1) both are legal — removing map entries leaves an empty map; removing the key
-  leaves nothing. `{}` says *"the data map exists and you may see none of its keys"*, which is true
-  and slightly more informative. I lean towards keeping it, but the explicitness argument cuts the
-  other way and it is worth one round of discussion.
+- ~~**`data: {}` versus no `data` at all.**~~ **RESOLVED: drop it, and it is now shipped.** I leaned
+  towards keeping the empty map. The owner's reductio settles it in one line: *under the same logic
+  you would send `status: {}` when status is ignored — which is bullocks.* Correct, and the rule was
+  **already in our own code**, four lines above the offending block: `project()` removes an
+  `annotations` map it has emptied, with the comment *"a map that is empty ONLY because we emptied it
+  is our artifact, not the server's state."* We wrote the rule and then broke it for `data`. A
+  fully-redacted Secret now carries **no `data` key at all**; `redactedPaths` says why, and the
+  browser suite proves the mask still renders from it. (A container the *server* sent empty is kept —
+  we remove what we removed, and nothing else.)
 - **Should a view change the *scope key*?** Two subscribers to the same scope with different views
   share an upstream watch (good) but not a projection. Nothing breaks; it is worth confirming that
   fan-out accounting does not accidentally key on the projection.

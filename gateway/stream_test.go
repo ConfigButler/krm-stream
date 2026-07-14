@@ -400,13 +400,14 @@ func TestSecretDisclosureIsKeysOnlyAndTheValueIsGone(t *testing.T) {
 	}
 	out, paths := project(ProjectionEditor, secret)
 
-	data, ok := out["data"].(map[string]any)
-	if !ok {
-		t.Fatal("`data` was deleted entirely — the Secret HAS a data map, and saying otherwise is a " +
-			"different lie from the one we are avoiding")
-	}
-	if len(data) != 0 {
-		t.Errorf("something survived under data: %v — a redacted value must be GONE, not masked", data)
+	// `data` is GONE, not left behind as an empty map. Every value in it was redacted, so the map
+	// emptied, so the map goes with them — the same rule the annotations block applies, and for the
+	// same reason: a map that is empty only because WE emptied it is our artifact, not the server's
+	// state. `data: {}` would assert "this Secret has an empty data map", which is a different fact
+	// from "this Secret's data is not yours to see".
+	if _, present := out["data"]; present {
+		t.Errorf("`data: {}` survived the projection: %v — an empty map WE created is our artifact, "+
+			"not the server's state. (`ignore` on `status` would not leave `status: {}` either.)", out["data"])
 	}
 
 	// RFC 6901: `~` escapes to `~0`. A key with a tilde in it is legal, and an unescaped pointer
@@ -430,6 +431,25 @@ func TestSecretDisclosureIsKeysOnlyAndTheValueIsGone(t *testing.T) {
 	rawOut, rawPaths := project(ProjectionRaw, secret)
 	if rawOut["data"].(map[string]any)["token"] != "aHVudGVyMg==" || len(rawPaths) != 0 {
 		t.Error("krm-raw/v1 redacted a value it does not declare redacting")
+	}
+}
+
+// The other half of the rule, and the half that keeps it honest: we remove what WE removed, and
+// nothing else. A Secret that genuinely arrived with an empty `data` map KEEPS it — that emptiness is
+// the server's fact, not our artifact, and deleting it would be inventing a removal we did not make.
+func TestAnEmptyDataMapTheServerSentIsKept(t *testing.T) {
+	out, paths := project(ProjectionEditor, KRMObject{
+		"apiVersion": "v1", "kind": "Secret", "type": "Opaque",
+		"metadata": map[string]any{"uid": "s2", "name": "empty"},
+		"data":     map[string]any{}, // the SERVER's empty map
+	})
+
+	if _, present := out["data"]; !present {
+		t.Error("an empty `data` map the SERVER sent was deleted — that is not a redaction we made, " +
+			"and removing it reports a removal that did not happen")
+	}
+	if len(paths) != 0 {
+		t.Errorf("redactedPaths = %v, want empty: there was nothing to redact", paths)
 	}
 }
 

@@ -64,19 +64,34 @@ func project(p Projection, in KRMObject) (KRMObject, []string) {
 
 	// krm-editor/v1 additionally applies the Secret disclosure policy: keys-only.
 	//
-	// The value is DELETED, not masked. You learn that `token` exists — from redactedPaths, which
-	// names `/data/token` — and you never learn or carry what it is. `data` is left in place even when
-	// it empties out: the Secret HAS a data map, and saying otherwise would be a different lie from
-	// the one we are avoiding.
+	// The value is DELETED, not masked. You learn that `token` exists — from redactedPaths, which names
+	// `/data/token` — and you never learn or carry what it is.
+	//
+	// And when we empty a map, we REMOVE it, exactly as the annotations block above already does and
+	// for exactly the same reason: **a `data: {}` that is empty only because WE emptied it is our
+	// artifact, not the server's state.** Leaving it behind tells the consumer "this Secret has an
+	// empty data map", which is a *different fact* from "this Secret's data is not yours to see" —
+	// and the second is what happened. redactedPaths carries that, and it is the only thing that does.
+	//
+	// (An earlier version left `data: {}`, which contradicted the rule written four lines above it.
+	// The reductio that settles it: under three verbs (proposal 0004), `ignore` on `status` must
+	// obviously not leave `status: {}` behind. The same is true here, and it always was.)
 	if p == ProjectionEditor && isSecret(out) {
 		for _, field := range []string{"data", "stringData"} {
 			m, ok := out[field].(map[string]any)
 			if !ok {
 				continue
 			}
+			redactedAny := false
 			for k := range m {
 				delete(m, k)
+				redactedAny = true
 				paths = append(paths, "/"+escapePointer(field)+"/"+escapePointer(k))
+			}
+			// Only when the emptiness is OURS. A Secret that genuinely arrived with `data: {}` keeps
+			// it: we are removing what we removed, and nothing else.
+			if redactedAny && len(m) == 0 {
+				delete(out, field)
 			}
 		}
 	}

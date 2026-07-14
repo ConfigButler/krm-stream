@@ -413,8 +413,7 @@
         "app.kubernetes.io/name": "shop"
       }
     },
-    "type": "Opaque",
-    "data": {}
+    "type": "Opaque"
   },
   "secret-token.v1": {
     "apiVersion": "v1",

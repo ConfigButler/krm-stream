@@ -169,9 +169,11 @@ test("I-REDACT — a redacted value is ABSENT, is read-only, and cannot reach a 
   assert.throws(() => store.setValue(id, ["data", "token"], "hunter2"), /read-only/);
   assert.throws(() => store.removeKey(id, ["data", "token"]), /read-only/);
 
-  // The value is GONE — not masked (proposal 0003). There is no placeholder to hold, and therefore
-  // none to save back over the real secret. The hazard cannot arise rather than being guarded.
-  assert.deepEqual(store.draft(id).data, {}, "a redacted value is on the wire");
+  // The value is GONE — not masked (proposal 0003), and `data` does not survive as an empty map
+  // either: a map that is empty only because the gateway emptied it is the gateway's artifact, not
+  // the server's state. There is no placeholder to hold, and therefore none to save back over the
+  // real secret. The hazard cannot arise rather than being guarded.
+  assert.equal(store.draft(id).data, undefined, "`data` survived the projection");
 
   // …and keys-only disclosure survives, because `redactedPaths` carries it: the consumer still knows
   // `token` exists, which is what a UI renders `token ••••••` from.
