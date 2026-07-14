@@ -89,8 +89,8 @@ for (const f of fixtures) {
     const connections = (f.watch ?? []).filter((op) => (op as { op: string }).op === "disconnect").length + 1;
     for (let conn = 0; conn < connections; conn++) {
       const handle = connectResourceStream(url(f.id, conn), store, {
-        onChange: (paths) => {
-          flashed.push(...paths);
+        onChange: (change) => {
+          flashed.push(...change.flashed);
           onEvent();
         },
         onError: () => onEvent(), // an `error` event occupies an index too (see resync-midstream)
