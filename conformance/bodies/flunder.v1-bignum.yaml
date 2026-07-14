@@ -1,0 +1,26 @@
+# A Flunder: Kubernetes' OWN canonical aggregated-API example (k8s.io/sample-apiserver), and the
+# reason this body is not a ConfigMap.
+#
+# `resourceVersion` here is 40 digits. That is the Kubernetes docs' own worked example — and it
+# CANNOT have come from kube-apiserver, whose resourceVersion is an etcd revision and therefore fits
+# in an int64 (19 digits). A value like this comes from a server with a different backing store: an
+# aggregated API, exactly like this one.
+#
+# Which is the whole point. The docs say "resource versions are compared as ARBITRARY BITSIZE decimal
+# integers... the bitsize must not be assumed to be some fixed amount", and a corpus that only ever
+# said so with a ConfigMap would be teaching a lie about where you actually meet such a value.
+#
+# It is still perfectly ORDERABLE — it is a decimal — so strict ordering handles it, and must.
+apiVersion: wardle.example.com/v1alpha1
+kind: Flunder
+metadata:
+  uid: flunder-0001
+  name: fl-1
+  namespace: app
+  resourceVersion: "2345678901234567890123456789012345678901"
+  labels:
+    app.kubernetes.io/name: shop
+spec:
+  referenceType: Flunder
+  reference: some-flunder
+status: {}

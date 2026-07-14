@@ -1,0 +1,16 @@
+{
+  // The tests, typechecked. `tsconfig.json` deliberately includes only `src/` — it is the BUILD, and
+  // its rootDir is what ships — so without this file `tsc` never sees test/ at all, and `node --test`
+  // STRIPS types rather than checking them. The suite that is supposed to be the contract check would
+  // be the one piece of unverified TypeScript in the repo.
+  //
+  // noEmit: nothing here is published. It exists to be checked.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "rootDir": ".",
+    // node:test / node:assert — the only reason @types/node is a devDependency. It ships nothing.
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "test/**/*.ts", "e2e/**/*.ts"]
+}

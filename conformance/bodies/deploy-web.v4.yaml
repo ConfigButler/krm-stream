@@ -1,11 +1,8 @@
 # The server APPENDED a container (a sidecar was injected). The array's length changed.
 #
-# This is the array problem, and it is why the engine treats an array atomically as soon as it is
-# dirty or its length moves (engine spec §4.1): a positional merge would try to reconcile the user's
-# edited element 0 against a shifted list and produce nonsense. Atomic is coarse but correct — and
-# it agrees with RFC 7386 merge patch, which replaces arrays wholesale anyway.
-#
-# The keyed merge (x-kubernetes-list-map-keys: containers by `name`) is the known follow-up.
+# Without an OpenAPI associative-list schema, arrays are intentionally atomic. A positional merge
+# could apply a local edit to the wrong element after this server-side append. RFC 7386 also replaces
+# arrays as a whole.
 apiVersion: apps/v1
 kind: Deployment
 metadata:

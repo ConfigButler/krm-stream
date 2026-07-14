@@ -45,7 +45,7 @@
         "group": { "type": "string" },
         "version": { "type": "string" },
         "resource": { "type": "string" },
-        "namespace": { "type": "string", "description": "Absent => a cluster-scoped resource. NOT 'all namespaces'." },
+        "namespace": { "type": "string", "description": "Absent => a cluster-scoped resource or an explicitly-authorized all-namespaces watch." },
         "name": { "type": "string", "description": "Present => a single-object scope, framed exactly like a collection." },
         "labelSelector": { "type": "string" }
       }
@@ -55,13 +55,14 @@
       "title": "reset — a snapshot cycle begins",
       "description": "Consumer: mark every known uid unseen. DO NOT PRUNE YET.",
       "type": "object",
-      "required": ["type", "projection"],
+      "required": ["seq", "type", "projection"],
       "properties": {
+		"seq": { "type": "integer", "minimum": 1 },
         "type": { "const": "reset" },
         "target": { "type": "string" },
         "scope": { "$ref": "#/$defs/scope" },
         "projection": {
-          "enum": ["krm-raw/v1", "krm-editor/v1"],
+		  "enum": ["krm-raw/v1", "krm-full/v1", "krm-spec/v1"],
           "description": "What this stream removes from every object. Declared so a consumer can distinguish 'absent upstream' from 'the gateway took it away'."
         }
       }
@@ -71,14 +72,22 @@
       "title": "added / modified — here is this object's current complete state",
       "description": "The only two upsert spellings. A consumer MUST treat them identically and REPLACE the authoritative object for that uid; a deep-merge resurrects fields the server deleted. They stay distinct because a UI legitimately animates an arrival differently from a change.",
       "type": "object",
-      "required": ["type", "object", "redactedPaths"],
+      "required": ["seq", "type", "object", "redacted"],
       "properties": {
+		"seq": { "type": "integer", "minimum": 1 },
         "type": { "enum": ["added", "modified"] },
         "object": { "$ref": "#/$defs/krmObject" },
-        "redactedPaths": {
+		"redacted": {
           "type": "array",
-          "items": { "type": "string", "pattern": "^/" },
-          "description": "RFC 6901 JSON Pointers into `object` whose values are masked. REQUIRED — empty array when nothing is redacted. Mandatory precisely so a consumer never infers redaction from a value that merely looks like a placeholder."
+		  "items": {
+			"type": "object",
+			"required": ["path", "rev"],
+			"properties": {
+			  "path": { "type": "string", "pattern": "^/" },
+			  "rev": { "type": "integer", "minimum": 1 }
+			}
+		  },
+		  "description": "Withheld values, each identified by an RFC 6901 path and a per-connection revision. REQUIRED — empty when nothing is redacted."
         }
       }
     },
@@ -87,8 +96,9 @@
       "title": "deleted — a tombstone with identity",
       "description": "The one event with no complete object; there may not be one. If the gateway cannot recover a trustworthy uid it MUST NOT emit this at all — it begins a new snapshot cycle and lets reset…synced prune.",
       "type": "object",
-      "required": ["type", "identity"],
+      "required": ["seq", "type", "identity"],
       "properties": {
+		"seq": { "type": "integer", "minimum": 1 },
         "type": { "const": "deleted" },
         "identity": {
           "type": "object",
@@ -109,14 +119,15 @@
       "title": "synced — the snapshot cycle is complete",
       "description": "Consumer: prune every uid still unseen. Pruning happens HERE and nowhere else — a cycle that never reaches synced must prune nothing.",
       "type": "object",
-      "required": ["type"],
-      "properties": { "type": { "const": "synced" } }
+      "required": ["seq", "type"],
+      "properties": { "seq": { "type": "integer", "minimum": 1 }, "type": { "const": "synced" } }
     },
 
     "error": {
       "type": "object",
-      "required": ["type", "code", "terminal"],
+      "required": ["seq", "type", "code", "terminal"],
       "properties": {
+		"seq": { "type": "integer", "minimum": 1 },
         "type": { "const": "error" },
         "code": {
           "enum": [

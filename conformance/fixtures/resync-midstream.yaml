@@ -8,7 +8,7 @@ why: >
   It SHOULD announce the break first with a non-terminal RESYNC_REQUIRED.
 suites: [gateway, client]
 scope: { target: demo, version: v1, resource: configmaps, namespace: app }
-projection: krm-editor/v1
+projection: krm-full/v1
 
 watch:
   - { op: list, bodies: [cm-app.v1, cm-flags.v1] }

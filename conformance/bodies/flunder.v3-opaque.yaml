@@ -1,0 +1,27 @@
+# A resourceVersion that is not a decimal at all, on the one kind of server that may legitimately
+# serve one: an AGGREGATED API.
+#
+# Since Kubernetes 1.35, orderability is a Certified Kubernetes conformance requirement — for built-in
+# types AND custom resources. So a ConfigMap, a Deployment or a CRD simply CANNOT deliver this, and a
+# fixture that used one would be defending against a case a conformant cluster cannot produce.
+#
+# An aggregated/extension API server is a third-party implementation that the conformance test does
+# not cover, and it is exactly the case the docs still carve out: "if either of two resource version
+# strings does not parse as a decimal number, the two strings can be checked for equality but you
+# CANNOT rely on comparisons for ordering."
+#
+# So this is the honest home of Gateway.Ordering: strict refuses it (loudly, naming the escape hatch),
+# lenient streams it and simply stops ordering.
+apiVersion: wardle.example.com/v1alpha1
+kind: Flunder
+metadata:
+  uid: flunder-0001
+  name: fl-1
+  namespace: app
+  resourceVersion: "opaque-alpha"
+  labels:
+    app.kubernetes.io/name: shop
+spec:
+  referenceType: Flunder
+  reference: some-flunder
+status: {}

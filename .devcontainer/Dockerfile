@@ -99,12 +99,20 @@ ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
 ENV DLV_VERSION=v1.27.0 \
-    GOPLS_VERSION=v0.22.0 \
-    STATICCHECK_VERSION=v0.7.0
+    GOPLS_VERSION=v0.23.0 \
+    STATICCHECK_VERSION=v0.7.0 \
+    CODEX_VERSION=0.144.3
 
 RUN apt-get update \
     && apt-get -y install --no-install-recommends bash-completion \
     && apt-get autoremove -y && apt-get clean -y && rm -rf /var/lib/apt/lists/*
+
+# Codex CLI. npm's prefix here is /usr, which lives in the container's writable layer — so this
+# has to be baked into the image, not installed at post-create, or a rebuild silently loses it.
+# The login it writes lands in ~/.codex/auth.json, which devcontainer.json mounts as a volume.
+RUN npm install -g "@openai/codex@${CODEX_VERSION}" \
+    && npm cache clean --force \
+    && codex --version
 
 # hadolint ignore=SC2016
 RUN printf '%s\n' \

@@ -1,0 +1,37 @@
+id: resourceversion-unorderable
+title: An aggregated API's unorderable resourceVersion is refused, loudly — not tolerated in silence.
+why: >
+  Kubernetes 1.35 made orderability a CONFORMANCE requirement, for built-in types and custom resources
+  alike. This library REQUIRES 1.35+ and relies on it: a ConfigMap, a Deployment or a CRD cannot serve
+  an unorderable resourceVersion, so a fixture using one would be defending against a case a conformant
+  cluster cannot produce.
+
+  The one server that still may is an AGGREGATED / extension API server — a third-party implementation
+  the conformance test does not cover. Hence a Flunder (wardle.example.com), Kubernetes' own sample
+  aggregated API. The docs' carve-out is written for exactly this: "if either of two resource version
+  strings does not parse as a decimal number, the two strings can be checked for equality but you
+  cannot rely on comparisons for ordering."
+
+  The protocol promises consumers per-object monotonicity (§6) — within a cycle you are never handed a
+  state older than one you already hold — and the gateway keeps that promise BY ordering resource
+  versions. If it cannot order them, it cannot keep it. A gateway that quietly carries on anyway leaves
+  a consumer believing a guarantee it is no longer getting, which is strictly worse than one that has
+  been told.
+
+  So the default (Gateway.Ordering = OrderingStrict) refuses: a terminal INTERNAL error that NAMES the
+  escape hatch, so the operator of an aggregated API is never merely stuck. OrderingLenient streams it
+  anyway and simply stops ordering — dropping nothing it cannot compare, because a duplicate is
+  harmless (apply is idempotent) while a wrongly-dropped update is data loss.
+
+  Note WHERE the refusal lands: after `reset`, because the gateway only learns what this upstream's
+  resource versions look like when the first object arrives. It cannot know from the scope alone.
+suites: [gateway]
+scope: { target: demo, group: wardle.example.com, version: v1alpha1, resource: flunders, namespace: app }
+projection: krm-full/v1
+
+watch:
+  - { op: list, bodies: [flunder.v3-opaque] }
+
+events:
+  - { type: reset }
+  - { type: error, code: INTERNAL, terminal: true }

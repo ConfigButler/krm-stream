@@ -2,7 +2,7 @@
   {
     "id": "array-atomic-on-change",
     "title": "When an array's length changes under an edit, the whole array conflicts — atomically.",
-    "why": "Engine spec §4.1, the known-coarse-but-correct rule. The user edited containers[0].image; the server injected a sidecar, so containers now has 2 elements. A positional merge would reconcile ours[0] against theirs[0] and ours[1] (absent) against theirs[1] — and with a PREPENDED element it would silently merge the user's edit into the wrong container.\nSo: any array that is dirty or whose length moved is treated as ONE value. The user's array wins until they resolve it, and the whole array is the conflict. Coarse — their one-field edit now conflicts with an unrelated append — but never wrong. It also agrees with RFC 7386, which replaces arrays wholesale anyway, so the patch format needs no special case.\nThe right long-term answer is a keyed merge (x-kubernetes-list-map-keys: containers by `name`), driven by the OpenAPI schema. That is the project's main open design question, not a TODO.\n",
+    "why": "Default array behavior. The user edited containers[0].image; the server injected a sidecar, so containers now has 2 elements. A positional merge would reconcile ours[0] against theirs[0] and ours[1] (absent) against theirs[1] — and with a PREPENDED element it would silently merge the user's edit into the wrong container.\nSo: any array that is dirty or whose length moved is treated as ONE value. The user's array wins until they resolve it, and the whole array is the conflict. Coarse — their one-field edit now conflicts with an unrelated append — but never wrong. It also agrees with RFC 7386, which replaces arrays wholesale anyway, so the patch format needs no special case.\nHosts that supply an OpenAPI associative-list schema can opt into keyed-list merging instead.\n",
     "suites": [
       "client"
     ],
@@ -81,6 +81,57 @@
     }
   },
   {
+    "id": "bookmark-absorbed",
+    "title": "A routine watch BOOKMARK is absorbed — never forwarded, never mistaken for `synced`.",
+    "why": "Kubernetes, verbatim: \"The document representing the BOOKMARK event is of the type requested by the request, but only includes a .metadata.resourceVersion field.\" So an object with no uid, no name, no spec and no status is not an exotic case someone contrived — it is on EVERY conforming watch stream that asked for bookmarks, and the gateway must ask (allowWatchBookmarks=true is how the snapshot boundary arrives at all).\nTwo ways to get this wrong, and this fixture fails on both:\n\n  - forward the bookmark's object as `modified`. The consumer REPLACES on modified — that is the\n    protocol's single most important rule — so it would replace a live ConfigMap with a husk that\n    has only a resourceVersion. The screen goes blank.\n  - treat every bookmark as the snapshot boundary and emit `synced`. Pruning is gated on `synced`,\n    so a mid-cycle `synced` prunes objects the snapshot had not reached yet: half the user's\n    resources vanish, and reappear on the next relist.\n\nOnly the bookmark that TERMINATES the initial events is `synced` (spec §5). Every other one is absorbed for its resourceVersion and never spoken of again (spec §2).\nSee docs/facts/kubernetes-api-concepts.md §1.1 — this rule is a quote from the API docs, not an opinion about them.\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-full/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      },
+      {
+        "op": "bookmark",
+        "resourceVersion": "1500"
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v2"
+      },
+      {
+        "op": "bookmark",
+        "resourceVersion": "1600"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "cm-app.v2"
+      }
+    ]
+  },
+  {
     "id": "conflict-and-converge",
     "title": "A real conflict is raised, kept, and then clears itself when the server converges.",
     "why": "R-DERIVED. Two halves:\n(1) The server changed the very key the user is editing, to a different value. Keep the user's\n    edit — never silently overwrite what someone typed — and surface what the cluster says.\n\n(2) Then the server's value ARRIVES at what the user typed (a colleague made the same change).\n    The conflict must clear, and the field must stop being dirty — draft == server now. This is\n    the half a cached `dirty` set gets wrong: it goes stale after a watch event and the field\n    stays flagged forever, or only unflags itself on the next click.\n    Dirtiness is DERIVED — deepEqual(draft@path, base@path) — never remembered.\n",
@@ -94,7 +145,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -195,7 +246,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -345,7 +396,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -423,7 +474,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -512,7 +563,7 @@
       "namespace": "app",
       "name": "app-config"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -551,7 +602,7 @@
       "resource": "deployments",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -638,6 +689,67 @@
     }
   },
   {
+    "id": "partial-object-refused",
+    "title": "A metadata-only object is never forwarded as an upsert — the gateway resnapshots instead.",
+    "why": "Kubernetes serves PartialObjectMetadata on request (Accept: application/json;as=PartialObjectMetadata): \"the returned objects only contain the `metadata` field. The `spec` and `status` fields are omitted.\"\nThis fixture exists because it caught a real mistake in our own gateway. The guard was \"an object with no uid is partial\" — but a PartialObjectMetadata HAS a uid. It has a whole metadata block. What it does not have is a spec or a status. So the guard looked at the wrong field, the object sailed through, and the consumer — whose model is REPLACE, never merge — swapped a live Deployment for a husk: the status view goes blank and the editor silently loses the user's spec.\nThe honest check is the KIND (PartialObjectMetadata / PartialObjectMetadataList, group meta.k8s.io), not the presence of a uid. A partial object delivered as an update would blank a consumer's state — spec §2 says so, and it is right; we were simply not enforcing what we had written down.\nThe recovery is a new snapshot cycle: it is the one response that is ALWAYS correct, because it re-establishes the truth rather than guessing at it.\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "group": "apps",
+      "version": "v1",
+      "resource": "deployments",
+      "namespace": "app"
+    },
+    "projection": "krm-full/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "deploy-web.v1"
+        ]
+      },
+      {
+        "op": "partial",
+        "body": "deploy-web.v1"
+      },
+      {
+        "op": "list",
+        "bodies": [
+          "deploy-web.v2"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "deploy-web.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "error",
+        "code": "RESYNC_REQUIRED",
+        "terminal": false
+      },
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "deploy-web.v2"
+      },
+      {
+        "type": "synced"
+      }
+    ]
+  },
+  {
     "id": "reconnect-prune",
     "title": "An object deleted while the consumer was disconnected is pruned on the next synced.",
     "why": "No persistent ghosts. The consumer never saw the `deleted` event — it was offline — so the ONLY thing that can remove feature-flags is the reset…synced boundary: mark all unseen on reset, seen on each added, prune what is still unseen on synced.\n",
@@ -651,7 +763,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -708,6 +820,88 @@
     }
   },
   {
+    "id": "resourceversion-bignum",
+    "title": "A 40-digit resourceVersion orders correctly — and a stale replay is still dropped.",
+    "why": "Kubernetes: \"Resource versions are compared as arbitrary bitsize decimal integers... The bitsize must not be assumed to be some fixed amount.\" Its own worked example is 40 digits long.\nstrconv.ParseInt tops out at 19. The gateway used to compare resource versions with it, so against a server like this one the parse simply failed — and the per-object monotonicity check (spec §6) gave up. The user-visible symptom is silently dropped live updates, which in a status view is indistinguishable from \"Kubernetes is being slow\", and is therefore the kind of bug that survives for years.\nNote the KIND. This is a Flunder — Kubernetes' own sample aggregated API — and not a ConfigMap, on purpose: kube-apiserver's resourceVersion is an etcd revision, so it fits in an int64 and you will never meet a 40-digit one there. A server with a different backing store is where such a value actually comes from, and a fixture that pretended otherwise would be teaching the rule with an example that cannot happen.\nThe comparison Kubernetes prescribes: \"If they are not of equal length, the longer one is greater... If they are of equal length, the lexicographically greater one is greater.\" That rules out a plain lexicographic compare, which would call the 41-digit version OLDER than the 40-digit one.\nSo, both halves at once:\n  - the 41-digit v2 is NEWER than the 40-digit v1 and must be delivered;\n  - replaying v1 afterwards is STALE and must be dropped (§6: never emit, within a cycle, a state\n    older than one already emitted for that uid).\n\nThese are decimals, so they ARE orderable: the default (OrderingStrict) handles them, and must.\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "group": "wardle.example.com",
+      "version": "v1alpha1",
+      "resource": "flunders",
+      "namespace": "app"
+    },
+    "projection": "krm-full/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "flunder.v1-bignum"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "flunder.v2-bignum-newer"
+      },
+      {
+        "op": "modified",
+        "body": "flunder.v1-bignum"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "flunder.v1-bignum"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "flunder.v2-bignum-newer"
+      }
+    ]
+  },
+  {
+    "id": "resourceversion-unorderable",
+    "title": "An aggregated API's unorderable resourceVersion is refused, loudly — not tolerated in silence.",
+    "why": "Kubernetes 1.35 made orderability a CONFORMANCE requirement, for built-in types and custom resources alike. This library REQUIRES 1.35+ and relies on it: a ConfigMap, a Deployment or a CRD cannot serve an unorderable resourceVersion, so a fixture using one would be defending against a case a conformant cluster cannot produce.\nThe one server that still may is an AGGREGATED / extension API server — a third-party implementation the conformance test does not cover. Hence a Flunder (wardle.example.com), Kubernetes' own sample aggregated API. The docs' carve-out is written for exactly this: \"if either of two resource version strings does not parse as a decimal number, the two strings can be checked for equality but you cannot rely on comparisons for ordering.\"\nThe protocol promises consumers per-object monotonicity (§6) — within a cycle you are never handed a state older than one you already hold — and the gateway keeps that promise BY ordering resource versions. If it cannot order them, it cannot keep it. A gateway that quietly carries on anyway leaves a consumer believing a guarantee it is no longer getting, which is strictly worse than one that has been told.\nSo the default (Gateway.Ordering = OrderingStrict) refuses: a terminal INTERNAL error that NAMES the escape hatch, so the operator of an aggregated API is never merely stuck. OrderingLenient streams it anyway and simply stops ordering — dropping nothing it cannot compare, because a duplicate is harmless (apply is idempotent) while a wrongly-dropped update is data loss.\nNote WHERE the refusal lands: after `reset`, because the gateway only learns what this upstream's resource versions look like when the first object arrives. It cannot know from the scope alone.\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "group": "wardle.example.com",
+      "version": "v1alpha1",
+      "resource": "flunders",
+      "namespace": "app"
+    },
+    "projection": "krm-full/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "flunder.v3-opaque"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "error",
+        "code": "INTERNAL",
+        "terminal": true
+      }
+    ]
+  },
+  {
     "id": "resync-midstream",
     "title": "Upstream continuity can be lost WITHOUT the SSE connection dropping — a fresh cycle follows.",
     "why": "410 Gone, an informer relist, a cache reset. The SSE connection is perfectly healthy, but the gateway can no longer promise it saw every change — so it must begin a new snapshot cycle rather than silently continue. A gateway that just relays the watch cannot do this, and the ghost it leaves is invisible until someone notices a deleted object still on screen. It SHOULD announce the break first with a non-terminal RESYNC_REQUIRED.\n",
@@ -721,7 +915,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -789,8 +983,8 @@
   },
   {
     "id": "secret-redaction",
-    "title": "A redacted value is shown as a mask, is never dirtiable, and can never be written back.",
-    "why": "The rule that makes a Secret safe to display at all: a value you never SAW cannot round-trip over the real one. Three obligations, and all three must hold or the feature is a vulnerability:\n\n  1. the gateway declares WHICH paths are redacted (RFC 6901 pointers), on the wire, per object —\n     so a consumer never has to infer redaction from a value that merely LOOKS like a placeholder;\n  2. the client marks those paths read-only: no draft, no dirty, no conflict, never in a patch;\n  3. the gateway REJECTS any patch that touches a redacted path — belt and braces, because the\n     client is not the security boundary. A hostile client is just a client.\n\nEditing an UNREDACTED field of the same object must still work — that is the whole point of keys-only disclosure. You can see that `token` exists, you can rename the object's labels, and you can never learn or clobber the token itself.\n",
+    "title": "A redacted value is not on the wire at all — the key is disclosed, the value is withheld.",
+    "why": "Keys-only disclosure. The gateway omits Secret values and declares their RFC 6901 paths in `redacted`; the client keeps those paths read-only and never includes them in a patch. The host save handler independently validates a patch against the active projection. Unredacted fields of the same object remain editable.\n",
     "suites": [
       "gateway",
       "client"
@@ -801,7 +995,7 @@
       "resource": "secrets",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -816,10 +1010,16 @@
       },
       {
         "type": "added",
-        "body": "secret-token.v1",
-        "redactedPaths": [
-          "/data/token",
-          "/data/username"
+        "body": "secret-token.v1-wire",
+        "redacted": [
+          {
+            "path": "/data/token",
+            "rev": 1
+          },
+          {
+            "path": "/data/username",
+            "rev": 1
+          }
         ]
       },
       {
@@ -867,18 +1067,7 @@
           }
         }
       }
-    },
-    "gatewayRejects": [
-      {
-        "patch": {
-          "data": {
-            "token": "hunter2"
-          }
-        },
-        "code": "FORBIDDEN",
-        "because": "/data/token is redacted under krm-editor/v1"
-      }
-    ]
+    }
   },
   {
     "id": "snapshot-then-deltas",
@@ -894,7 +1083,7 @@
       "resource": "configmaps",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -948,9 +1137,9 @@
     }
   },
   {
-    "id": "status-only-churn",
-    "title": "status follows the server live, and is never dirty, never conflicted, never in a patch.",
-    "why": "This is the product thesis in one fixture. `status` is controller-owned: it must update live (that is the whole live-status-watch use case — read-only is NOT ignored, it flashes and re-renders), and it must be structurally incapable of becoming an edit. Meanwhile the user is editing `spec.replicas`, and a status heartbeat must not touch it.\nOn a real workload this — not editing — is the dominant traffic on the stream.\n",
+    "id": "status-follow-live",
+    "title": "Status follows the server live while an edit survives.",
+    "why": "`krm-full/v1` keeps `status`, read-only and live. A controller-only update must flash and follow the server while an in-flight edit to `spec.replicas` survives untouched and remains the only patchable change.\nThis is the browser demo: watch Kubernetes reconcile while you type.\n",
     "suites": [
       "gateway",
       "client"
@@ -962,7 +1151,7 @@
       "resource": "deployments",
       "namespace": "app"
     },
-    "projection": "krm-editor/v1",
+    "projection": "krm-full/v1",
     "watch": [
       {
         "op": "list",
@@ -1017,26 +1206,154 @@
             "replicas": 4
           },
           "status": {
-            "readyReplicas": 2,
-            "observedGeneration": 4
+            "readyReplicas": 2
           }
         },
         "patch": {
           "spec": {
             "replicas": 4
           }
-        },
-        "flashed": [
-          [
-            "status",
-            "readyReplicas"
-          ],
-          [
-            "status",
-            "conditions"
-          ]
-        ]
+        }
       }
     }
+  },
+  {
+    "id": "status-only-churn",
+    "title": "A status-only update produces no event when the selected projection ignores status.",
+    "why": "`krm-spec/v1` ignores `status`, so a controller-only update must emit no event at all. Meanwhile the user is editing `spec.replicas`; the suppressed status heartbeat must not touch that draft.\nOn a real workload this — not editing — is the dominant traffic on the stream.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "group": "apps",
+      "version": "v1",
+      "resource": "deployments",
+      "namespace": "app"
+    },
+    "projection": "krm-spec/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "deploy-web.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "deploy-web.v2"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "deploy-web.v1-spec"
+      },
+      {
+        "type": "synced"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "set",
+          "uid": "deploy-web-0001",
+          "path": [
+            "spec",
+            "replicas"
+          ],
+          "value": 4
+        }
+      ],
+      "expect": {
+        "dirty": [
+          [
+            "spec",
+            "replicas"
+          ]
+        ],
+        "conflicts": [],
+        "draftSubset": {
+          "spec": {
+            "replicas": 4
+          }
+        },
+        "patch": {
+          "spec": {
+            "replicas": 4
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "tombstone-without-uid",
+    "title": "An ambiguous tombstone is never emitted as `deleted` — a new cycle prunes instead.",
+    "why": "spec §4.2, and it is stated in strong terms for a reason: if the gateway cannot recover a trustworthy uid it MUST NOT emit an ambiguous `deleted`. It begins a new snapshot cycle and lets reset…synced do the pruning.\nThe source of a degenerate tombstone is client-go's cache.DeletedFinalStateUnknown: the informer missed the delete and noticed during a relist, so it hands you a wrapper whose object may be nothing more than a key. A gateway that \"helpfully\" reconstructs a uid from the name deletes THE WRONG OBJECT out of somebody's browser — and a delete-and-recreate under the same name (see delete-recreate-uid) is exactly the case where the name is a lie.\nPaying for a relist is the cheap option here. Guessing is not.\n",
+    "suites": [
+      "gateway"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-full/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1",
+          "cm-flags.v1"
+        ]
+      },
+      {
+        "op": "tombstone",
+        "body": "cm-flags.v1"
+      },
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "added",
+        "body": "cm-flags.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "error",
+        "code": "RESYNC_REQUIRED",
+        "terminal": false
+      },
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      }
+    ]
   }
 ]

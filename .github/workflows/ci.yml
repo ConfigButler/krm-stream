@@ -1,12 +1,25 @@
+# The validation pipeline: everything needed to TRUST a commit, and nothing that publishes.
+#
+# It runs directly on pull requests, and release.yml calls it as a reusable workflow on every push to
+# main. That is the whole trust model in one rule: the release tail runs only after the exact same
+# jobs a PR gets, in the same run — so a write token never meets code this pipeline has not already
+# validated. (GitHub enforces the fork half of it too: a fork PR always gets a read-only token.)
 name: ci
 
 on:
-  push:
-    branches: [main]
   pull_request:
+  workflow_call:
+  workflow_dispatch:
 
 permissions:
   contents: read
+
+# A new push to a PR cancels the previous run. When release.yml calls this workflow there is no PR
+# number, and github.run_id keeps the group unique — so a release run can never be cancelled by, or
+# cancel, anything else.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: true
 
 jobs:
   # The point of the monorepo: one contract, and a change to it must be seen by BOTH
@@ -17,7 +30,9 @@ jobs:
     name: fixtures are the contract
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
       - name: install yq
         run: sudo curl -fsSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.48.1/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq
       - name: regenerate
@@ -30,37 +45,284 @@ jobs:
     runs-on: ubuntu-latest
     needs: fixtures
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version: "1.26"
-          cache-dependency-path: gateway/go.sum
+          # There is no gateway/go.sum, and there never will be: the core module has ZERO
+          # dependencies, and the `consumable` job below fails the build if it ever grows one. So
+          # there is nothing to restore and nothing to save — asking for a cache here only produced
+          # a "Restore cache failed: some specified paths were not resolved" warning on every run.
+          cache: false
       - run: go vet ./...
         working-directory: gateway
-      - run: go test ./...
+      # -race: the gateway fans out one upstream watch to N subscribers (SharedBackend). A data race
+      # there shows a browser another tenant's object; it is not a flaky-test problem.
+      - run: go test -race ./...
         working-directory: gateway
-      - uses: golangci/golangci-lint-action@v9
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
         with:
           version: v2.12.2
           working-directory: gateway
+
+  # The Kubernetes adapter is a SEPARATE MODULE — which is the point (`go get .../gateway` stays
+  # dependency-free, and client-go is opt-in) but has a sharp edge: the gateway job's `go test ./...`
+  # does not reach across a module boundary, so without this job the adapter would ship untested.
+  #
+  # The e2e build tag is VETTED here and RUN nowhere in per-PR CI: the real-cluster suite needs
+  # Docker-in-Docker and minutes, while the fixtures gate every PR in milliseconds (`task
+  # test-cluster` runs it, and proposal 0002 says why it lives outside this gate). Vetting it still
+  # matters — a test suite that no longer compiles is a suite nobody notices has stopped running.
+  kube:
+    name: kube adapter (go)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26"
+          # This module DOES have dependencies (it is the only one that imports client-go), so this
+          # is the one Go job where a cache is real.
+          cache-dependency-path: gateway/kube/go.sum
+      - run: go vet -tags e2e ./...
+        working-directory: gateway/kube
+      - run: go test ./...
+        working-directory: gateway/kube
+      - uses: golangci/golangci-lint-action@ba0d7d2ec06a0ea1cb5fa41b2e4a3ab91d21278a # v9.3.0
+        with:
+          version: v2.12.2
+          working-directory: gateway/kube
+          args: --build-tags e2e
+
+  # Can a STRANGER actually use this? Nothing else in this repo can answer that.
+  #
+  # gateway/kube once carried `replace ... => ../`, and a replace applies ONLY to the main module. So
+  # every test in this repo passed while `go get github.com/ConfigButler/krm-stream/gateway/kube` was
+  # broken for literally everyone else ("unknown revision gateway/v0.0.0"). The bug was invisible from
+  # the inside BY CONSTRUCTION — which is why this job builds from a clean module in a temp directory,
+  # outside the workspace, resolving over the network exactly as an adopter would.
+  #
+  # It also guards the other half of the promise: the CORE module must stay dependency-free. `go get
+  # .../gateway` pulling in client-go would make the protocol cost what the adapter costs.
+  #
+  # There is a sibling of this job in release.yml (`consumable-release`) that runs the same check
+  # against the PUBLISHED TAG rather than a commit sha. That one is the check that actually matters
+  # to an adopter; this one is the one that catches the mistake before it is tagged.
+  consumable:
+    name: a stranger can `go get` this
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26"
+          # No cache, and not because a file is missing: this job's entire job is to resolve the
+          # modules FROM THE NETWORK, the way an adopter does. A warm module cache here would be a
+          # way for the bug to hide. (It also has no go.mod of its own to key a cache on — the repo
+          # root holds a go.work — which is what the "dependencies file is not found" warning was.)
+          cache: false
+
+      - name: the core module has NO dependencies at all
+        run: |
+          set -euo pipefail
+          if grep -qE '^[[:space:]]*require' gateway/go.mod; then
+            echo '::error file=gateway/go.mod::the core module grew a dependency. go get of .../krm-stream/gateway is advertised as zero-dependency: it is the protocol, and an adopter must not inherit client-go transitively just to read a conforming event.'
+            grep -nE '^[[:space:]]*require' -A5 gateway/go.mod
+            exit 1
+          fi
+          echo "gateway/go.mod has no require block. The protocol still costs nothing."
+
+      # The original bug, caught directly and cheaply, on every PR. The `go get` below would also
+      # catch it — but only while the version gateway/kube requires is one that already exists as a
+      # tag, and on a release commit it is not (see the guard below). This grep has no such blind
+      # spot, so the exact mistake that shipped an unconsumable module can never be re-introduced
+      # silently.
+      - name: no module may carry a `replace`
+        run: |
+          set -euo pipefail
+          if grep -nE '^[[:space:]]*replace([[:space:]]|\()' gateway/go.mod gateway/kube/go.mod; then
+            echo '::error::a `replace` directive applies ONLY to the main module. It works in this checkout and is IGNORED by everyone who runs `go get`, so it makes the module unconsumable while every test here still passes. go.work is how this repo points the modules at each other; see the comment at the top of it.'
+            exit 1
+          fi
+          echo "no replace directives. go.work is doing the job, and consumers are not lied to."
+
+      # No checkout is used below this line, on purpose: the module must resolve from the network.
+      - name: go get the ADAPTER from a clean module, outside this workspace
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          # direct, not the proxy: a commit pushed seconds ago may not be in proxy.golang.org yet, and
+          # a cache miss here would look like a pass.
+          GOPROXY: direct
+          GOFLAGS: -mod=mod
+        run: |
+          set -euo pipefail
+
+          # gateway/kube requires the core module by version. On an ordinary commit that version is
+          # one that has already been released, so the resolution below is exactly what an adopter
+          # gets. On a RELEASE commit it is the version being released — whose tag does not exist
+          # until the release PR merges — and `go get` would fail here for a reason that is not a
+          # bug. So: if the required core version has no tag yet, skip. release.yml re-runs this same
+          # check against the real tag once it exists, which is the stronger check anyway.
+          core="$(sed -n 's|^[[:space:]]*github.com/ConfigButler/krm-stream/gateway v\([^ ]*\).*|\1|p' gateway/kube/go.mod | head -1)"
+          case "$core" in
+            0.0.0-*) ;;  # a pseudo-version names a commit, and always resolves
+            "")
+              echo "::error::gateway/kube/go.mod does not require the core module at all" && exit 1 ;;
+            *)
+              if ! git ls-remote --exit-code --tags origin "refs/tags/gateway/v${core}" >/dev/null 2>&1; then
+                echo "::notice::gateway/kube requires core v${core}, which is not tagged yet — this is a release commit. The published tag is verified by release.yml (consumable-release)."
+                exit 0
+              fi ;;
+          esac
+
+          sha="${{ github.event.pull_request.head.sha || github.sha }}"
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          go mod init example.com/stranger
+          cat > main.go <<'GO'
+          package main
+
+          import (
+          	"k8s.io/client-go/dynamic"
+
+          	"github.com/ConfigButler/krm-stream/gateway"
+          	"github.com/ConfigButler/krm-stream/gateway/kube"
+          )
+
+          // The one line an adopter writes: the adapter must satisfy the core's seam.
+          var _ gateway.Backend = kube.NewBackend(dynamic.Interface(nil))
+
+          func main() {}
+          GO
+          go get "github.com/ConfigButler/krm-stream/gateway/kube@${sha}"
+          go build ./...
+          echo "a stranger can go get and build the Kubernetes adapter."
 
   client:
     name: client (typescript)
     runs-on: ubuntu-latest
     needs: fixtures
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: packages/krm-stream/package-lock.json
-      - run: npm install --no-audit --no-fund
+      # npm ci, not npm install: the lockfile is the input, and a build that is allowed to quietly
+      # resolve a different tree than the one committed is not the build we tested.
+      - run: npm ci --no-audit --no-fund
         working-directory: packages/krm-stream
-      # Node 22 runs .ts directly (type stripping) — the suite needs no test deps.
+      # Node 22 runs .ts directly (type stripping) — the suite needs no test runner dependency.
       - run: node --test
         working-directory: packages/krm-stream
-      - run: npx tsc --noEmit
+      # ...but stripping is not checking. This is the ONLY thing that typechecks test/, and test/ is
+      # where the conformance suite lives, so it is not optional.
+      - run: npx tsc --noEmit -p tsconfig.test.json
         working-directory: packages/krm-stream
+      - run: npx biome ci
+        working-directory: packages/krm-stream
+      # The build, last: it is what ships, and it must stay plain ESM a browser can import with no
+      # bundler and no runtime dependency.
       - run: npx tsc
         working-directory: packages/krm-stream
+
+      # The unscoped package is a tiny forwarder. Its version and dependency on the real scoped
+      # package must match the release that is being packed, so derive both from the scoped
+      # package.json immediately before packing. This edits only the CI workspace; release-please
+      # owns the committed version bumps.
+      - name: synchronize the unscoped forwarder
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const fs = require("node:fs");
+          const real = JSON.parse(fs.readFileSync("packages/krm-stream/package.json", "utf8"));
+          const compatPath = "packages/krm-stream-compat/package.json";
+          const compat = JSON.parse(fs.readFileSync(compatPath, "utf8"));
+          compat.version = real.version;
+          compat.dependencies["@configbutler/krm-stream"] = real.version;
+          fs.writeFileSync(compatPath, `${JSON.stringify(compat, null, 2)}\n`);
+          NODE
+
+      # Pack the tarballs HERE, in the job that just tested them, and hand them to the release
+      # workflow as artifacts. release.yml publishes these exact bytes rather than rebuilding them:
+      # the things on npm are then the things this pipeline proved, and not a second build that
+      # merely ought to match.
+      #
+      # The versions inside them are already correct on a release commit — release-please bumps
+      # package.json in the release PR, so by the time this runs on main the tree IS the release.
+      - name: pack the tarballs that will be published
+        # mkdir first: --pack-destination does not create the directory, it fails with ENOENT.
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/npm
+          npm pack --pack-destination /tmp/npm ./packages/krm-stream
+          npm pack --pack-destination /tmp/npm ./packages/krm-stream-compat
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: npm-packages
+          path: /tmp/npm/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  # The seam. Both suites above pass against bytes that never left their own process — which cannot
+  # prove that the server flushes, that frames survive arbitrary chunk boundaries, or that a terminal
+  # error really closes the connection. This job runs the REAL Go gateway over a REAL socket and reads
+  # it with the REAL TypeScript client. Still no cluster: the upstream is the scripted corpus.
+  wire:
+    name: end to end (go gateway -> ts client, over HTTP)
+    runs-on: ubuntu-latest
+    needs: fixtures
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26"
+          cache: false # the core module has no dependencies; see the `gateway` job
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+      - uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: task e2e-wire
+
+  # The top of the ladder that still needs no cluster. This is the ONLY job that proves the library's
+  # central promise — that the published ESM imports in a browser with no bundler — because Node
+  # importing it proves nothing: Node is not a browser. It is also the only place a `flash` is a fact
+  # rather than an array, and the only place native EventSource runs at all.
+  browser:
+    name: end to end (a real browser)
+    runs-on: ubuntu-latest
+    needs: fixtures
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26"
+          cache: false # the core module has no dependencies; see the `gateway` job
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+      - uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - run: task e2e-browser
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: failure()
+        with:
+          name: playwright-trace
+          path: examples/vanilla-browser/test-results/
+          retention-days: 7

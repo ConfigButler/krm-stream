@@ -1,26 +1,25 @@
-# examples/vanilla-browser — watch `status` reconcile, live
+# Vanilla browser example
 
-**The demo that sells the thing.** Point it at any object in any cluster and watch its `status` move —
-conditions flipping, `readyReplicas` climbing, `observedGeneration` catching up — in a browser, with
-real RBAC, and no save path at all.
+The example renders the official `@configbutler/krm-stream` ESM client in a browser with native
+`EventSource`. It runs against the replay gateway and the shared conformance corpus; no Kubernetes
+cluster is required.
 
-No framework. No bundler. One `<script type="module">` that imports the built ESM directly, which is
-the constraint the whole client is designed around.
-
-```html
-<script type="module">
-  import { LiveResourceStore, connectResourceStream } from "./krm-stream.js";
-
-  const store = new LiveResourceStore();
-  connectResourceStream("/resource-stream/v1?group=apps&version=v1&resource=deployments&namespace=app&name=web", store);
-  store.subscribe(() => renderStatus(store.status(uid)));
-</script>
+```bash
+task demo
+# http://127.0.0.1:8100/?fixture=status-only-churn&pace=800ms
 ```
 
-**Not built yet.** It lands once the client and the gateway are green against the conformance suite —
-it is the proof, not the prototype. See [`CONTRIBUTING.md`](../../CONTRIBUTING.md) for the order of
-work.
+Use `task e2e-browser` to run the Chromium check.
 
-Why status-only, and why first: it is the one use case that needs *no* merge, *no* conflict model and
-*no* write path — so it is the smallest honest demonstration that the stream is real. If watching a
-controller reconcile in a browser is not compelling on its own, nothing built on top of it will be.
+The page demonstrates live status updates, three-way conflict handling, draft edits, and redacted
+Secret values. Useful fixtures include:
+
+| Fixture | Demonstrates |
+|---|---|
+| `status-only-churn` | Status updates while an editable draft remains intact. |
+| `conflict-and-converge` | A real conflict followed by server convergence. |
+| `edit-vs-unrelated-change` | An unrelated server update preserves the local edit. |
+| `secret-redaction` | Redacted values remain unavailable and read-only. |
+| `named-object-absent` | An empty snapshot is a valid resource state. |
+
+Add `pace=0ms` for the fastest replay or use a positive value to inspect each event.

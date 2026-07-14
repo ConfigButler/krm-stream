@@ -1,0 +1,120 @@
+[
+  {
+    "id": "cluster-scoped",
+    "because": "no namespace => cluster-scoped, or every namespace. The Authorizer decides if that is OK",
+    "query": "version=v1&resource=namespaces",
+    "canonical": "version=v1&resource=namespaces",
+    "scope": {
+      "version": "v1",
+      "resource": "namespaces"
+    }
+  },
+  {
+    "id": "collection-core",
+    "because": "the common case: a core-group collection in one namespace",
+    "query": "resource=configmaps&version=v1&namespace=app",
+    "canonical": "version=v1&resource=configmaps&namespace=app",
+    "scope": {
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    }
+  },
+  {
+    "id": "explicit-target",
+    "because": "which cluster/workspace — a LOGICAL name the host resolves, never an address",
+    "query": "target=prod&group=wardle.example.com&version=v1alpha1&resource=flunders&namespace=app",
+    "canonical": "target=prod&group=wardle.example.com&version=v1alpha1&resource=flunders&namespace=app",
+    "scope": {
+      "target": "prod",
+      "group": "wardle.example.com",
+      "version": "v1alpha1",
+      "resource": "flunders",
+      "namespace": "app"
+    }
+  },
+  {
+    "id": "grouped-resource",
+    "because": "a non-core group",
+    "query": "group=apps&version=v1&resource=deployments&namespace=app",
+    "canonical": "group=apps&version=v1&resource=deployments&namespace=app",
+    "scope": {
+      "group": "apps",
+      "version": "v1",
+      "resource": "deployments",
+      "namespace": "app"
+    }
+  },
+  {
+    "id": "label-selector",
+    "because": "a selector is part of the scope: it changes which objects the snapshot contains",
+    "query": "version=v1&resource=pods&namespace=app&labelSelector=tier%3Dweb",
+    "canonical": "version=v1&resource=pods&namespace=app&labelSelector=tier%3Dweb",
+    "scope": {
+      "version": "v1",
+      "resource": "pods",
+      "namespace": "app",
+      "labelSelector": "tier=web"
+    }
+  },
+  {
+    "id": "named-object",
+    "because": "a single object. `name` is a scope, NOT a different endpoint — same framing (spec §2)",
+    "query": "version=v1&resource=configmaps&namespace=app&name=app-config",
+    "canonical": "version=v1&resource=configmaps&namespace=app&name=app-config",
+    "scope": {
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app",
+      "name": "app-config"
+    }
+  },
+  {
+    "id": "reject-api-server-address",
+    "because": "spec §8: a raw API URL is NEVER accepted. Not merely unused — REFUSED, so that an SSRF attempt is an error and not a silently ignored parameter",
+    "query": "version=v1&resource=secrets&server=https://10.0.0.1:6443",
+    "code": "SCOPE_INVALID"
+  },
+  {
+    "id": "reject-group-with-slash",
+    "because": "a group is a DNS subdomain; a slash means someone is building a path, not naming an API",
+    "query": "group=apps/v1&version=v1&resource=deployments",
+    "code": "SCOPE_INVALID"
+  },
+  {
+    "id": "reject-kubeconfig",
+    "because": "same rule, the other spelling. The browser never supplies credentials or an endpoint",
+    "query": "version=v1&resource=secrets&kubeconfig=/etc/admin.conf",
+    "code": "SCOPE_INVALID"
+  },
+  {
+    "id": "reject-name-with-slash",
+    "because": "a name is a DNS subdomain: no slashes. Same reason",
+    "query": "version=v1&resource=configmaps&namespace=app&name=app/../../etc",
+    "code": "SCOPE_INVALID"
+  },
+  {
+    "id": "reject-namespace-path-traversal",
+    "because": "a namespace is a DNS label. `../` is someone probing whether we paste this into a URL",
+    "query": "version=v1&resource=secrets&namespace=../../kube-system",
+    "code": "SCOPE_INVALID"
+  },
+  {
+    "id": "reject-no-resource",
+    "because": "there is no default resource, and guessing one would stream the wrong objects",
+    "query": "version=v1&namespace=app",
+    "code": "SCOPE_INVALID"
+  },
+  {
+    "id": "reject-no-version",
+    "because": "there is no default version. `v1` vs `v1beta1` are different objects with different shapes",
+    "query": "resource=configmaps&namespace=app",
+    "code": "SCOPE_INVALID"
+  },
+  {
+    "id": "reject-resource-is-a-kind",
+    "because": "`resource` is the plural lowercase API name (`configmaps`), not the Kind (`ConfigMap`) — the most common mistake there is, and it must be loud rather than 404 later",
+    "query": "version=v1&resource=ConfigMap&namespace=app",
+    "code": "SCOPE_INVALID"
+  }
+]

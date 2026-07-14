@@ -1,5 +1,5 @@
 {
-  "name": "krm-stream",
+  "name": "@configbutler/krm-stream",
   "version": "0.0.0",
   "description": "A live, honest window onto Kubernetes resources, in the browser: consume a KRM resource stream, three-way merge local edits, build a merge patch.",
   "keywords": [
@@ -26,17 +26,24 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist", "README.md"],
+  "files": [
+    "dist",
+    "README.md"
+  ],
   "engines": {
     "node": ">=22"
   },
   "scripts": {
     "build": "tsc",
     "test": "node --test",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.test.json",
+    "lint": "biome check",
+    "format": "biome check --write"
   },
-  "//": "typescript is the ONLY devDependency, and there are no dependencies at all. The engine must emit plain, dependency-free ESM: gitops-api has no bundler and is not getting one. Node 22 runs the .ts tests directly (type stripping), so the test suite needs nothing either.",
+  "//": "ZERO dependencies, and that one is absolute: the engine emits plain ESM a browser imports with no bundler, and gitops-api has no bundler and is not getting one. devDependencies ship NOTHING and are kept to the three that pay for themselves: typescript (the compiler), @types/node (without it `tsc` cannot see test/ at all, because the tests import node:test — and `node --test` STRIPS types rather than checking them, so the suite that IS the contract check would be the one unverified file in the repo), and biome (lint + format in one binary, the TypeScript half of what gofmt/go vet/golangci-lint do for the gateway).",
   "devDependencies": {
+    "@biomejs/biome": "^2.5.3",
+    "@types/node": "^26.1.1",
     "typescript": "^5.9.0"
   }
 }

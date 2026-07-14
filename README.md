@@ -1,107 +1,101 @@
 # krm-stream
 
-**A live, honest window onto Kubernetes resources, in the browser.**
+`krm-stream` turns Kubernetes resource watches into a small, browser-safe SSE protocol. It ships a
+Go gateway, a headless TypeScript store, and a shared conformance corpus.
 
-**A Go library** that turns a Kubernetes watch into a browser-friendly stream of complete **KRM**
-(Kubernetes Resource Model) objects — absorbing every watch mechanic (`resourceVersion` arithmetic,
-`410 Gone`, relists, bookmarks, partial objects, reconnects) behind a small, stable wire contract —
-**and a small JavaScript client that ships with it**, so the browser end is solved too rather than left
-as an exercise.
+The library owns the read stream. Your application owns identity, authorization policy, Kubernetes
+credentials, and writes.
 
-Go is the product. The npm package is the helper you would otherwise have had to write.
+## Start here
+
+Mount a scoped stream endpoint in an existing Go application:
 
 ```go
-import "github.com/ConfigButler/krm-stream/gateway"
-
-// Your app answers the two questions the library must never assume:
-//   who is this caller, and what may they see?
-h := gateway.Handler(gateway.Options{
-    Authorizer: myAuthz,                 // may this principal watch this scope?
-    ClientFor:  myClientForIdentity,     // a client acting AS them — their RBAC, their attribution
-})
-mux.Handle("/resource-stream/v1", h)
+mux.Handle("/resource-stream/v1", gateway.Handler(gateway.Options{
+	Principal:  func(r *http.Request) (gateway.Principal, error) { return userFromSession(r) },
+	Authorizer: authorizeScope,
+	Clients: func(_ context.Context, _ string, p gateway.Principal) (gateway.Backend, error) {
+		return kube.NewBackend(dynamicClientFor(p.(*User))), nil
+	},
+	Scopes: gateway.ScopePolicy{
+		Targets: []string{"production"},
+		Resources: []gateway.GroupResource{
+			{Resource: "configmaps", Scope: gateway.ResourceScopeNamespaced},
+		},
+	},
+	Projection: gateway.ProjectionFull,
+}))
 ```
 
-...and the browser end, for free:
+Consume the stream without choosing a UI framework:
 
-```js
-import { LiveResourceStore, connectResourceStream } from "krm-stream";
+```ts
+import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
-connectResourceStream("/resource-stream/v1?resource=configmaps&namespace=app", store);
-
-store.subscribe(() => render(store));       // live status, live conflicts
-store.setValue(uid, ["data", "log-level"], "debug");
-await save(store.patch(uid));               // a merge patch of only what you changed
+connectWithEventSource(
+  resourceStreamURL("/resource-stream/v1", {
+    target: "production",
+    version: "v1",
+    resource: "configmaps",
+    namespace: "app",
+  }),
+  store,
+);
 ```
 
-Watch `status` reconcile in real time. Edit `spec` with a real three-way merge. Real RBAC, real
-attribution — the browser sees exactly what the API server sees, and never more.
+`LiveResourceStore` keeps server truth and a local draft separate, reconciles live updates with a
+three-way merge, records conflicts, and builds RFC 7386 merge patches. The host applies any patch
+through its own save endpoint.
 
----
+## Packages
 
-## Why this exists
+| Package | Purpose |
+|---|---|
+| `github.com/ConfigButler/krm-stream/gateway` | Dependency-free Go stream gateway and SSE handler. |
+| `github.com/ConfigButler/krm-stream/gateway/kube` | Optional `client-go` backend and SSAR authorizer. |
+| `@configbutler/krm-stream` | Official dependency-free ESM client store and transports. |
+| `krm-stream` | Compatibility forwarder to the official scoped npm package. |
+| [`spec/v1.md`](spec/v1.md) | Normative protocol contract. |
+| [`conformance/`](conformance/) | Shared fixtures exercised by the Go gateway and TypeScript client. |
 
-Every "Kubernetes in a browser" UI reinvents the same three things, and gets at least one of them
-wrong:
+## Boundaries
 
-1. **The watch → browser bridge.** `resourceVersion` arithmetic, `410 Gone`, relists, bookmarks,
-   partial objects, reconnects. Get it wrong and you show ghosts: objects deleted an hour ago that
-   are still on the screen.
-2. **The merge.** The server writes `status` continuously while a human is typing into `spec`. A UI
-   that naively overwrites the form on every watch event destroys the edit; one that naively ignores
-   the event shows stale truth. The correct answer is a **three-way merge** — previous server state,
-   your draft, new server state — and almost nobody does it.
-3. **The honesty.** Most consoles flatten Kubernetes into an abstracted "document" and lose the thing
-   that made it worth showing. A CRD you have never heard of must round-trip **verbatim**.
+- No browser token handling or raw API-server URLs.
+- No authorization system: the host provides `Principal`, `Authorizer`, and `ClientFor`.
+- No write endpoint: hosts validate and apply their own patches.
+- No framework dependency in the browser client.
+- No `client-go` dependency in the core gateway.
 
-`krm-stream` does those three things, once, with a written contract and a conformance suite that both
-sides run.
+The important safety rule is simple: a projected or redacted field must never be written back by a
+browser. Use [`gateway.ValidateMergePatch`](gateway/patch.go) in the host save handler.
 
-## The three artifacts
+## Guides
 
-| | what | where |
-|---|---|---|
-| **Gateway** (Go) — *the library* | `go get github.com/ConfigButler/krm-stream/gateway`. Produces the stream from a Kubernetes watch; absorbs every watch mechanic; applies saves as a guarded patch (it will refuse one that touches a redacted path). Your app injects the two things it must never assume: **who the caller is**, and **what they may see** | [`gateway/`](gateway/) |
-| **Protocol** — *the contract* | the wire: `reset` · `added` · `modified` · `deleted` · `synced` · `error`, over SSE. Language-neutral on purpose: a Rust or Python gateway is a legitimate thing to write | [`spec/v1.md`](spec/v1.md) |
-| **Client** (TS/JS) — *the helper* | `npm i krm-stream`. `LiveResourceStore`: three-way merge, derived dirtiness, conflicts, merge-patch builder. Optional — any conforming consumer works — but you would only reimplement it | [`packages/krm-stream/`](packages/krm-stream/) |
+- [Adopting krm-stream](docs/adopting.md): same-origin cookie, bearer-token, and shared-watch setups.
+- [Authentication and authorization](docs/auth.md): identity and RBAC boundaries.
+- [Saving edits safely](docs/saving.md): patch validation and host write responsibilities.
+- [Operating krm-stream](docs/operations.md): metrics, alerts, and runtime controls.
+- [Client state model](docs/client-state-model.md): drafts, conflicts, redactions, and keyed lists.
+- [Releasing](docs/releasing.md): release workflow and publication prerequisites.
 
-They are joined by one thing, and it is the reason they live in one repo:
+## Requirements and maturity
 
-> **[`conformance/`](conformance/) — shared fixtures.** KRM object bodies in YAML, plus scenarios that
-> say what the gateway must *emit* and what the client must then *hold*. Both suites load them. A
-> protocol change that breaks one side fails both, in the same commit, before it can ship.
+The project is pre-1.0. Protocol and API changes may still be made before the first release.
 
-## Status
+- Go 1.26 for the gateway.
+- Node 22 for client development and tests.
+- Kubernetes 1.35+ for strict resource-version ordering. `OrderingLenient` supports known
+  non-conformant or aggregated APIs at the cost of per-object monotonic ordering.
 
-**Early.** The specs are written and the conformance fixtures are the contract. The gateway and the
-client are being implemented against them, test-first. Nothing is published yet.
-
-The design record lives in [`docs/`](docs/):
-[client-state-model](docs/client-state-model.md) (the merge algorithm the client implements),
-[extraction-plan](docs/extraction-plan.md) (where this came from, and the order of the work), and
-[naming](docs/naming.md) (why `krm-stream` — and why not `krm-live`).
-[`CONTRIBUTING.md`](CONTRIBUTING.md) is how to run it.
-
-## Quick start
+## Development
 
 ```bash
-task            # list everything
-task test       # go test + node --test, both against the shared fixtures
+task fixtures-check
+task test
 task lint
-task fixtures   # regenerate conformance/gen/*.json from the YAML sources
+task build-client
 ```
 
-Open the repo in the devcontainer (VS Code: *Reopen in Container*) and everything above is already
-installed: Go 1.26, Node 22, Task, k3d, kubectl.
-
-## Provenance
-
-Extracted from [ConfigButler/gitops-api](https://github.com/ConfigButler/gitops-api), where the
-pattern was proven live: a browser editing Kubernetes objects in a kcp workspace, as the signed-in
-human, with every change landing in Git attributed to them. The engine's three-way merge is a
-corrected descendant of that console's — the bugs it shipped are now regression tests here.
-
-## License
-
-Apache-2.0
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the fixture and test workflow. Licensed under
+[Apache-2.0](LICENSE).

@@ -1,15 +1,13 @@
 id: status-only-churn
-title: status follows the server live, and is never dirty, never conflicted, never in a patch.
+title: A status-only update produces no event when the selected projection ignores status.
 why: >
-  This is the product thesis in one fixture. `status` is controller-owned: it must update live (that
-  is the whole live-status-watch use case — read-only is NOT ignored, it flashes and re-renders),
-  and it must be structurally incapable of becoming an edit. Meanwhile the user is editing
-  `spec.replicas`, and a status heartbeat must not touch it.
+  `krm-spec/v1` ignores `status`, so a controller-only update must emit no event at all. Meanwhile the
+  user is editing `spec.replicas`; the suppressed status heartbeat must not touch that draft.
 
   On a real workload this — not editing — is the dominant traffic on the stream.
 suites: [gateway, client]
 scope: { target: demo, group: apps, version: v1, resource: deployments, namespace: app }
-projection: krm-editor/v1
+projection: krm-spec/v1
 
 watch:
   - { op: list, bodies: [deploy-web.v1] }
@@ -17,9 +15,8 @@ watch:
 
 events:
   - { type: reset }
-  - { type: added, body: deploy-web.v1 }
+  - { type: added, body: deploy-web.v1-spec }
   - { type: synced }
-  - { type: modified, body: deploy-web.v2 }
 
 client:
   edits:
@@ -28,9 +25,5 @@ client:
     dirty: [[spec, replicas]]               # the ONLY dirty path — status can never be one
     conflicts: []
     draftSubset:
-      spec: { replicas: 4 }                 # the edit survived the status churn
-      status:                               # ...and status followed the server, live
-        readyReplicas: 2
-        observedGeneration: 4
+      spec: { replicas: 4 }                 # the edit survived suppressed status churn
     patch: { spec: { replicas: 4 } }        # status is NOT in the patch. It cannot be.
-    flashed: [[status, readyReplicas], [status, conditions]]

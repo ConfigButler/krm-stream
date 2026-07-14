@@ -27,16 +27,17 @@ bash "${workspace_dir}/.devcontainer/sync-signing-key.sh" \
   || log "warning: SSH commit signing not configured (no agent / no key?) — commits will be unsigned"
 
 # ------------------------------------------------------- home ownership (READ ME) --
-# Every named volume mounted under /home/vscode (~/.claude, ~/.config/gh, ~/.kube, the Go
-# caches, persisted-home) is created by Docker as ROOT-owned, because the image has no such
+# Every named volume mounted under /home/vscode (~/.claude, ~/.codex, ~/.config/gh, ~/.kube, the
+# Go caches, persisted-home) is created by Docker as ROOT-owned, because the image has no such
 # directory to inherit ownership from. Without this chown, the `vscode` user cannot write to
-# any of them — and the symptom is baffling: `claude` cannot log in, `gh auth login` cannot
-# store a token, and kubectl cannot write a kubeconfig. Same fix as gitops-api's.
+# any of them — and the symptom is baffling: `claude` and `codex` cannot log in, `gh auth login`
+# cannot store a token, and kubectl cannot write a kubeconfig. Same fix as gitops-api's.
 log "ensuring cache dirs exist, then fixing ownership under /home/vscode"
 sudo mkdir -p \
   /home/vscode/.cache/go-build \
   /home/vscode/.cache/golangci-lint \
   /home/vscode/.claude \
+  /home/vscode/.codex \
   /home/vscode/.config/gh \
   /home/vscode/.kube \
   /home/vscode/persisted-home

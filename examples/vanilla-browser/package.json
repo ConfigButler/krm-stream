@@ -1,0 +1,12 @@
+{
+  "name": "krm-stream-example-vanilla-browser",
+  "private": true,
+  "type": "module",
+  "//": "Playwright lives HERE, not in packages/krm-stream, so the library keeps its three devDependencies and its promise: the published bundle has zero dependencies and needs no bundler. This example is the only place that promise is actually TESTED — a real browser, a real EventSource, a real unbundled ESM import.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.0"
+  }
+}

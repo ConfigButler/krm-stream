@@ -32,4 +32,8 @@ for f in "${here}"/fixtures/*.yaml; do
   to_json "${f}"
 done | jq -s 'sort_by(.id)' > "${here}/gen/fixtures.json"
 
-echo "conformance: $(jq 'length' "${here}/gen/bodies.json") bodies, $(jq 'length' "${here}/gen/fixtures.json") fixtures -> gen/"
+# scopes.json — the REQUEST half: how a scope is encoded in a URL. Read by BOTH suites, which is the
+# whole point: the client builds `canonical`, the gateway parses it back, and neither can drift.
+to_json "${here}/scopes.yaml" | jq 'sort_by(.id)' > "${here}/gen/scopes.json"
+
+echo "conformance: $(jq 'length' "${here}/gen/bodies.json") bodies, $(jq 'length' "${here}/gen/fixtures.json") fixtures, $(jq 'length' "${here}/gen/scopes.json") scopes -> gen/"

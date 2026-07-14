@@ -1,0 +1,180 @@
+# The trusted pipeline for pushes to main: run the FULL validation workflow (ci.yml — the exact same
+# jobs a PR gets), and only once every one of them is green let release-please version and tag, and
+# then publish. Nothing here runs for pull requests, so a write token never meets unreviewed code.
+#
+# What "release" means is different for the two halves of this repo, and both are handled below:
+#
+#   npm      the client is a package, and it is PUSHED to registry.npmjs.org.
+#   Go       the gateway and its Kubernetes adapter are not pushed anywhere. A Go module is
+#            published by the mere existence of a git tag of the form `<module-dir>/vX.Y.Z`, which
+#            the GitHub release created here IS. So `consumable-release` is not a formality: the tag
+#            is the artifact, and that job is the only thing that ever proves the artifact works.
+#
+# Versioning is conventional-commits, in lockstep: one number for the npm client, the gateway and the
+# adapter, because this repo's whole claim is that they are one contract and move in one commit. A
+# client that speaks protocol N and a gateway that speaks protocol N have no business carrying version
+# numbers that need a compatibility table to compare.
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+# Never cancel a release mid-publish; a follow-up push queues behind it.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ci:
+    name: ci
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  release-please:
+    name: release-please
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: ci
+    permissions:
+      contents: write # create the tags and releases
+      pull-requests: write # open/refresh the release PR
+    outputs:
+      released: ${{ steps.release.outputs.releases_created }}
+      version: ${{ steps.release.outputs['packages/krm-stream--version'] }}
+      kube_tag: ${{ steps.release.outputs['gateway/kube--tag_name'] }}
+      gateway_tag: ${{ steps.release.outputs['gateway--tag_name'] }}
+    steps:
+      - id: release
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+  # Publish the tarballs that ci.yml PACKED AND TESTED in this same run — not a second build of the
+  # same source. `npm pack` ran in the `client` job after the type check, the lint and the browser
+  # e2e's build; those exact bytes are what land on the registry.
+  #
+  # No NPM_TOKEN. This publishes over OIDC ("trusted publishing"): npm trades this workflow's
+  # short-lived GitHub identity token for a publish credential, which means the repo holds no
+  # long-lived registry secret that could leak, and npm attaches SLSA provenance to the release
+  # automatically — the published package can be traced back to this commit and this workflow.
+  #
+  # It requires a one-time setup on npmjs.com (Settings -> Trusted publisher for BOTH
+  # `@configbutler/krm-stream` and `krm-stream`: repo ConfigButler/krm-stream, workflow
+  # `release.yml`). See docs/releasing.md.
+  npm:
+    name: publish to npm
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [ci, release-please]
+    if: needs.release-please.outputs.released == 'true'
+    permissions:
+      contents: read
+      id-token: write # the OIDC token npm exchanges for a publish credential
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: npm-packages
+          path: /tmp/npm
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "22"
+          # Writes the .npmrc that points publish at the public registry. With trusted publishing
+          # there is no token to put in it.
+          registry-url: https://registry.npmjs.org
+
+      # Trusted publishing needs npm >= 11.5.1; Node 22 ships an older npm.
+      - run: npm install -g npm@latest
+
+      - name: the tarballs must be the version that was just released
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -euo pipefail
+          scoped="/tmp/npm/configbutler-krm-stream-${VERSION}.tgz"
+          compat="/tmp/npm/krm-stream-${VERSION}.tgz"
+          if [ ! -f "$scoped" ] || [ ! -f "$compat" ]; then
+            echo "::error::expected ${scoped} and ${compat}, but ci.yml packed: $(ls /tmp/npm)"
+            echo "the tarball and the tag disagree about what this release is — refusing to publish."
+            exit 1
+          fi
+          echo "scoped_tarball=${scoped}" >> "$GITHUB_ENV"
+          echo "compat_tarball=${compat}" >> "$GITHUB_ENV"
+
+      - name: publish the scoped package first
+        run: npm publish "$scoped_tarball" --provenance --access public
+
+      - name: publish the unscoped forwarder
+        run: npm publish "$compat_tarball" --provenance --access public
+
+  # A Go module is published by its TAG, and until something outside this repository resolves that
+  # tag, "published" is a hope. This is the same check as ci.yml's `consumable`, aimed at the thing an
+  # adopter actually types — `go get ...@v0.3.1`, not `@<sha>` — and it is the only run of it that can
+  # exist, because the tag does not exist until the job above creates it.
+  #
+  # It is also the check that would have caught the `replace` bug at the only moment that mattered.
+  consumable-release:
+    name: a stranger can `go get` the release
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: release-please
+    if: needs.release-please.outputs.released == 'true'
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version: "1.26"
+          cache: false # it must resolve from the network. That is the entire point.
+
+      # No checkout anywhere in this job, on purpose.
+      - name: go get the released ADAPTER from a clean module
+        env:
+          # direct: the tag was created seconds ago and proxy.golang.org may not have indexed it yet,
+          # so a proxy miss here would look like a failure that is not one.
+          GOPROXY: direct
+          GOFLAGS: -mod=mod
+          KUBE_TAG: ${{ needs.release-please.outputs.kube_tag }}
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cd "$tmp"
+          go mod init example.com/stranger
+          cat > main.go <<'GO'
+          package main
+
+          import (
+          	"k8s.io/client-go/dynamic"
+
+          	"github.com/ConfigButler/krm-stream/gateway"
+          	"github.com/ConfigButler/krm-stream/gateway/kube"
+          )
+
+          // The one line an adopter writes: the adapter must satisfy the core's seam.
+          var _ gateway.Backend = kube.NewBackend(dynamic.Interface(nil))
+
+          func main() {}
+          GO
+          go get "github.com/ConfigButler/krm-stream/gateway/kube@${KUBE_TAG#gateway/kube/}"
+          go build ./...
+          echo "a stranger can go get and build ${KUBE_TAG}."
+
+      # Ask the module proxy for the new versions, which is what makes them appear on pkg.go.dev. It
+      # would get there eventually on its own, via the first person to ask — but "eventually, if a
+      # stranger happens to try" is a poor way to publish documentation.
+      - name: warm proxy.golang.org and pkg.go.dev
+        env:
+          GOPROXY: https://proxy.golang.org
+          GATEWAY_TAG: ${{ needs.release-please.outputs.gateway_tag }}
+          KUBE_TAG: ${{ needs.release-please.outputs.kube_tag }}
+        run: |
+          set -euo pipefail
+          go list -m "github.com/ConfigButler/krm-stream/gateway@${GATEWAY_TAG#gateway/}" || true
+          go list -m "github.com/ConfigButler/krm-stream/gateway/kube@${KUBE_TAG#gateway/kube/}" || true

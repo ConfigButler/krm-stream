@@ -10,7 +10,7 @@ why: >
   and the draft is left ALONE — no follow, no flash, no conflict.
 suites: [gateway, client]
 scope: { target: demo, version: v1, resource: configmaps, namespace: app }
-projection: krm-editor/v1
+projection: krm-full/v1
 
 watch:
   - { op: list, bodies: [cm-app.v1] }

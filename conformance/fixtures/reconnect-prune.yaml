@@ -6,7 +6,7 @@ why: >
   on each added, prune what is still unseen on synced.
 suites: [gateway, client]
 scope: { target: demo, version: v1, resource: configmaps, namespace: app }
-projection: krm-editor/v1
+projection: krm-full/v1
 
 watch:
   - { op: list, bodies: [cm-app.v1, cm-flags.v1] }

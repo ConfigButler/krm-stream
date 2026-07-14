@@ -1,0 +1,139 @@
+# A real aggregated API server (wardle.example.com), derived from upstream's artifacts/example/.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: wardle
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: apiserver
+  namespace: wardle
+---
+# The aggregator must be allowed to delegate authn/authz decisions to the main API server.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: wardle:system:auth-delegator
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: system:auth-delegator
+subjects:
+  - kind: ServiceAccount
+    name: apiserver
+    namespace: wardle
+---
+# ...and to read the extension-apiserver-authentication ConfigMap, which is how it learns the CA
+# that fronts requests proxied to it by the aggregator.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: wardle-auth-reader
+  namespace: kube-system
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: extension-apiserver-authentication-reader
+subjects:
+  - kind: ServiceAccount
+    name: apiserver
+    namespace: wardle
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: aggregated-apiserver-clusterrole
+rules:
+  - apiGroups: [""]
+    resources: [namespaces]
+    verbs: [get, watch, list]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - mutatingwebhookconfigurations
+      - validatingwebhookconfigurations
+      # A newer sample-apiserver also watches admission POLICIES. Without these it starts, serves, and
+      # logs a forbidden-reflector error every two seconds forever — which is the kind of noise that
+      # trains people to ignore logs.
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
+    verbs: [get, watch, list]
+  - apiGroups: ["flowcontrol.apiserver.k8s.io"]
+    resources: [prioritylevelconfigurations, flowschemas]
+    verbs: [get, watch, list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: wardle:aggregated-apiserver-clusterrole
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: aggregated-apiserver-clusterrole
+subjects:
+  - kind: ServiceAccount
+    name: apiserver
+    namespace: wardle
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wardle-server
+  namespace: wardle
+  labels:
+    apiserver: "true"
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      apiserver: "true"
+  template:
+    metadata:
+      labels:
+        apiserver: "true"
+    spec:
+      serviceAccountName: apiserver
+      containers:
+        - name: wardle-server
+          # The tag lags the cluster's minor version — only 1.33.8 is published — and that is fine: an
+          # APIService aggregates over HTTP, and this skew is what a real deployment looks like.
+          image: registry.k8s.io/e2e-test-images/sample-apiserver:1.33.8
+          args:
+            - --etcd-servers=http://localhost:2379
+            - --secure-port=8443
+            - --v=2
+          ports:
+            - containerPort: 8443
+        # NOT optional: --etcd-servers will not take an empty value, so the sample-apiserver needs a
+        # real store. Nothing here needs to outlive the pod.
+        - name: etcd
+          image: registry.k8s.io/etcd:3.5.21-0
+          command: ["/usr/local/bin/etcd", "--listen-client-urls", "http://127.0.0.1:2379", "--advertise-client-urls", "http://127.0.0.1:2379"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: wardle
+spec:
+  ports:
+    - port: 443
+      protocol: TCP
+      targetPort: 8443
+  selector:
+    apiserver: "true"
+---
+apiVersion: apiregistration.k8s.io/v1
+kind: APIService
+metadata:
+  name: v1alpha1.wardle.example.com
+spec:
+  group: wardle.example.com
+  version: v1alpha1
+  groupPriorityMinimum: 1000
+  versionPriority: 15
+  service:
+    name: api
+    namespace: wardle
+  # A self-signed serving cert on a throwaway test API. Fine here, and nowhere else.
+  insecureSkipTLSVerify: true
