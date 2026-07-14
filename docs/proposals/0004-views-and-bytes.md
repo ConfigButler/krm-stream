@@ -174,12 +174,19 @@ consumer that receives one has to know it is holding half a thing. This project'
 *"the payload is a Kubernetes object — not an abstracted document"* (spec §0). A projection that
 ignores `spec` quietly abandons that.
 
-**And the byte argument for it does not survive contact with §5.** The obvious case for it is: under
-`I-REPLACE`, every status event re-sends the whole object, *including a `spec` that did not change* —
-and a Deployment's `spec.template` is large. That sounds expensive. But an SSE stream is **one gzip
-stream with one sliding window**: the previous event's `spec` is still in that window, so re-sending
-an identical `spec` costs **almost nothing on the wire.** Compression eats this problem for free,
-without inventing a payload that is not a KRM object.
+**And the byte argument for it is weaker than it looks.** The case *for* it is: under `I-REPLACE`,
+every status event re-sends the whole object, *including a `spec` that did not change* — and a
+Deployment's `spec.template` is large. But an SSE stream is one compression stream with one sliding
+window, so a re-sent identical `spec` is mostly a back-reference and costs **far less than its size**.
+**With a caveat worth stating rather than glossing:** gzip's window is **32 KB**. On a single-object
+stream the previous `spec` is certainly still in it; on a **large scope with many objects interleaved**
+it may have been evicted, and the saving degrades. (Brotli's window is far larger, which would restore
+it.) So compression *blunts* this cost rather than eliminating it — **and the honest answer is that
+nobody here has measured it.** This repo has a habit for exactly that (F1–F7): measure it before
+building a projection to fix it.
+
+The argument that actually kills `krm-status/v1` is the one above it, and it does not depend on
+compression at all: **the payload would not be a KRM object.**
 
 So: pay for `ignore` when you want **zero events** (that is `krm-spec/v1`, and it is a real win that
 compression cannot give you). Do not pay for it merely to shave repeated bytes — gzip already did.
@@ -192,18 +199,41 @@ the thing that redacts Secrets.
 - **A caller-supplied projection is never acceptable.** Not `?omit=…`, not a JSON-Pointer list, not
   ever. If the browser can define the projection, the browser can define one that does not redact —
   and it has just un-redacted your Secrets. It is also unbounded input, an unbounded set of projection
-  identifiers on the wire, and an unbounded cache-key space. The scope is server-normalized (§8); so is
+  identifiers on the wire, and an unbounded cache-key space. The scope is server-normalized (spec §8); so is
   the projection.
-- **A host-registered projection is fine**, and is the flexibility that is actually wanted:
+- **A host-registered projection is fine**, and is the flexibility that is actually wanted.
 
-  ```go
-  gateway.Handler(gateway.Options{
-      Projections: map[gateway.Projection]gateway.Rules{
-          "acme-console/v1": {Ignore: []string{"/status"}, Redact: []string{"/data"}},
-      },
-      // …and the caller may only ASK for a name that is registered.
-  })
-  ```
+**But the rule shape must carry a KIND, and an earlier draft's did not.** This is worth catching now,
+while it is a struct in a document rather than a released API:
+
+```go
+// ❌ the draft. Kind-blind, and therefore WRONG.
+Rules{ Redact: []string{"/data"} }
+```
+
+`/data` is a path, and **`ConfigMap` has one too.** Select that projection for a ConfigMap scope and
+you have just redacted every ConfigMap's contents — a rule meant for Secrets, silently applied to the
+one kind whose whole purpose is to be readable. The built-in it is replacing is *not* path-scoped: it
+reads `if p == ProjectionEditor && isSecret(out)`. **A rule that cannot express `isSecret` cannot
+replace the thing it is replacing.**
+
+```go
+// ✅ rules are matched on the KIND first, then the path.
+gateway.Handler(gateway.Options{
+    Projections: map[gateway.Projection][]gateway.Rule{
+        "acme-console/v1": {
+            {Group: "", Kind: "Secret", Redact: []string{"/data", "/stringData"}},
+            {Ignore: []string{"/status"}},   // no Kind ⇒ every kind
+        },
+    },
+    // …and the caller may only ASK for a name that is registered.
+})
+```
+
+`Group` matters as much as `Kind`, and leaving it out is the same bug one level down: a CRD may
+perfectly well define its own `Secret` kind in its own group, and a rule that matches on kind alone
+would redact it — or worse, *fail* to redact the real one because someone wrote `Kind: "secret"`.
+Match on `(group, kind)`, exactly as Kubernetes does.
 
 The rule, in one line: **the consumer picks a projection from a list; it never describes one.** The
 `reset` echoes the projection actually in force, and a consumer that gets something other than what it
@@ -221,10 +251,33 @@ A view alone saves bytes. **A view plus suppression saves the entire event.**
 
 ```go
 // after projecting, before emitting:
-if digest(projected) == lastEmittedDigest[uid] {
+if digest(eventWeWouldSend) == lastEmittedDigest[uid] {
     continue    // this consumer's world did not change. Say nothing.
 }
 ```
+
+> ### ⚠️ Suppress on the EVENT, never on the OBJECT. This is not a detail — it is a bug I shipped in
+> the first draft of this document, and it deleted §4 on exactly the motivating case.
+>
+> The first draft said `digest(projected)` — the projected **object**. Now rotate a Secret's token
+> under `krm-full/v1`. The projection *deletes* the value, so the object is **byte-identical before
+> and after**, and so is `redactedPaths`. **Verified, not assumed:**
+>
+> ```text
+> before: {"apiVersion":"v1","kind":"Secret","metadata":{…},"type":"Opaque"}  redactedPaths=[/data/token]
+> after:  {"apiVersion":"v1","kind":"Secret","metadata":{…},"type":"Opaque"}  redactedPaths=[/data/token]
+> ```
+>
+> So the event is suppressed, the `rev` bump never arrives, and *"did my Secret rotate?"* returns
+> **zero events, forever.** It would have looked exactly like the feature working.
+>
+> **The rule, stated so the next envelope field cannot re-introduce it:** the digest covers
+> **everything the consumer would observe** — the object *and* the envelope (`redacted[]` and its
+> `rev` vector, and whatever we add next) — minus only the fields that **churn without informing**:
+> `metadata.resourceVersion` (§3.1) and `seq` itself (§6, which is assigned *after* this decision).
+>
+> Stating it over the object was the mistake. State it over the event, and the class of bug is closed
+> rather than the instance.
 
 Under `krm-spec/v1`, a Deployment reconciling through a rollout produces **N status-only
 MODIFIEDs upstream and zero events downstream**. Not smaller events. *No* events. No frame, no wakeup,
@@ -262,21 +315,52 @@ with a precondition. **Every save fails with a `409 Conflict`**, forever, on exa
 churn most. Worse, it is a *false* conflict: nothing the user could see has changed. That would be a
 genuinely maddening bug, and it would look like ours.
 
-The protocol already forbids the thing that causes it, and the fix is to say so louder rather than to
-invent anything:
-
 - **Spec §3 already forbids a whole-object `PUT`** built from a projected object. Saves are a
   constrained **merge patch**, and a merge patch carries no `resourceVersion`. A conforming consumer
   therefore never sends one.
 - **Spec §6 already forbids a consumer parsing or ordering by `resourceVersion`.** It is opaque.
-- What we must now add, explicitly: **a consumer MUST NOT use `resourceVersion` as a save
-  precondition.** If a host wants optimistic concurrency, it does the read **server-side, at save
-  time** — it has an API client and the browser does not. The browser's copy is *a view*, not a
-  transaction handle, and it never was.
+- And now, explicitly: **a consumer MUST NOT use `resourceVersion` as a save precondition.**
+
+### 3.1.1 …and "just read it server-side at save time" is not an answer. It is a hand-wave.
+
+An earlier draft ended the section there, saying a host wanting optimistic concurrency should *"read
+server-side, at save time."* **That is wrong, and it is worth saying why, because it sounds
+responsible.** A server-side read at save time returns the *current* `resourceVersion` **by
+definition** — so a precondition built from it always matches. It cannot detect that the **user's
+view** was stale, which is the only thing optimistic concurrency is for. It is not OCC. It is a write
+with a ceremony.
+
+The honest answer has three parts, and only the last one is a precondition:
+
+**1. We already do better than OCC, and it is the product.** The store three-way merges and raises a
+**live conflict** the moment the server changes a field the user is editing — *before* they save, while
+they can see it. A save-time precondition is a strictly worse version of a thing this library already
+does continuously. If you are reaching for OCC to solve "someone else changed it", you have skipped
+the feature.
+
+**2. A merge patch is per-field last-write-wins, and that is intended.** It carries only the fields the
+user actually edited, so two people editing *different* fields of the same object both succeed — which
+is correct, and is the whole reason the write is a patch and not a `PUT`. Say this plainly rather than
+leaving people to infer it.
+
+**3. If you want a hard precondition, `metadata.generation` — never `resourceVersion`.** `generation`
+moves **only on `spec` writes**, so status churn never stales it and suppression cannot either. The
+browser already holds it. A host compares the `generation` the browser had against the live one at save
+time and rejects if it moved: **a true conflict, never a false one.** That is the rule §3.1 was missing.
+
+> **But do not oversell `generation`, because it has two holes** (the reviewer named one; the second
+> matters more for *this* product):
+>
+> - **It does not exist on `ConfigMap` or `Secret`.** No spec/status split, no `generation`. For those,
+>   (2) is the answer and it is a fine one.
+> - **It does not move on `metadata` writes.** Labels and annotations are `metadata`, not `spec` — and
+>   editing a label is the *first thing* this library's own fixtures demonstrate. So a `generation`
+>   precondition silently misses a concurrent label edit entirely. It is a precondition on `spec`, and
+>   it should be described as exactly that and nothing more.
 
 **So why keep it on the wire at all?** Because it is part of the object, it is priceless in devtools
 and in a raw/operator view, and deleting a field to stop people misusing it is how you end up with a
-protocol full of holes. Keep it, and be explicit — which is exactly what §8 is for.
+protocol full of holes. Keep it, and be explicit — which is exactly what §6 is for.
 
 ### 3.2 A correction on what Kubernetes actually guarantees
 
@@ -293,16 +377,9 @@ Both looser and stricter than it is usually stated, and this repo has the receip
 - **And the API contract to clients says "opaque" regardless.** A guarantee the *server* must uphold
   is not a licence for a *client* to depend on it.
 
-Which is the whole argument for §8: the gateway may reason about `resourceVersion` (carefully, with an
+Which is the whole argument for §6: the gateway may reason about `resourceVersion` (carefully, with an
 escape hatch, having verified it against a real cluster). **A browser never should — so give it a
 number that is honestly ours.**
-
-### It composes with what exists
-
-`SharedBackend` fans one upstream watch out to N subscribers. Projection and suppression are
-**per-subscriber**, downstream of the shared cache — so one watch can feed a status dashboard and a
-status-blind editor at the same time, each seeing exactly what it asked for. Nothing about the sharing
-changes.
 
 ### It composes with what exists
 
@@ -390,7 +467,7 @@ The cheap wins are enormous and the expensive ones are small. In order:
 |---|---|---|---|
 | **1. Suppression** (§3) | status churn → **zero events** for a status-blind view | ~20 lines | **do it** |
 | **2. Views** (§2) | fewer bytes, and it is what *enables* suppression | a `switch` arm | **do it** |
-| **3. Coalescing** (gateway §8, already designed) | 200 events → 1 for a slow tab that *does* want status | already specified | do it |
+| **3. Coalescing** (gateway README §8, already designed) | 200 events → 1 for a slow tab that *does* want status | already specified | do it |
 | **4. HTTP compression** | KRM JSON is enormously repetitive; gzip/br is typically **5–10×**. **Invisible to the protocol** — no spec change, no client change | must flush per event or liveness dies | **do it, and measure before anything below** |
 | **5. Deltas** (JSON Patch instead of whole objects) | large, for big objects under small changes | **breaks I-REPLACE** — the protocol's entire convergence proof rests on *replace, never merge*. Deltas need gap-free ordering, a shared base, and a recovery story for a lost frame. We would be trading a property we can prove for bytes we can get from gzip | **no** |
 | **6. WebSocket / gRPC-web / CBOR** | binary framing, bidirectional | loses `EventSource`: native reconnect, same-origin cookie auth (docs/auth.md — the whole auth model hangs off SSE's constraints), trivial proxying. CBOR buys ~20–30% on unstructured JSON; **gzip buys more, for free** | **no** |
@@ -409,7 +486,7 @@ target — but if a future view ever discloses a value, compression for that vie
 
 ---
 
-## 8. The envelope, and a sequence number that is honestly ours
+## 6. The envelope, and a sequence number that is honestly ours
 
 **Yes. Do this, and do it now.** It is the cheapest thing in this document and it is the one with a
 property nothing else provides.
@@ -418,7 +495,7 @@ We already *have* an envelope — `type`, `target`, `scope`, `projection`, `obje
 `identity`, `code`, `terminal`. Nothing needs inventing. What it lacks is a number:
 
 ```jsonc
-{ "seq": 4712, "type": "modified", "object": { … }, "redactedPaths": [] }
+{ "seq": 4712, "type": "modified", "object": { … }, "redacted": [] }
 ```
 
 **`seq`** — a `uint64`, **per stream**, starting at 1, incremented by one for **every event actually
@@ -465,25 +542,33 @@ again. That is the actual argument for doing it *now*.
 
 ---
 
-## 6. What I would build, in order
+## 7. What I would build, in order
 
-0. **`seq` in the envelope** (§8). First, because it is free *now* and never again, because it is the
-   only thing here that can detect a lost frame at all, and because it is what lets us tell a consumer
-   "never look at `resourceVersion`" while handing them something they *can* look at.
-1. **Suppression** (§3), under the existing projections. Immediate, invisible, no protocol change —
-   and it already helps: every projection removes `managedFields`, so a `managedFields`-only update is
-   already a no-op event we currently forward.
-2. **The `resourceVersion` rules, stated** (§3.1). `resourceVersion` stays on the wire; a consumer MUST
-   NOT use it as a save precondition; optimistic concurrency is done server-side at save time. Without
-   this, suppression hands a host a `409` storm on exactly the objects it cares about — a false
-   conflict, and it would look like our bug.
-3. **`krm-spec/v1`** (§2.1), plus the `projection` scope parameter. With (1) in place, this is where
+> **The order was wrong, and the reason is the bug in §3.** The draft had suppression at step 1 and
+> `redacted[].rev` at step 5 — four steps apart. But suppression *silently deletes* `rev` unless the
+> digest already covers it, and the deletion **looks exactly like the feature working**: zero events on
+> a Secret nobody is rotating, and zero events on a Secret somebody is. Nobody would notice for months.
+>
+> **They are one change, and they ship together.** Whatever the sequence, the digest must cover the
+> whole event *before* anything is allowed to depend on it.
+
+1. **`seq` in the envelope** (§6). Still first: free *now* and never again, and the only thing here
+   that can detect a lost frame at all.
+2. **Suppression, digesting the whole EVENT** (§3) — and `redacted[].rev` **in the same change** (§4).
+   Not adjacent. *Together.* The digest covers the object plus the envelope minus
+   (`resourceVersion`, `seq`), and `rev` is part of the envelope from the first commit, so it can never
+   be the thing that suppression quietly ate.
+3. **The `resourceVersion` rules, stated** (§3.1): it stays on the wire; a consumer MUST NOT use it as
+   a save precondition; a hard precondition is `metadata.generation` (spec-only, absent on
+   ConfigMap/Secret), and the live conflict the store already raises is better than either. Without
+   this, suppression hands a host a `409` storm on exactly the objects it cares about.
+4. **`krm-spec/v1`** (§2.1), plus the `projection` scope parameter. With (2) in place, this is where
    "the frontend does not care about status" becomes *zero traffic*.
-4. **Measure gzip.** Before anything in §5 below the line.
-5. **`redacted[]` with `rev`** (§2, §4) — `redactedPaths` grows a counter, and the owner's case ("did
-   the Secret rotate?") gets an answer that needs no crypto, no key management and no security review.
+5. **Measure gzip** — and measure it on a *large scope*, not one object, because that is where the
+   32 KB window stops saving you (§2.1). Before anything in §5 below the line.
+6. **Host-registered projections** (§2.2), with rules matched on `(group, kind)` and then path.
 
-## 7. Open questions
+## 8. Open questions
 
 - ~~**`data: {}` versus no `data` at all.**~~ **RESOLVED: drop it, and it is now shipped.** I leaned
   towards keeping the empty map. The owner's reductio settles it in one line: *under the same logic
