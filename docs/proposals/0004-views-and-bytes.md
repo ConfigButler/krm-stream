@@ -27,12 +27,18 @@ because it is counter-intuitive:
 > For the case that motivated this ("I don't care about status at all"), the correct traffic is
 > **zero events**, not "a small event per change". A digest actively prevents the thing we want.
 
-So digests are not the mechanism for *"I don't want this"*. They are the mechanism for *"I cannot be
-shown this, but I need to know it changed"* — which is a real, narrower case (a rotated Secret), and
-§4 designs for exactly that.
+So a digest is not the mechanism for *"I don't want this"*. The mechanism for that is **a view plus
+suppression** (§2, §3), and it needs almost no new protocol at all.
 
-The mechanism for "I don't want this" is **a view plus suppression**, and it needs almost no new
-protocol at all.
+And for the *other* case — *"I may not see it, but I need to know it changed"*, which is the rotated
+Secret — **a digest turns out not to be the mechanism either.** The gateway is stateful per stream
+anyway (suppression requires it), so it can do the comparison itself and simply **say** the value
+changed. Nothing derived from the secret ever leaves the process, and the entire cryptographic design
+— HMACs, per-stream keys, offline-cracking risk — **evaporates**. §4.
+
+Both cases then collapse into one vocabulary: a projection decides, per path, whether to **send**,
+**withhold** (you learn it exists and when it changes, never what it is) or **drop** (it is as if it
+did not exist). **"Redaction" is just `withhold` with a bad name.** §2.1.
 
 ---
 
@@ -54,7 +60,7 @@ This single rule decides three open questions at once:
 |---|---|---|
 | a mask (`"**REDACTED**"`) in the value | ❌ already deleted (0003) | a value we invented, and a browser can save it back |
 | a `maskedData:` field on the object | ❌ **no** | it is a *synthesized field*. Spec §2 forbids them, and for a concrete reason: a consumer round-trips the object into a patch, and now `maskedData` is written **to your cluster** |
-| a digest in `metadata.annotations` | ❌ **no** — and this is the sharp one | an annotation **is part of the object**. A save carries it back and the gateway's private bookkeeping is now **persisted on the resource**, in etcd, forever. It is the mask landmine wearing a different hat |
+| a digest in `metadata.annotations` | ❌ **no** — and this is the sharp one | an annotation **is part of the object**. A save carries it back and the gateway's private bookkeeping is now **persisted on the resource**, in etcd, forever. It is the mask landmine wearing a different hat. (§4 removes the digest entirely, so this temptation now has nothing to put there either) |
 
 The instinct behind `maskedData` — *be explicit, do not pretend a field is the field* — is exactly
 right. The place to be explicit is the **envelope**: it is ours, it is not a Kubernetes object, and
@@ -85,6 +91,48 @@ Two design rules, and both come straight from §8's existing stance:
 
 **This costs almost nothing to build**: `project()` already takes a `Projection` and returns
 `redactedPaths`. A view is a `switch` arm.
+
+### 2.1 The unification: **there is no "redaction feature"** — there are three verbs
+
+*"Can we drop the whole redaction thing by making the projection smarter?"* — and the answer is yes,
+in the sense that matters: **redaction stops being a feature and becomes one of three things a
+projection can say about a path.**
+
+> ## A projection decides, per path, exactly one of:
+>
+> | verb | the value | you are told it exists | you are woken when it changes |
+> |---|---|---|---|
+> | **`send`** | you get it | — | ✅ |
+> | **`withhold`** | **never leaves the gateway** | ✅ (`withheld[].path`) | ✅ (`withheld[].rev`) |
+> | **`drop`** | never leaves the gateway | ❌ — it is as if it did not exist | ❌ **never. Zero events.** |
+
+Everything in this document collapses into that table:
+
+| path | verb | why |
+|---|---|---|
+| `metadata.managedFields` | `drop` | nobody wants it, and nobody wants to be woken by it |
+| `Secret` `/data/*` values | **`withhold`** | *"I may not see it, but I want to know it rotated"* — the owner's case, exactly |
+| `status`, for a status-blind editor | `drop` | the motivating case: **zero traffic** |
+| `status`, for a dashboard | `send` | the product's headline |
+| `spec`, for a pure status dashboard | `drop` | it never renders it |
+
+**"Redaction" was just `withhold` with a bad name and its own plumbing.** `redactedPaths` becomes
+`withheld[]`, and it carries the `rev` from §4 for free. One concept, one envelope field, one code
+path — instead of a Secret-shaped special case bolted to the side of the projection.
+
+### And it makes the central trade *explicit* rather than hidden
+
+`withhold` and `drop` differ in exactly one way, and it is the finding from §0:
+
+- **`drop` = zero events.** A change you are not told about cannot wake you.
+- **`withhold` = one small event per change.** You asked to know, so you get told — and being told
+  *costs an event*, which is the whole thing §0 warns about.
+
+So a consumer choosing `withhold` for `status` is choosing "wake me on every status change but do not
+send me the bytes". That may be exactly right for a list view with a *changed* dot — **and now it is a
+choice someone makes on purpose**, in the projection's definition, rather than a consequence they
+discover in production. The old design hid that trade inside the word "redaction". This one puts it in
+the vocabulary.
 
 ---
 
@@ -186,45 +234,69 @@ changes.
 
 ---
 
-## 4. Digests — the narrow case where they *do* pay
+## 4. "I want to know the Secret changed, not what it is" — and it needs no hash at all
 
-Not for "I don't want it" (§0). For **"I may not see it, but I need to know it changed."** That is
-the rotated-Secret case, and it is real: a UI wants to show *"the token was rotated 2 minutes ago"*
-without ever holding the token.
+This is the case the owner actually has, and the honest answer is much better than the one I first
+wrote. **Do not publish a digest. Do not publish an HMAC. Publish nothing derived from the value.**
 
-**In the envelope. Never in the object** (§1). Replace the flat `redactedPaths` with something that
-can carry it:
+### The realization: the gateway already knows
+
+We are about to make the gateway stateful per stream anyway — §3's suppression requires it to hold
+the last thing it told each consumer. **So the gateway can do the comparison itself.** It does not
+need to hand the browser a token so that the *browser* can compare. It can simply say:
+
+> *"`/data/token` changed."*
+
+That single sentence deletes the entire cryptographic section of the earlier draft, and every risk in
+it.
+
+### Why this is strictly better than a change token, not merely simpler
+
+I proposed an HMAC keyed per-stream, so a token would be comparable *only within one stream*. Compare
+the two, on the same footing:
+
+| | a per-stream HMAC token | the gateway just says "changed" |
+|---|---|---|
+| *"the token was rotated"* | ✅ | ✅ |
+| *"it changed while I was disconnected"* | ❌ — a new stream, a new key, no comparison possible | ❌ — same |
+| *"these two Secrets have the same password"* | **✅ — and that is a DISCLOSURE we never wanted to grant** | ❌ (correctly) |
+| offline-crackable oracle if the key ever leaks or is reused | a real risk to reason about, forever | **does not exist** |
+| security review needed | yes | **none. Nothing derived from the value leaves the process** |
+
+The token is **the same power for the legitimate use, plus one illegitimate one, plus a permanent
+footgun**. Notice that even the *ideal* token — perfectly keyed, never leaked — buys nothing over
+"changed", because both are useless across a reconnect. There is no version of the crypto that wins.
+
+*(For the record, the risk that is now simply gone: a raw `sha256` of a Secret is an offline-crackable
+oracle. Secrets are frequently low-entropy or structured — a password, a PIN, a token with a known
+prefix. We would have disclosed the secret we were protecting while believing we had hidden it.)*
+
+### The shape
+
+Per path, per stream, a small integer that increments **when the withheld value actually changes**:
 
 ```jsonc
 {
+  "seq": 4712,
   "type": "modified",
   "object": { "kind": "Secret", "data": {} },
-  "redacted": [
-    { "path": "/data/token",    "changeToken": "k1:9f2c…" },
-    { "path": "/data/username", "changeToken": "k1:04ab…" }
+  "withheld": [
+    { "path": "/data/token",    "rev": 3 },   // ← rotated twice since this stream began
+    { "path": "/data/username", "rev": 1 }
   ]
 }
 ```
 
-### It MUST be a salted MAC, not a hash — and this is not pedantry
+A counter rather than a boolean, because a boolean is fragile: a UI that coalesces renders can miss
+the one event that carried `changed: true`. A counter is *state*, so a consumer that re-renders late
+still sees that `rev` moved. It leaks only what a boolean leaks over time — that something changed,
+and when.
 
-A raw `sha256` of a Secret's value is **an offline-crackable oracle**. Secrets are frequently
-low-entropy or highly structured — a password, a 6-digit PIN, a token with a known prefix. Publishing
-`sha256(value)` to a browser hands an attacker a target they can grind at their leisure, and we would
-have *disclosed the Secret we were protecting* while believing we had hidden it.
-
-So:
-
-- it is **HMAC(k, value)** with `k` random **per gateway process** (or per stream), never persisted;
-- it is therefore **opaque and comparable only within one stream**. It is a *change token*, not a
-  content identifier. Two streams do not agree on it; two gateways do not agree on it. That is the
-  point, and the name should say so — `changeToken`, not `digest` or `hash`.
-- **no length, no size.** The old gateway README offered a mask *"with length"*; the length of a
-  password is exactly the sort of thing you do not publish.
-
-**Cost, stated honestly:** emitting a change token for a Secret's data means a Secret whose data
-changes now generates an event *for consumers that cannot see the data.* That is correct here (they
-asked for it) — but it is the same trap as §0, and it must be opt-in per view, not on by default.
+**The honest limit, stated in the spec:** `rev` is scoped to one stream. **You cannot know whether a
+withheld value changed while you were disconnected** — and *no* design can tell you that without
+publishing a stable, content-derived identifier, which is exactly the thing we must never publish. So
+a consumer that cares treats **every `reset` as "this may have changed"**. That is a real limitation
+and it is the correct one.
 
 ---
 
@@ -329,8 +401,9 @@ again. That is the actual argument for doing it *now*.
 3. **`krm-editor-nostatus/v1` and `krm-status/v1`** (§2), plus the `view` scope parameter. With (1) in
    place, this is where "the frontend does not care about status" becomes *zero traffic*.
 4. **Measure gzip.** Before anything in §5 below the line.
-5. **`redacted[].changeToken`** (§4) — last, opt-in, and only if someone actually wants
-   "the Secret rotated" in a UI. It is the smallest win and the only one with a security footgun.
+5. **`withheld[]` with `rev`** (§2.1, §4) — replacing `redactedPaths`, and giving the owner's case
+   ("did the Secret rotate?") an answer that needs no crypto, no key management and no security
+   review. It is a rename plus a counter.
 
 ## 7. Open questions
 
