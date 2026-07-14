@@ -1,6 +1,6 @@
 {
   "name": "krm-stream",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Compatibility forwarder for @configbutler/krm-stream.",
   "keywords": [
     "kubernetes",
@@ -32,7 +32,7 @@
     "README.md"
   ],
   "dependencies": {
-    "@configbutler/krm-stream": "0.0.0"
+    "@configbutler/krm-stream": "0.1.0"
   },
   "engines": {
     "node": ">=22"
