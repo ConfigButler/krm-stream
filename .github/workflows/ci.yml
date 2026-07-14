@@ -47,7 +47,7 @@ jobs:
           hadolint_version="$(grep -oP 'HADOLINT_VERSION=\K[0-9.]+' .devcontainer/Dockerfile)"
           echo "actionlint ${actionlint_version}, hadolint ${hadolint_version}"
           curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${actionlint_version}/actionlint_${actionlint_version}_linux_amd64.tar.gz" \
-            | sudo tar -xzO actionlint > /tmp/actionlint
+            | tar -xzO actionlint > /tmp/actionlint
           sudo install -m 0755 /tmp/actionlint /usr/local/bin/actionlint
           sudo curl -fsSL -o /usr/local/bin/hadolint \
             "https://github.com/hadolint/hadolint/releases/download/v${hadolint_version}/hadolint-Linux-x86_64"
@@ -183,6 +183,8 @@ jobs:
       - name: no module may carry a `replace`
         run: |
           set -euo pipefail
+          # shellcheck disable=SC2016  # the backticks in the message below are LITERAL prose, not a
+          # substitution — single quotes are exactly right, and expanding them is what would be wrong.
           if grep -nE '^[[:space:]]*replace([[:space:]]|\()' gateway/go.mod gateway/kube/go.mod; then
             echo '::error::a `replace` directive applies ONLY to the main module. It works in this checkout and is IGNORED by everyone who runs `go get`, so it makes the module unconsumable while every test here still passes. go.work is how this repo points the modules at each other; see the comment at the top of it.'
             exit 1

@@ -15,9 +15,13 @@ FROM golang:1.26.5-bookworm@sha256:18aedc16aa19b3fd7ded7245fc14b109e054d65d22ed5
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
+# shellcheck is here for ACTIONLINT, not for us: actionlint shells out to it to check every `run:`
+# block, and if it is absent actionlint SILENTLY SKIPS that half of its job and still exits 0. The
+# local lint then passes on a workflow CI rejects — which is not a weaker check, it is a check that
+# lies. (Found exactly that way: `task lint` green, `actionlint` in CI red, on the same commit.)
 RUN apt-get update \
     && apt-get -y install --no-install-recommends \
-    git curl ca-certificates vim less jq sudo acl gnupg unzip openssh-client \
+    git curl ca-certificates vim less jq sudo acl gnupg unzip openssh-client shellcheck \
     && install -m 0755 -d /etc/apt/keyrings \
     && curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg \
        -o /etc/apt/keyrings/githubcli-archive-keyring.gpg \
