@@ -14,16 +14,16 @@
 //   - a user can type into a field while the server changes the object underneath them, and keep
 //     what they typed.
 
-import { expect, test } from "@playwright/test";
+import { expect, test } from "./fixtures.ts";
 
 const path = (...segments: (string | number)[]) => JSON.stringify(segments);
 
-test("the built ESM imports in a browser with no bundler at all", async ({ page }) => {
+test("the built ESM imports in a browser with no bundler at all", async ({ page, visit }) => {
   const errors: string[] = [];
   page.on("pageerror", (e) => errors.push(e.message));
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 
-  await page.goto("/?fixture=snapshot-then-deltas&pace=0ms");
+  await visit("fixture=snapshot-then-deltas&pace=0ms");
   await expect(page.locator("#status-line")).toHaveText(/synced/);
 
   // If a single bare specifier or a missing extension had crept into the emitted JS, the module graph
@@ -31,10 +31,10 @@ test("the built ESM imports in a browser with no bundler at all", async ({ page 
   expect(errors, `the browser could not load the library:\n${errors.join("\n")}`).toEqual([]);
 });
 
-test("status follows the server live and FLASHES what moved — and never becomes an edit", async ({ page }) => {
+test("status follows the server live and FLASHES what moved — and never becomes an edit", async ({ page, visit }) => {
   // deploy-web.v1 -> v2 is a status-only change: readyReplicas 1 -> 2, Available False -> True.
   // The spec is byte-identical. This is the dominant traffic on a real stream, and the demo.
-  await page.goto("/?fixture=status-follow-live&pace=250ms");
+  await visit("fixture=status-follow-live&pace=250ms");
 
   const ready = page.getByTestId(`value:${path("status", "readyReplicas")}`);
   await expect(ready).toHaveText(/^1/); // the snapshot
@@ -56,11 +56,11 @@ test("status follows the server live and FLASHES what moved — and never become
   await expect(page.getByTestId("patch")).toHaveText(JSON.stringify({ spec: { replicas: 4 } }, null, 2));
 });
 
-test("a conflict is raised, the typing is never overwritten, and it clears on convergence", async ({ page }) => {
+test("a conflict is raised, the typing is never overwritten, and it clears on convergence", async ({ page, visit }) => {
   // The server moves data.log-level to `warn` while the user is typing `debug` (a real conflict), and
   // then a colleague makes the same change the user did — so the server ARRIVES at `debug` and the
   // conflict must clear itself. A cached dirty flag gets the second half wrong and stays red forever.
-  await page.goto("/?fixture=conflict-and-converge&pace=700ms");
+  await visit("fixture=conflict-and-converge&pace=700ms");
 
   const logLevel = page.getByTestId(`input:${path("data", "log-level")}`);
   await expect(logLevel).toHaveValue("info");
@@ -79,10 +79,10 @@ test("a conflict is raised, the typing is never overwritten, and it clears on co
   await expect(page.getByTestId("patch")).toHaveText("null"); // nothing left to save
 });
 
-test("an unrelated server change never disturbs the field you are editing", async ({ page }) => {
+test("an unrelated server change never disturbs the field you are editing", async ({ page, visit }) => {
   // R-THREEWAY. The server bumps `replicas`; nobody touched `log-level`. Compare the incoming object
   // to the DRAFT instead of to the previous SERVER object and this false-conflicts on every heartbeat.
-  await page.goto("/?fixture=edit-vs-unrelated-change&pace=700ms");
+  await visit("fixture=edit-vs-unrelated-change&pace=700ms");
 
   const logLevel = page.getByTestId(`input:${path("data", "log-level")}`);
   await expect(logLevel).toHaveValue("info");
@@ -96,11 +96,11 @@ test("an unrelated server change never disturbs the field you are editing", asyn
   await expect(page.getByTestId("patch")).toHaveText(JSON.stringify({ data: { "log-level": "debug" } }, null, 2));
 });
 
-test("a redacted Secret value is not in the page at all — the mask is drawn, not received", async ({ page }) => {
+test("a redacted Secret value is not in the page at all — the mask is drawn, not received", async ({ page, visit }) => {
   // The rule that makes a Secret safe to display: a value you never RECEIVED cannot round-trip over
   // the real one. The mask is something this page DRAWS from `redacted` — it is not a value the
   // wire carried, and there is therefore nothing to save back (proposal 0003).
-  await page.goto("/?fixture=secret-redaction&pace=0ms");
+  await visit("fixture=secret-redaction&pace=0ms");
   await expect(page.locator("#status-line")).toHaveText(/synced/);
 
   // Keys-only disclosure: you can see THAT `token` exists…
@@ -118,10 +118,10 @@ test("a redacted Secret value is not in the page at all — the mask is drawn, n
   await expect(page.getByTestId("patch")).toHaveText("null");
 });
 
-test("a named object that does not exist renders as empty, not as a ghost and not as an error", async ({ page }) => {
+test("a named object that does not exist renders as empty, not as a ghost and not as an error", async ({ page, visit }) => {
   // reset, synced — and nothing else. The fixture that kills the "named scopes may skip the snapshot"
   // optimization: skip it, and a delete-while-disconnected leaves the object on screen forever.
-  await page.goto("/?fixture=named-object-absent&pace=0ms");
+  await visit("fixture=named-object-absent&pace=0ms");
   await expect(page.locator("#status-line")).toHaveText(/synced/);
   await expect(page.getByTestId("editable-body")).toBeEmpty();
   await expect(page.getByTestId("patch")).toHaveText("null");

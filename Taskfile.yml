@@ -191,15 +191,20 @@ tasks:
 
   # ------------------------------------------------------------------- build --
   build-client:
-    desc: "Emit the dependency-free ESM bundle a browser can <script type=module> import."
+    desc: "Emit the dependency-free ESM a browser can <script type=module> import — per-module, and flattened."
     dir: "{{.CLIENT_DIR}}"
     sources: ["src/**/*.ts", "tsconfig.json", "package.json"]
     generates: ["dist/**/*.js"]
     cmds:
       - npm install --no-audit --no-fund
-      # --no-install: bare `npx tsc` with no node_modules silently downloads a REGISTRY package named
-      # `tsc` (which is not TypeScript) and runs it. Never let a build reach the network by accident.
-      - npx --no-install tsc
+      # Two artifacts, both published: dist/index.js keeps its relative imports (tree-shakeable, for
+      # bundler-based consumers), and dist/krm-stream.js is the same public API flattened into one
+      # file, for a host that vendors the library by copying it and serving it with no bundler.
+      #
+      # `npm run build` and not `npx tsc`: it resolves from node_modules/.bin, so it cannot reach the
+      # network. Bare `npx tsc` with no node_modules silently downloads a REGISTRY package named `tsc`
+      # (which is not TypeScript) and runs it.
+      - npm run --silent build
 
   # ---------------------------------------------------------------- cluster --
   # The one rung a fake watch cannot reach. Everything the gateway BELIEVES about Kubernetes — that a

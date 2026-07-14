@@ -11,6 +11,11 @@
   it is really tested: the browser fetches index.js, which imports ./store.js, which imports
   ./merge.js, and so on. If any of it needed a bundler, this page would simply be blank.
 
+  ?entry=bundle swaps that for the single-file build — /krm-stream/krm-stream.js, the same public API
+  with the module graph already flattened, which is what a host vendors when it copies the library in
+  rather than installing it. Playwright runs this page BOTH ways (see playwright.config.ts), because
+  "the bundle exports the same things" is a claim about a real browser, not about a build log.
+
   It uses NATIVE EventSource — not fetch — because that is the same-origin session-cookie path a v1
   gateway must support (spec §7), and because EventSource's automatic reconnect is a behaviour no
   in-process test can exercise.
@@ -70,10 +75,18 @@
     </section>
 
     <script type="module">
-      // THE import under test. Unbundled, multi-file, straight from the server.
-      import { LiveResourceStore, connectWithEventSource } from "/krm-stream/index.js";
-
+      // THE import under test — and there are two of them, because the library ships two entry points
+      // and a host with no bundler uses the second one.
+      //
+      //   index.js       the per-module build: the browser then fetches ./store.js, ./merge.js, …
+      //   krm-stream.js  the same public API, one file, no relative imports left to resolve
+      //
+      // Dynamic, so one page proves both. A static import cannot be chosen at runtime, and having two
+      // demo pages would mean the second one drifts.
       const params = new URLSearchParams(location.search);
+      const entry = params.get("entry") === "bundle" ? "/krm-stream/krm-stream.js" : "/krm-stream/index.js";
+      const { LiveResourceStore, connectWithEventSource } = await import(entry);
+
       const fixture = params.get("fixture") ?? "status-follow-live";
       const pace = params.get("pace") ?? "600ms";
 
