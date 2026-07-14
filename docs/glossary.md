@@ -10,9 +10,17 @@ conventions: `apiVersion`, `kind`, `metadata`, and a body. Read it as a schema f
 object with an identity and a desired state. Nothing about it is specific to containers. A
 `Database`, a `FeatureFlag` or a `Tenant` can be a KRM resource.
 
-**Resource** is one such object. Identified by `apiVersion`, `kind`, `namespace` and `name`, and
-uniquely by `metadata.uid`. The store keys on `uid` rather than name, because a delete and recreate
-under the same name is a different object and must not inherit the old draft.
+**Resource** is one such object. Identified by `apiVersion`, `kind`, `namespace` and `name`, and by
+`metadata.uid`.
+
+**`uid`** is what the store keys on. Kubernetes gives every object created over a cluster's lifetime a
+distinct `uid`, so a resource deleted and recreated under the same name is a different object and does
+not inherit the old draft. Key on `name` instead and a user's unsaved edits reattach to whatever takes
+the name next.
+
+A `uid` is a UUID, but the guarantee is per cluster, so the protocol scopes it to one upstream target:
+hold objects from more than one stream and you key on `(target, uid)`, or keep one store per stream.
+See [spec §1](../spec/v1.md).
 
 **CRD (Custom Resource Definition)** is how a team adds their own `kind`. It is why KRM works as an
 application configuration API and not only as cluster plumbing: your product's domain objects can be
@@ -98,7 +106,7 @@ The read path, in the order the words appear:
 2. The gateway applies a **projection** and its **redactions**, then streams a **snapshot** over
    **SSE**, followed by live updates.
 3. `LiveResourceStore` consumes those events and keeps, per **`uid`**: `server(id)` for the server
-   object, `draft(id)` for yours, plus `conflicts(id)` and `redactions(id)`.
+   object, `draft(id)` for yours, plus `conflicts(id)` and `redactions(id)`. One store per stream.
 4. Every incoming update runs the **three-way merge** over `server` as the base you started from,
    `draft` as what you typed, and the new server object. Server changes you did not touch appear in
    the form. Your edits survive. Collisions land in `conflicts(id)`.
