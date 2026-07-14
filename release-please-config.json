@@ -5,14 +5,19 @@
   "packages": {
     "packages/krm-stream": {
       "release-type": "node",
-      "component": "krm-stream",
-      "package-name": "krm-stream",
+      "component": "@configbutler/krm-stream",
+      "package-name": "@configbutler/krm-stream",
       "extra-files": [
         {
           "type": "generic",
           "path": "src/version.ts"
         }
       ]
+    },
+    "packages/krm-stream-compat": {
+      "release-type": "node",
+      "component": "krm-stream",
+      "package-name": "krm-stream"
     },
     "gateway": {
       "release-type": "go",
@@ -29,7 +34,7 @@
     {
       "type": "linked-versions",
       "groupName": "krm-stream",
-      "components": ["krm-stream", "gateway", "gateway/kube"]
+      "components": ["@configbutler/krm-stream", "krm-stream", "gateway", "gateway/kube"]
     }
   ],
   "changelog-sections": [

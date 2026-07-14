@@ -1,0 +1,40 @@
+{
+  "name": "krm-stream",
+  "version": "0.0.0",
+  "description": "Compatibility forwarder for @configbutler/krm-stream.",
+  "keywords": [
+    "kubernetes",
+    "krm",
+    "sse",
+    "watch",
+    "live",
+    "three-way-merge",
+    "resource-stream"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ConfigButler/krm-stream.git",
+    "directory": "packages/krm-stream-compat"
+  },
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md"
+  ],
+  "dependencies": {
+    "@configbutler/krm-stream": "0.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

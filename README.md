@@ -29,7 +29,7 @@ mux.Handle("/resource-stream/v1", gateway.Handler(gateway.Options{
 ...and the browser end, for free:
 
 ```js
-import { LiveResourceStore, connectResourceStream, resourceStreamURL } from "krm-stream";
+import { LiveResourceStore, connectResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
 connectResourceStream(
@@ -167,7 +167,7 @@ sides run.
 |---|---|---|
 | **Gateway** (Go) — *the library* | `go get github.com/ConfigButler/krm-stream/gateway`. Produces the stream from a Kubernetes watch and absorbs every watch mechanic. **A read path: it never writes.** Your app injects the two things it must never assume: **who the caller is**, and **what they may see** | [`gateway/`](gateway/) |
 | **Protocol** — *the contract* | the wire: `reset` · `added` · `modified` · `deleted` · `synced` · `error`, over SSE. Language-neutral on purpose: a Rust or Python gateway is a legitimate thing to write | [`spec/v1.md`](spec/v1.md) |
-| **Client** (TS/JS) — *the helper* | `npm i krm-stream`. `LiveResourceStore`: three-way merge, derived dirtiness, conflicts, merge-patch builder. Optional — any conforming consumer works — but you would only reimplement it | [`packages/krm-stream/`](packages/krm-stream/) |
+| **Client** (TS/JS) — *the helper* | `npm i @configbutler/krm-stream`. `LiveResourceStore`: three-way merge, derived dirtiness, conflicts, merge-patch builder. Optional — any conforming consumer works — but you would only reimplement it. The unscoped `krm-stream` package is a compatibility forwarder | [`packages/krm-stream/`](packages/krm-stream/) |
 
 They are joined by one thing, and it is the reason they live in one repo:
 

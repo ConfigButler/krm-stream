@@ -1,6 +1,7 @@
 # Naming the KRM streaming family
 
-> **Status: DECIDED (2026-07-11).** `krm-stream`, **unscoped** on npm. The repo is live:
+> **Status: DECIDED (2026-07-11), amended (2026-07-14).** `@configbutler/krm-stream` is primary on
+> npm; `krm-stream` is a compatibility forwarder. The repo is live:
 > [ConfigButler/krm-stream](https://github.com/ConfigButler/krm-stream), public, seeded, CI green.
 > The reasoning is kept below — *why* a name was rejected is the part that stops someone
 > re-proposing it in three months. Feeds decision #1 of the
@@ -154,7 +155,7 @@ after the capability; it is to **put the capability where a developer actually m
 and in the first sentence of the README.
 
 ```js
-import { LiveResourceStore, connectResourceStream } from "krm-stream";
+import { LiveResourceStore, connectResourceStream } from "@configbutler/krm-stream";
 ```
 
 `LiveResourceStore` is the central object: it tells a frontend developer what they get (a live store of
@@ -179,7 +180,7 @@ That sentence is what "KRM" doesn't say on its own, and it is the sentence that 
 | project | **KRM Stream** |
 | repo | `github.com/ConfigButler/krm-stream` |
 | protocol | **KRM Resource Stream Protocol**, v1 — a spec, not a package. Endpoint stays `…/resource-stream/v1` |
-| JS package | npm **`krm-stream`** — *unscoped* (see below) |
+| JS package | npm **`@configbutler/krm-stream`** — primary; **`krm-stream`** — forwarder |
 | central JS type | `LiveResourceStore` |
 | Go module | `github.com/ConfigButler/krm-stream/gateway`, tagged `gateway/vX.Y.Z` |
 | Go component | **KRM Stream Gateway** |
@@ -191,12 +192,11 @@ Kubernetes (Gateway API and its many implementations); unprefixed, `resource-str
 generic and confusable. Prefixed — `krm-stream-gateway` — it is unambiguous. Agreed with the review,
 adopted.
 
-**The npm scope: decided — unscoped.** The review proposed `@configbutler/krm-stream`. We are shipping
-plain **`krm-stream`** (it was free; `packages/krm-stream/package.json` now claims it). A scope signals
-provenance and blocks squatting, both real — but it costs recall with the audience most likely to type
-the name from memory, and that audience is now a machine that will `npm i krm-stream` and get a 404 if
-it misremembers the org. If squatting ever becomes a worry, `@configbutler/krm-stream` can be published
-later as a thin re-export; the reverse is not possible.
+**The npm scope: amended — scoped primary, unscoped forwarder.** The first publish uses
+**`@configbutler/krm-stream`** as the real package so npm ownership matches the GitHub owner and the
+package carries the company signal. Plain **`krm-stream`** remains useful as the name humans and
+agents remember, so it is published as a tiny compatibility forwarder that re-exports the scoped
+package.
 
 Nothing on the critical path depends on publishing at all: gitops-api vendors the built ESM and
 `go:embed`s it (Phase 3 of the plan), so npm is a distribution decision, not a build dependency.
@@ -244,7 +244,7 @@ The rename is cheap. Three substantive things ride along with it:
 Project:     KRM Stream
 Repository:  ConfigButler/krm-stream   (public, seeded, CI green)
 Protocol:    KRM Resource Stream Protocol, v1
-JS package:  krm-stream                (UNSCOPED — §6)
+JS package:  @configbutler/krm-stream  (primary), krm-stream (forwarder — §6)
 JS concept:  LiveResourceStore
 Go module:   github.com/ConfigButler/krm-stream/gateway
 Go service:  krm-stream-gateway        (names reserved; artifact deferred — §7.3)

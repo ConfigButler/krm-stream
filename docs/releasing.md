@@ -36,11 +36,12 @@ claim the repo makes everywhere else: they are one contract and they move in one
 that speaks protocol N and a gateway that speaks protocol N should not carry version numbers that
 need a compatibility table to compare.
 
-So one merged release PR produces three tags:
+So one merged release PR produces four tags:
 
 | tag                       | what it publishes |
 | ------------------------- | ----------------- |
-| `krm-stream-v0.1.0`       | the npm package, pushed to registry.npmjs.org |
+| `@configbutler/krm-stream-v0.1.0` | the real npm package, pushed to registry.npmjs.org |
+| `krm-stream-v0.1.0`       | the unscoped npm forwarder, pushed after the scoped package |
 | `gateway/v0.1.0`          | the Go core module — **the tag *is* the release** |
 | `gateway/kube/v0.1.0`     | the Go Kubernetes adapter — likewise |
 
@@ -51,10 +52,10 @@ checkout, and builds against it. Until something outside this repository does th
 hope. (Its sibling in `ci.yml` does the same against a commit sha on every PR, so a mistake is
 normally caught long before it reaches a tag.)
 
-The npm side publishes the **exact tarball `ci.yml` packed and tested** in the same run — the
+The npm side publishes the **exact tarballs `ci.yml` packed and tested** in the same run — the
 `client` job runs `npm pack` after the type check, the lint and the build, and `release.yml`
-downloads that artifact and pushes it. What lands on the registry is what this pipeline proved, not
-a second build of the same source that merely ought to match.
+downloads those artifacts and pushes them. What lands on the registry is what this pipeline proved,
+not a second build of the same source that merely ought to match.
 
 ## npm: trusted publishing, and the one-time setup
 
@@ -66,9 +67,11 @@ published package can be traced back to this commit and this workflow.
 npm will only let you configure a trusted publisher for a package that **already exists**, so the
 very first version has to be bootstrapped by hand — once, ever:
 
-1. Publish `0.1.0` manually (`cd packages/krm-stream && npm publish --access public`), or with a
-   throwaway granular token.
-2. On npmjs.com → the `krm-stream` package → **Settings → Trusted publisher**, add:
+1. Publish `0.1.0` manually (`cd packages/krm-stream && npm publish --access public`, then
+   `cd packages/krm-stream-compat && npm publish --access public`), or with a throwaway granular
+   token.
+2. On npmjs.com → both `@configbutler/krm-stream` and `krm-stream` → **Settings → Trusted
+   publisher**, add:
    - repository `ConfigButler/krm-stream`
    - workflow `release.yml`
 3. Delete the token if you made one. From here on CI publishes with no secret at all.

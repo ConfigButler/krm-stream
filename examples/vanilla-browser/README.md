@@ -4,7 +4,7 @@
 around.
 
 ```bash
-task demo      # http://127.0.0.1:8100/?fixture=status-only-churn&pace=800ms
+task demo      # http://127.0.0.1:8100/?fixture=status-follow-live&pace=800ms
 ```
 
 No cluster. The [replay gateway](../../gateway/cmd/replay) serves the conformance corpus as a real SSE
@@ -52,7 +52,8 @@ API surface a host needs.
 
 | `?fixture=` | what you see |
 |---|---|
-| `status-only-churn` | the headline: `readyReplicas` climbs and `Available` flips while you edit `spec.replicas`, and your edit is untouched |
+| `status-follow-live` | the headline: `readyReplicas` climbs and `Available` flips while you edit `spec.replicas`, and your edit is untouched |
+| `status-only-churn` | the spec-only projection: status churn is suppressed and never disturbs the draft |
 | `conflict-and-converge` | type `debug`; the server says `warn` (a conflict, your text kept); then the server *arrives* at `debug` and the conflict clears itself |
 | `edit-vs-unrelated-change` | the server bumps a key you are **not** editing, and nothing of yours moves |
 | `secret-redaction` | the keys of a Secret are disclosed, the values are masked, and there is no input to type into |

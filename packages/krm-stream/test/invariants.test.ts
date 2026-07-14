@@ -4,7 +4,7 @@
 // each other live. These are the ones only the client can break — they need no gateway, no wire, and
 // nothing to agree with. They belong here, not in conformance/.
 //
-// The one worth reading twice is I-READONLY. status-only-churn proves `status` follows the server
+// The one worth reading twice is I-READONLY. status-follow-live proves `status` follows the server
 // and never becomes dirty, but the user in that fixture never TRIES to edit it — so the fixture
 // stays green even against a store that would happily let them. "Structurally incapable of becoming
 // an edit" is a claim about what happens when someone tries, and something has to try.

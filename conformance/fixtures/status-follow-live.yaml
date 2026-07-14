@@ -1,0 +1,32 @@
+id: status-follow-live
+title: Status follows the server live while an edit survives.
+why: >
+  `krm-full/v1` keeps `status`, read-only and live. A controller-only update must flash and follow
+  the server while an in-flight edit to `spec.replicas` survives untouched and remains the only
+  patchable change.
+
+  This is the browser demo: watch Kubernetes reconcile while you type.
+suites: [gateway, client]
+scope: { target: demo, group: apps, version: v1, resource: deployments, namespace: app }
+projection: krm-full/v1
+
+watch:
+  - { op: list, bodies: [deploy-web.v1] }
+  - { op: modified, body: deploy-web.v2 }   # status only: readyReplicas 1 -> 2, Available False -> True
+
+events:
+  - { type: reset }
+  - { type: added, body: deploy-web.v1 }
+  - { type: synced }
+  - { type: modified, body: deploy-web.v2 }
+
+client:
+  edits:
+    - { after: 2, op: set, uid: deploy-web-0001, path: [spec, replicas], value: 4 }
+  expect:
+    dirty: [[spec, replicas]]
+    conflicts: []
+    draftSubset:
+      spec: { replicas: 4 }
+      status: { readyReplicas: 2 }
+    patch: { spec: { replicas: 4 } }

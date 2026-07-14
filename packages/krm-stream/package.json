@@ -1,5 +1,5 @@
 {
-  "name": "krm-stream",
+  "name": "@configbutler/krm-stream",
   "version": "0.0.0",
   "description": "A live, honest window onto Kubernetes resources, in the browser: consume a KRM resource stream, three-way merge local edits, build a merge patch.",
   "keywords": [

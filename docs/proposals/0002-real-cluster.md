@@ -48,7 +48,7 @@ I wrote and it will happily agree with me:
 | **F2** | Is `WatchList` on by default on our target, and does `sendInitialEvents` behave as §3a assumes? | if not, the list-then-watch fallback (§3b) is the *primary* path, not the fallback | unverified |
 | **F3** | How does a `410 Gone` actually arrive on an open watch? | the whole `RESYNC_REQUIRED` → new cycle recovery hangs off recognising it | unverified |
 | **F4** | What do real `resourceVersion`s look like — decimal? how large? | we now **require** orderability (1.35 conformance) and refuse loudly otherwise. That is a bet | unverified |
-| **F5** | Does a real controller move `status` the way `status-only-churn` claims — `spec` byte-identical? | it is the product thesis, and the demo | unverified |
+| **F5** | Does a real controller move `status` the way `status-follow-live` claims — `spec` byte-identical? | it is the product thesis, and the demo | unverified |
 | **F6** | What `resourceVersion` does an **aggregated API** (wardle `Flunder`) serve? | it decides whether `OrderingLenient` is a real need or a theoretical one | unverified |
 
 Answering F1–F6 is worth more than any number of extra scenarios. **So the first deliverable is not a

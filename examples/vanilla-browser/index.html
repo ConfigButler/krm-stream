@@ -74,7 +74,7 @@
       import { LiveResourceStore, connectWithEventSource } from "/krm-stream/index.js";
 
       const params = new URLSearchParams(location.search);
-      const fixture = params.get("fixture") ?? "status-only-churn";
+      const fixture = params.get("fixture") ?? "status-follow-live";
       const pace = params.get("pace") ?? "600ms";
 
       const store = new LiveResourceStore();

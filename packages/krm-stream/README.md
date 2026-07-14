@@ -14,7 +14,10 @@ use without the other, so the documentation lives in one place rather than being
 ### 📖 **[Read the documentation → github.com/ConfigButler/krm-stream](https://github.com/ConfigButler/krm-stream)**
 
 ```bash
-npm install krm-stream
+npm install @configbutler/krm-stream
 ```
+
+The unscoped `krm-stream` package is kept as a tiny compatibility forwarder, but new code should
+import from `@configbutler/krm-stream` so the package name matches the GitHub owner.
 
 Licensed under Apache-2.0.

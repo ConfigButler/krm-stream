@@ -123,7 +123,8 @@ Every fixture names the rule it defends, in `why:`. The ones that catch real bug
 | `delete-recreate-uid` | identity is `uid`, never `name`; no state bleeds across a recreate |
 | `resync-midstream` | upstream continuity can be lost *without* the SSE connection dropping → a fresh cycle mid-stream |
 | `nested-field-removed` | `added`/`modified` **replace**; a deep-merge would resurrect a field the server deleted (a ghost) |
-| `status-only-churn` | `status` is read-only: it follows the server live, and never becomes dirty, never conflicts, never enters a patch |
+| `status-follow-live` | `status` is read-only under the full projection: it follows the server live, and never becomes dirty, never conflicts, never enters a patch |
+| `status-only-churn` | a spec-only projection suppresses controller status churn entirely, without disturbing an in-flight spec edit |
 | `edit-vs-unrelated-change` | **R-THREEWAY** — the base is the previous *server* object |
 | `conflict-and-converge` | a conflict clears when the server's value arrives at what you typed |
 | `dotted-label-keys` | **R-ID** — `app.kubernetes.io/name` is ONE path segment. Dot-joining it is silently wrong |

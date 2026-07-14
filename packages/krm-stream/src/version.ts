@@ -8,7 +8,7 @@
 //
 // So the bytes carry their own provenance, and a host can assert it:
 //
-//	import { VERSION, PROTOCOL_VERSION } from "krm-stream";
+//	import { VERSION, PROTOCOL_VERSION } from "@configbutler/krm-stream";
 //	// in the host's own test suite:
 //	assert.equal(PROTOCOL_VERSION, protocolVersionFromMyGoMod);
 //

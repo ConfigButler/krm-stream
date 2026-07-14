@@ -8,7 +8,8 @@
 > **Status:** Phases 0–1 **done** (2026-07-11) — this repo exists, and CI is green. What remains is the
 > part that touches gitops-api: cutting its console over to these libraries.
 >
-> Name and packaging: [naming decision](naming.md) (settled — `krm-stream`, unscoped on npm). Specs
+> Name and packaging: [naming decision](naming.md) (settled — `@configbutler/krm-stream` on npm, with
+> `krm-stream` as a forwarder). Specs
 > this plan executes: [protocol](../spec/v1.md) · [client state model](client-state-model.md) ·
 > [gateway](../gateway/README.md).
 
@@ -41,9 +42,9 @@ input), `events` (**the shared surface — the only genuinely shared part**), an
 expected outcome) — and each suite reads the parts that apply to it. They meet in the middle, at
 `events`. Without that split, "both sides run the same fixtures" would have been theatre.
 
-**We do not lose independent releases.** The client publishes to npm as `krm-stream`; the gateway is a
-nested Go module with its own tags (`gateway/vX.Y.Z`). Consumers depend on one or the other, never
-"the monorepo."
+**We do not lose independent releases.** The client publishes to npm as `@configbutler/krm-stream`
+(`krm-stream` is a compatibility forwarder); the gateway is a nested Go module with its own tags
+(`gateway/vX.Y.Z`). Consumers depend on one or the other, never "the monorepo."
 
 **Why now, and not "just keep it in gitops-api":** the reconcile engine shipped three bugs in three
 days while living inline in an HTML file, unreachable by any test. The point of extraction is not
@@ -95,7 +96,8 @@ krm-stream/
     generate.sh
   gateway/                       Go → github.com/ConfigButler/krm-stream/gateway
     event.go  conformance.go  *_test.go  .golangci.yml  go.mod
-  packages/krm-stream/           TS → npm `krm-stream` (unscoped)
+  packages/krm-stream/           TS → npm `@configbutler/krm-stream`
+  packages/krm-stream-compat/    TS → npm `krm-stream` (forwarder)
     src/types.ts  test/  package.json  tsconfig.json
   examples/vanilla-browser/      the status-watch demo (deferred; see §5)
   docs/
@@ -251,7 +253,8 @@ our own side of the contract.
 2. **Public or private** — **public**, and §4.3 is why: private breaks the Docker build.
 3. **Repo** — created: [ConfigButler/krm-stream](https://github.com/ConfigButler/krm-stream), seeded,
    CI green.
-4. **npm** — **`krm-stream`, unscoped.** Not on the critical path either way: gitops-api vendors the
-   built ESM and `go:embed`s it, so npm is distribution, not a build dependency.
+4. **npm** — **`@configbutler/krm-stream` primary, `krm-stream` forwarder.** Not on the critical path
+   either way: gitops-api vendors the built ESM and `go:embed`s it, so npm is distribution, not a
+   build dependency.
 
 **Next:** Phase 2, upstream. Nothing in gitops-api changes until Phase 4.

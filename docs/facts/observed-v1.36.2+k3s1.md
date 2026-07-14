@@ -39,7 +39,7 @@ The gateway compares these as arbitrary-precision decimals (longer-is-greater, t
 
 YES: 5 MODIFIED events, 5 of them status-only, 0 touched spec. The rollout completed: replicas=2 readyReplicas=2
 
-So `status-only-churn` describes real traffic: a controller reconciling a Deployment rewrites status repeatedly, watching readyReplicas climb to the requested count, and never touches spec. That is the demo, and it is real.
+So `status-follow-live` describes real traffic: a controller reconciling a Deployment rewrites status repeatedly, watching readyReplicas climb to the requested count, and never touches spec. That is the demo, and it is real.
 
 ### F6 — An AGGREGATED API (wardle `Flunder`): orderable resourceVersion? streaming list?
 
@@ -70,4 +70,3 @@ resourceVersion="4" (decimal/orderable=true); streaming list REJECTED: ListOptio
 YES: uid="c79d3102-b241-42eb-89a7-abbd449ae1c5", name="cm-doomed", and the final state is present (data=map[k:v], present=true)
 
 So a kube-apiserver DELETED is complete and trustworthy. The degenerate tombstone the gateway guards against (tombstone-without-uid) comes from client-go's INFORMER cache (DeletedFinalStateUnknown), not from the API server — which is why that fixture can only ever be a fake-watch one.
-
