@@ -217,6 +217,12 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: packages/krm-stream/package-lock.json
+      # task, so the build+pack step below is the SAME task a developer runs. The two used to be
+      # hand-copied shell lines in two files, and they drifted the moment the build grew a step.
+      - uses: arduino/setup-task@c0bc642852239c2689f73f4ea6459c29405f3c52 # v3.0.0
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       # npm ci, not npm install: the lockfile is the input, and a build that is allowed to quietly
       # resolve a different tree than the one committed is not the build we tested.
       - run: npm ci --no-audit --no-fund
@@ -230,50 +236,20 @@ jobs:
         working-directory: packages/krm-stream
       - run: npx biome ci
         working-directory: packages/krm-stream
-      # The build, last: it is what ships, and it must stay plain ESM a browser can import with no
-      # bundler and no runtime dependency.
+      # The build and the pack, as ONE task — the same one a developer runs as `task pack-client`.
       #
-      # `npm run build`, NOT `npx tsc`. The build is two steps now — tsc emits the per-module dist,
-      # then esbuild flattens it into the single-file dist/krm-stream.js that package.json publishes as
-      # `./bundle`. `npx tsc` alone produces a tree that packs and publishes CLEANLY while missing the
-      # bundle entirely, and the exports map would then point `./bundle` at a file that is not in the
-      # tarball: every `import "@configbutler/krm-stream/bundle"` fails with ERR_MODULE_NOT_FOUND, in a
-      # release that passed CI. Keep this in step with package.json's build script.
-      - run: npm run build
-        working-directory: packages/krm-stream
-
-      # Pack the official client HERE, in the job that just tested it, and hand it to the release
-      # workflow as an artifact. release.yml publishes these exact bytes rather than rebuilding it:
-      # the things on npm are then the things this pipeline proved, and not a second build that
-      # merely ought to match.
+      # It builds (tsc AND the esbuild flatten — `npx tsc` alone silently produces a dist with no
+      # bundle), packs the tarball the release workflow will publish, and then ASSERTS that every entry
+      # point in the exports map is actually in that tarball. That last check is the one nothing else
+      # can do: a missing ./bundle builds green, tests green, packs green, publishes green, and fails
+      # for the first consumer who imports the entry point we advertised.
       #
-      # The versions inside them are already correct on a release commit — release-please bumps
-      # package.json in the release PR, so by the time this runs on main the tree IS the release.
-      - name: pack the tarballs that will be published
-        # mkdir first: --pack-destination does not create the directory, it fails with ENOENT.
-        run: |
-          set -euo pipefail
-          mkdir -p /tmp/npm
-          npm pack --pack-destination /tmp/npm ./packages/krm-stream
-
-      # Every entry point in the exports map must actually BE in the tarball.
-      #
-      # A missing file here is invisible in every other job: the build succeeds, the tests pass, the
-      # pack succeeds, and the package publishes. It fails for the first consumer who imports the entry
-      # point we advertised and gets ERR_MODULE_NOT_FOUND — at which point the fix is another release.
-      # release.yml publishes these bytes without rebuilding them, so this is the last place to look.
-      - name: the tarball contains every entry point package.json advertises
-        run: |
-          set -euo pipefail
-          tarball=$(ls /tmp/npm/configbutler-krm-stream-*.tgz)
-          for entry in package/dist/index.js package/dist/krm-stream.js; do
-            if ! tar -tzf "$tarball" | grep -qx "$entry"; then
-              echo "::error::${entry#package/} is in the exports map but NOT in the tarball — publishing this would ship a broken import."
-              tar -tzf "$tarball"
-              exit 1
-            fi
-          done
-          echo "both entry points are present in $(basename "$tarball")."
+      # These are the bytes release.yml publishes — it does not rebuild them, so the things on npm are
+      # the things this pipeline proved, and not a second build that merely ought to match. The
+      # versions inside are already correct on a release commit: release-please bumps package.json in
+      # the release PR, so by the time this runs on main the tree IS the release.
+      - name: build, pack, and prove the tarball is complete
+        run: task pack-client PACK_DIR=/tmp/npm
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

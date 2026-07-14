@@ -1,7 +1,38 @@
 version: "3"
 
 # Everything in this repository is driven by `task`.
-# `task` with no argument lists what there is.
+# `task` with no argument lists what there is; `task verify` is the whole gate.
+#
+# # A cache that lies is worse than no cache
+#
+# Task skips work by CHECKSUMMING `sources`. That is a statement about inputs, and it says nothing
+# whatsoever about whether the outputs still exist. Two real failures came out of that gap, and both
+# cost real time before they were understood:
+#
+#   1. `rm dist/krm-stream.js && task build-client` → "Task is up to date". Nothing rebuilt. The
+#      sources had not changed, so the fingerprint matched, so Task was — by its own rules — correct.
+#      A half-built dist survived a build.
+#   2. node_modules is shared mutable state across git branches, and `npm install` PRUNES to whatever
+#      the current branch's package.json says. Run a task on a branch that predates a devDependency
+#      and it is silently deleted from the tree; switch back and the build dies on
+#      `sh: 1: esbuild: not found`, which points at nothing.
+#
+# Both are the same bug as the one in CI that this all came from — a pipeline that packed a bundle it
+# had never built. So the rules here:
+#
+#   - Every cache-worthy task DELIVERS A FILE, named individually in `generates` (never a glob, which
+#     is only a checksum key).
+#   - Every such task also carries a `status:` that PROBES THE FILESYSTEM. That is the check a
+#     checksum cannot do, and it is what makes a deleted artifact or a pruned dependency self-heal
+#     instead of being skipped over.
+#   - Dependencies are installed with `npm ci`, never `npm install`: the tree becomes a pure function
+#     of two committed files and cannot drift from the branch you are on.
+#   - One definition of a thing. The build is `npm run build` in package.json, and CI runs the same
+#     `task pack-client` a developer does. Every hand-copied shell line in a second file is a thing
+#     that will drift, and it did.
+#
+# Go's build/test cache is deliberately NOT fought with. It is content-addressed and sound: a cached
+# `ok` means those exact inputs really did pass. `task clean` does not touch it.
 
 run: once
 
@@ -58,6 +89,21 @@ tasks:
     cmds:
       - git diff --exit-code -- conformance/gen || (echo "conformance/gen is stale — run 'task fixtures' and commit" && exit 1)
 
+  # ------------------------------------------------------------------ verify --
+  verify:
+    desc: "The whole gate, in the order CI runs it. If this passes, CI passes."
+    cmds:
+      # Sequential on purpose: this is the pre-push check, and the first failure is the one you want
+      # to read, not the fourth. `task test` and `task lint` fan out internally.
+      - task: fixtures-check
+      - task: lint
+      - task: test
+      - task: e2e-wire
+      - task: e2e-browser
+      # Last, because it is the one nothing else can prove: what we UPLOAD contains what the exports
+      # map advertises. Every rung above this builds its own dist and never looks at the tarball.
+      - task: pack-client
+
   # -------------------------------------------------------------------- test --
   test:
     desc: "Run both suites against the shared conformance fixtures."
@@ -84,7 +130,7 @@ tasks:
 
   test-client:
     desc: "TypeScript: the client + its half of the conformance suite (node --test, no deps)."
-    deps: [fixtures]
+    deps: [fixtures, _client-deps]
     dir: "{{.CLIENT_DIR}}"
     cmds:
       - node --test
@@ -128,18 +174,18 @@ tasks:
         cd {{.CLIENT_DIR}} && REPLAY_URL=http://{{.REPLAY_ADDR}} node e2e/wire.ts
 
   e2e-browser:
-    desc: "End to end in a REAL browser: native EventSource, unbundled ESM, no cluster."
+    desc: "End to end in a REAL browser: native EventSource, unbundled ESM AND the bundle, no cluster."
     # build-client, because playwright's webServer rebuilds the library from packages/krm-stream —
     # and it cannot do that with no node_modules there. On a developer's machine that directory is
     # already populated by `task test`, which is exactly why this gap survived until the first CI run
     # on a clean checkout found it.
-    deps: [fixtures, build-client]
+    deps: [fixtures, build-client, _example-deps]
     dir: examples/vanilla-browser
     cmds:
       # The only place the library's central promise is actually tested: that the published ESM
       # imports in a browser with no bundler. Node importing it proves nothing — Node is not a browser.
-      # Playwright lives in the EXAMPLE's package, so the library keeps its three devDependencies.
-      - npm install --no-audit --no-fund
+      # Playwright lives in the EXAMPLE's package, so the library keeps its four devDependencies.
+      # Runs the suite twice — once per entry point (per-module and ./bundle).
       - npx --no-install playwright install chromium --with-deps
       - npx --no-install playwright test {{.CLI_ARGS}}
 
@@ -172,6 +218,7 @@ tasks:
       - golangci-lint run --build-tags e2e ./...
 
   lint-client:
+    deps: [_client-deps]
     dir: "{{.CLIENT_DIR}}"
     cmds:
       # Two tsconfigs, on purpose. The first is the BUILD (src only — its rootDir is what ships);
@@ -185,26 +232,135 @@ tasks:
 
   fmt-client:
     desc: "Format and auto-fix the TypeScript (the gofmt of this side)."
+    deps: [_client-deps]
     dir: "{{.CLIENT_DIR}}"
     cmds:
       - npx --no-install biome check --write
 
+  # -------------------------------------------------------------------- deps --
+  # node_modules is SHARED MUTABLE STATE ACROSS GIT BRANCHES, and nothing in git tracks it. That is
+  # the whole reason these two tasks exist, and the bug they close cost a real half-hour:
+  #
+  #   `npm install` reconciles node_modules to the CURRENT branch's package.json — which means it
+  #   PRUNES. Run any task that calls it while sitting on a branch that predates a new devDependency,
+  #   switch back to main, and the dependency is simply gone. The next build fails with
+  #   `sh: 1: esbuild: not found` — a message that says nothing about branches, and sends you looking
+  #   for a bug in the build instead of a bug in your working tree.
+  #
+  # `npm ci` instead: it installs EXACTLY the lockfile, deleting node_modules first, so the tree is a
+  # pure function of two committed files and can never drift from the branch you are on. It is
+  # fingerprinted on those two files, so it re-runs when (and only when) you switch to a branch whose
+  # dependencies differ — which is precisely when the drift would otherwise appear.
+  #
+  # The `generates` file is npm's own record of what it installed. It is a real artifact, not a
+  # stamp we invented.
+  _client-deps:
+    internal: true
+    dir: "{{.CLIENT_DIR}}"
+    sources: ["package.json", "package-lock.json"]
+    generates: ["node_modules/.package-lock.json"]
+    status:
+      # sources/generates is a CHECKSUM — it does not look at the filesystem. Without this, an
+      # `rm -rf node_modules` is invisible to Task and the next build fails on a missing binary.
+      - test -x node_modules/.bin/tsc
+      - test -x node_modules/.bin/esbuild
+      - test -x node_modules/.bin/biome
+    cmds:
+      - npm ci --no-audit --no-fund
+
+  _example-deps:
+    internal: true
+    dir: examples/vanilla-browser
+    sources: ["package.json", "package-lock.json"]
+    generates: ["node_modules/.package-lock.json"]
+    status:
+      - test -x node_modules/.bin/playwright
+    cmds:
+      - npm ci --no-audit --no-fund
+
   # ------------------------------------------------------------------- build --
   build-client:
     desc: "Emit the dependency-free ESM a browser can <script type=module> import — per-module, and flattened."
+    deps: [_client-deps]
     dir: "{{.CLIENT_DIR}}"
     sources: ["src/**/*.ts", "tsconfig.json", "package.json"]
-    generates: ["dist/**/*.js"]
+    # Named individually, and NOT as a `dist/**/*.js` glob. A glob is only a checksum key: Task never
+    # asks whether the files exist. `rm dist/krm-stream.js && task build-client` said "up to date" and
+    # rebuilt NOTHING — which is how a half-built dist survives a build, and it is the same shape as
+    # the CI bug this branch fixes (a pipeline that packed a bundle it had never built).
+    generates:
+      - dist/index.js
+      - dist/krm-stream.js
+    status:
+      # The existence check the checksum cannot do. If either artifact is missing, this task is NOT up
+      # to date, whatever the fingerprint says.
+      - test -f dist/index.js
+      - test -f dist/krm-stream.js
     cmds:
-      - npm install --no-audit --no-fund
       # Two artifacts, both published: dist/index.js keeps its relative imports (tree-shakeable, for
       # bundler-based consumers), and dist/krm-stream.js is the same public API flattened into one
       # file, for a host that vendors the library by copying it and serving it with no bundler.
       #
-      # `npm run build` and not `npx tsc`: it resolves from node_modules/.bin, so it cannot reach the
-      # network. Bare `npx tsc` with no node_modules silently downloads a REGISTRY package named `tsc`
-      # (which is not TypeScript) and runs it.
+      # `npm run build` and not `npx tsc`: ONE definition of the build, shared with package.json and
+      # with CI. The build grew a second step (esbuild) and a hand-copied `npx tsc` line silently kept
+      # doing half of it — in CI, that packed a tarball whose exports map pointed at a file that was
+      # not in it.
       - npm run --silent build
+
+  pack-client:
+    desc: "Pack the npm tarball and PROVE it contains every entry point the exports map advertises."
+    deps: [build-client]
+    vars:
+      # CI passes PACK_DIR=/tmp/npm and uploads what lands there; release.yml publishes those exact
+      # bytes without rebuilding. Locally it is a scratch dir nobody has to clean up.
+      PACK_DIR: '{{.PACK_DIR | default "/tmp/krm-stream-pack"}}'
+    cmds:
+      # The gap between "the build works" and "the thing we UPLOAD contains what we said it does".
+      # Nothing else closes it: every other rung builds its own dist and never looks at the tarball, so
+      # a missing ./bundle packs green, publishes green, and fails for the first consumer who imports
+      # the entry point the README told them to.
+      #
+      # CI runs this same task. That is the point of it being a task: the guard and the build were
+      # hand-copied shell in two files, and they drifted the moment the build grew a second step.
+      - |
+        set -euo pipefail
+        mkdir -p "{{.PACK_DIR}}"
+        rm -f "{{.PACK_DIR}}"/*.tgz
+        npm pack --pack-destination "{{.PACK_DIR}}" ./{{.CLIENT_DIR}} >/dev/null
+        tarball="$(ls "{{.PACK_DIR}}"/*.tgz)"
+
+        # List ONCE into a variable, rather than `tar … | grep -q` per entry. Under `pipefail` that
+        # pipeline reports FAILURE on a match: grep -q exits the moment it finds the line, tar gets
+        # SIGPIPE, and the pipeline takes tar's status. The check then fails on a perfectly good
+        # tarball. (This guard did exactly that on its first run, which is the argument for running a
+        # check against a known-good input before trusting it to gate a release.)
+        listing="$(tar -tzf "$tarball")"
+        for entry in package/dist/index.js package/dist/krm-stream.js; do
+          if ! grep -qxF "$entry" <<<"$listing"; then
+            echo "✗ ${entry#package/} is in the exports map but NOT in the tarball — publishing this ships a broken import."
+            echo "$listing"
+            exit 1
+          fi
+        done
+        echo "✓ every entry point in the exports map is present in $(basename "$tarball")."
+
+  # ------------------------------------------------------------------- clean --
+  # The escape hatch for when a cache is lying to you. It should be needed rarely — the `status:`
+  # guards above exist so that the two failures which used to require it (a pruned node_modules, a
+  # half-deleted dist/) are now detected rather than endured.
+  clean:
+    desc: "Drop every local cache: Task's fingerprints, node_modules, dist. Next run is cold."
+    cmds:
+      # .task/ is Task's own checksum store. It is what makes a task say "up to date" — so when a task
+      # says that and is WRONG, this is the thing to remove.
+      - rm -rf .task
+      - rm -rf {{.CLIENT_DIR}}/node_modules {{.CLIENT_DIR}}/dist
+      - rm -rf examples/vanilla-browser/node_modules
+      # The Go build/test cache is content-addressed and sound — a cached `ok` means the same inputs
+      # really did pass. It is NOT in this list, and does not belong here. If you want to watch the Go
+      # suites actually execute, `go test -count=1 ./...` forces it for one run; `go clean -cache` is
+      # a sledgehammer that buys nothing but minutes.
+      - echo "clean. (Go's test cache is deliberately untouched — see the comment.)"
 
   # ---------------------------------------------------------------- cluster --
   # The one rung a fake watch cannot reach. Everything the gateway BELIEVES about Kubernetes — that a
