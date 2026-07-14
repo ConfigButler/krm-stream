@@ -24,18 +24,22 @@ should do.
 
 ---
 
-## What actually happens today
+## What used to happen — the hazard, as it stood when this was written
 
-`krm-editor/v1` masks Secret values. That is the feature: keys-only disclosure. You may see *that*
-`token` exists; you may not see it.
+*(Past tense throughout: this is the design that was rejected. It is kept because the argument only
+makes sense against the thing it argued about.)*
+
+`krm-editor/v1` **masked** Secret values. That was the feature: keys-only disclosure. You could see
+*that* `token` existed; you could not see it.
 
 ```jsonc
-// what the browser holds, after the gateway's projection:
+// what the browser held, after the gateway's projection:
 { "kind": "Secret", "data": { "token": "**REDACTED**", "username": "**REDACTED**" } }
 ```
 
-The browser never saw the real value. It saw `**REDACTED**` — a string this library invented
-(`gateway.RedactedPlaceholder`).
+The browser never saw the real value. It saw `**REDACTED**` — a string this library invented, and
+exported as a constant. **That constant no longer exists**: it is deleted, not deprecated, and
+nothing in the repo names it (there are no users to be polite to).
 
 Now the user edits a label and saves. If the patch that reaches the API server contains
 `data.token: "**REDACTED**"`, then **the literal string `**REDACTED**` is written over the real
@@ -246,14 +250,18 @@ If B still feels like too much, C is the *next* most defensible position — far
 The one position I would argue against is the status quo: **inventing a poisoned placeholder and
 leaving the guard to a blockquote.**
 
-## Recommendation
+## Recommendation — and what was done
 
-1. **Do B.** Stop writing `**REDACTED**` into the object; keep `redactedPaths`. The hazard stops
-   existing, which is strictly better than guarding it. (`RedactedPlaceholder` stays exported and
-   deprecated, since a consumer may render it.)
-2. **Then `ValidatePatch` is optional, and much smaller.** With no placeholder, the catastrophic case
-   is gone. What remains is a consumer patching a *projection-removed* path (`managedFields`) — worth
-   refusing, but not worth losing sleep over. Ship it if it is cheap; it is no longer load-bearing.
+1. **B, and the placeholder is DELETED, not deprecated.** The projection stops writing a mask into the
+   object; `redactedPaths` carries the fact. The hazard stops existing, which is strictly better than
+   guarding it.
 
-If we do A instead, ship the guard. If we do C, delete the projection *and* the `redactedPaths`
-plumbing, and say plainly in the README that a Secret in scope is a Secret on the screen.
+   The exported constant is **gone from the API entirely** — no deprecated alias, no shim. An earlier
+   draft of this line proposed keeping it exported "since a consumer may render it", and that was
+   wrong twice over: there are no consumers yet, and a mask is not something the *wire* should carry
+   at all — it is something a **UI draws**, from `store.redactedPaths(uid)`. Keeping a landmine
+   exported to be polite to nobody would have been the whole mistake, repeated in miniature.
+
+2. **`ValidatePatch` is therefore not built.** With no placeholder, the catastrophic case is gone.
+   What remains is a consumer patching a *projection-removed* path (`managedFields`) — worth refusing
+   in a host's save endpoint, but it destroys nothing and it is not load-bearing.
