@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.1.1](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.1.0...@configbutler/krm-stream-v0.1.1) (2026-07-14)
+
+
+### Bug Fixes
+
+* release only the official npm package ([304004e](https://github.com/ConfigButler/krm-stream/commit/304004ed9abada1f99298b6461857e250c960b77))
+
 ## 0.1.0 (2026-07-14)
 
 
