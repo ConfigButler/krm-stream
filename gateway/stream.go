@@ -8,6 +8,7 @@ import (
 	"errors"
 	"reflect"
 	"strings"
+	"time"
 )
 
 // The stream loop: a Kubernetes watch in, the protocol out.
@@ -84,6 +85,11 @@ type Gateway struct {
 	// used as a safe static policy (defaulting to krm-full/v1). A browser may request a name but never
 	// supplies the projection rules themselves.
 	Projections ProjectionPolicy
+	// Observer receives low-cardinality lifecycle signals. Nil disables observations.
+	Observer Observer
+	// HeartbeatInterval controls SSE heartbeats when ServeStream is used. Zero uses the package
+	// default. It has no effect on the transport-neutral Stream method.
+	HeartbeatInterval time.Duration
 	// Ordering is how far the upstream's resourceVersions may be trusted. The zero value is
 	// OrderingStrict: this library targets Kubernetes 1.35+, where orderability is a conformance
 	// requirement, and it says so rather than degrading quietly on every cluster to accommodate one.
@@ -103,6 +109,7 @@ func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, 
 // the effective view; callers never provide projection rules or bypass authorization.
 func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, scope Scope, requested Projection, sink Sink) error {
 	sink = &sequenceSink{sink: sink}
+	g.observe(Observation{Kind: ObservationStreamOpened, Scope: scope})
 	// Redaction revisions are per connection. Unlike suppression state they survive resync cycles, so
 	// the first snapshot after a gap can report a withheld value that changed while disconnected.
 	revisions := map[string]map[string]redactionState{}
@@ -113,6 +120,7 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 
 	for cycles := 0; ; cycles++ {
 		if cycles > 0 {
+			g.observe(Observation{Kind: ObservationConsumerResync, Scope: scope})
 			// A new cycle on a live connection. Say so first: the consumer is about to be told a
 			// whole new snapshot, and RESYNC_REQUIRED is what distinguishes "we lost continuity and
 			// are recovering" from "your objects all changed at once". Non-terminal — recovery is
@@ -139,18 +147,19 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 		// re-invoked here too, so a host that returns a client backed by a refreshing token source
 		// (the Dex route) never hands us a dead token in the first place.
 		if err := g.Auth.Authorize(ctx, principal, scope); err != nil {
-			return emitTerminal(ctx, sink, err)
+			return g.emitTerminal(ctx, sink, scope, "", err)
 		}
 		projection, err := policy.SelectProjection(ctx, principal, scope, requested)
 		if err != nil {
-			return emitTerminal(ctx, sink, err)
+			return g.emitTerminal(ctx, sink, scope, "", err)
 		}
 		if !isBuiltinProjection(projection) {
-			return emitTerminal(ctx, sink, &StreamError{Code: CodeInternal, Terminal: true, Message: "projection policy selected an unknown projection: " + string(projection)})
+			return g.emitTerminal(ctx, sink, scope, projection, &StreamError{Code: CodeInternal, Terminal: true, Message: "projection policy selected an unknown projection: " + string(projection)})
 		}
+		g.observe(Observation{Kind: ObservationCycleStarted, Scope: scope, Projection: projection})
 		backend, err := g.Clients(scope.Target, principal)
 		if err != nil {
-			return emitTerminal(ctx, sink, err)
+			return g.emitTerminal(ctx, sink, scope, projection, err)
 		}
 
 		err = g.cycle(ctx, backend, scope, projection, revisions, sink)
@@ -171,7 +180,7 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 		if errors.As(err, &se) && !se.Terminal {
 			continue // a recoverable upstream error: announce, resnapshot, carry on
 		}
-		return emitTerminal(ctx, sink, err)
+		return g.emitTerminal(ctx, sink, scope, projection, err)
 	}
 }
 
@@ -196,6 +205,7 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 	if err := sink.Emit(ctx, Event{Type: EventReset, Target: scope.Target, Scope: &scope, Projection: projection}); err != nil {
 		return err
 	}
+	g.observe(Observation{Kind: ObservationEventEmitted, Scope: scope, Projection: projection, EventType: EventReset})
 
 	// Per-uid high-water mark, and it is per CYCLE, not per stream: the protocol's monotonicity
 	// promise is scoped to a cycle (§6), and a new cycle legitimately re-delivers a state the
@@ -222,6 +232,7 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 				if err := sink.Emit(ctx, Event{Type: EventSynced}); err != nil {
 					return err
 				}
+				g.observe(Observation{Kind: ObservationEventEmitted, Scope: scope, Projection: projection, EventType: EventSynced})
 			}
 
 		case WatchAdded, WatchModified:
@@ -257,12 +268,14 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 				return err
 			}
 			if digests[uid] == digest {
+				g.observe(Observation{Kind: ObservationEventSuppressed, Scope: scope, Projection: projection, EventType: out.Type})
 				continue
 			}
 			digests[uid] = digest
 			if err := sink.Emit(ctx, out); err != nil {
 				return err
 			}
+			g.observe(Observation{Kind: ObservationEventEmitted, Scope: scope, Projection: projection, EventType: out.Type})
 
 		case WatchDeleted:
 			id := identityOf(ev.Object)
@@ -278,6 +291,7 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 			if err := sink.Emit(ctx, Event{Type: EventDeleted, Identity: id}); err != nil {
 				return err
 			}
+			g.observe(Observation{Kind: ObservationEventEmitted, Scope: scope, Projection: projection, EventType: EventDeleted})
 			delete(emitted, id.UID)
 			delete(digests, id.UID)
 			delete(revisions, id.UID)
@@ -289,6 +303,23 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 			return ResyncRequired("upstream error")
 		}
 	}
+}
+
+func (g *Gateway) observe(observation Observation) {
+	if g.Observer != nil {
+		g.Observer.Observe(observation)
+	}
+}
+
+func (g *Gateway) emitTerminal(ctx context.Context, sink Sink, scope Scope, projection Projection, err error) error {
+	se := asStreamError(err)
+	if se.Terminal {
+		g.observe(Observation{Kind: ObservationTerminalError, Scope: scope, Projection: projection, Code: se.Code})
+	}
+	if emitErr := sink.Emit(ctx, se.Event()); emitErr != nil {
+		return emitErr
+	}
+	return se
 }
 
 type redactionState struct {
@@ -454,15 +485,10 @@ func isDecimalResourceVersion(rv string) bool {
 	return true
 }
 
-// emitTerminal puts the error on the wire and returns it. A terminal error MUST be the last event on
-// the connection, and the caller closes it.
-func emitTerminal(ctx context.Context, sink Sink, err error) error {
+func asStreamError(err error) *StreamError {
 	var se *StreamError
 	if !errors.As(err, &se) {
-		se = &StreamError{Code: CodeInternal, Message: err.Error(), Terminal: true}
-	}
-	if emitErr := sink.Emit(ctx, se.Event()); emitErr != nil {
-		return emitErr
+		return &StreamError{Code: CodeInternal, Message: err.Error(), Terminal: true}
 	}
 	return se
 }

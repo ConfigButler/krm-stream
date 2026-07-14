@@ -52,13 +52,24 @@ import (
 // leak and never into a lie.
 const sharedQueueDepth = 256
 
+// SharedOptions configures an opt-in SharedBackend. Zero values preserve the bounded, safe defaults.
+type SharedOptions struct {
+	// QueueDepth is the maximum number of live events a subscriber may lag before it is resnapshotted.
+	// Zero uses 256.
+	QueueDepth int
+	// Observer receives low-cardinality overflow signals. It must not block.
+	Observer Observer
+}
+
 // SharedBackend multiplexes many consumers onto one upstream watch per scope.
 //
 // It IS a Backend, so it drops in behind the same seam as any other — the stream loop cannot tell the
 // difference, which is exactly what "the protocol is backend-agnostic" has to mean if it means
 // anything (spec §5, §6).
 type SharedBackend struct {
-	upstream Backend
+	upstream   Backend
+	queueDepth int
+	observer   Observer
 
 	mu     sync.Mutex
 	scopes map[string]*sharedScope
@@ -69,7 +80,27 @@ type SharedBackend struct {
 // Read the package comment above about identity before you wire this in: the upstream is opened once,
 // as whatever identity `upstream` carries, and your Authorizer becomes the security boundary.
 func NewSharedBackend(upstream Backend) *SharedBackend {
-	return &SharedBackend{upstream: upstream, scopes: map[string]*sharedScope{}}
+	return NewSharedBackendWithOptions(upstream, SharedOptions{})
+}
+
+// NewSharedBackendWithOptions shares one upstream watch per scope with explicit operational limits.
+func NewSharedBackendWithOptions(upstream Backend, options SharedOptions) *SharedBackend {
+	depth := options.QueueDepth
+	if depth < 1 {
+		depth = sharedQueueDepth
+	}
+	return &SharedBackend{
+		upstream:   upstream,
+		queueDepth: depth,
+		observer:   options.Observer,
+		scopes:     map[string]*sharedScope{},
+	}
+}
+
+func (b *SharedBackend) observe(observation Observation) {
+	if b.observer != nil {
+		b.observer.Observe(observation)
+	}
 }
 
 var _ Backend = (*SharedBackend)(nil)
@@ -118,6 +149,7 @@ func (b *SharedBackend) startScope(scope Scope, key string) (*sharedScope, error
 	s := &sharedScope{
 		backend: b,
 		key:     key,
+		scope:   scope,
 		watcher: w,
 		cancel:  cancel,
 		cache:   map[string]KRMObject{},
@@ -140,6 +172,7 @@ func (b *SharedBackend) forget(key string, s *sharedScope) {
 type sharedScope struct {
 	backend *SharedBackend
 	key     string
+	scope   Scope
 	watcher Watcher
 	cancel  context.CancelFunc
 
@@ -171,6 +204,7 @@ type sharedScope struct {
 //     behind, and resnapshotting it from the warm cache is exactly right. They keep the bounded
 //     channel, and the backpressure it exists for.
 type subscriber struct {
+	scope *sharedScope
 	// pending is the snapshot: added* and the boundary bookmark. Guarded by sharedScope.mu, and
 	// drained by Next() before a single live event is read.
 	pending []WatchEvent
@@ -220,7 +254,8 @@ func (s *sharedScope) subscribe() (Watcher, error) {
 	}
 
 	sub := &subscriber{
-		ch:       make(chan WatchEvent, sharedQueueDepth),
+		scope:    s,
+		ch:       make(chan WatchEvent, s.backend.queueDepth),
 		ready:    make(chan struct{}, 1),
 		awaiting: true,
 	}
@@ -274,6 +309,7 @@ func (sub *subscriber) offer(ev WatchEvent) bool {
 	case sub.ch <- ev:
 		return true
 	default:
+		sub.scope.backend.observe(Observation{Kind: ObservationSharedOverflow, Scope: sub.scope.scope})
 		sub.end(ResyncRequired(
 			"this consumer fell too far behind the shared watch; resnapshotting from the warm cache"))
 		return false

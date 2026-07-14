@@ -123,4 +123,8 @@ export interface EditabilityPolicy {
    * editing inside it; `status` is not editable either, and replacing it wholesale is exactly right.
    * Without this second predicate a store cannot tell those two apart. */
   containsEditable(obj: KRMObject, path: Path): boolean;
+  /** For an associative Kubernetes list at path, return its identity fields. Omit this to retain the
+   * safe atomic-array behavior. Implementations normally derive it from OpenAPI's
+   * `x-kubernetes-list-type: map` and `x-kubernetes-list-map-keys`. */
+  listMapKeys?(obj: KRMObject, path: Path): readonly string[] | undefined;
 }

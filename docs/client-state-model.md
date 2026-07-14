@@ -264,18 +264,24 @@ preserveOrConflict(path, ours, base, theirs):
   `JSON.stringify` equality, which voter uses and which false-negatives on reordered keys.
 - **Read-only regions skip all of this**: set draft = server, flash any changed path, done.
 
-### 4.1 The array problem (a real KRM wrinkle — flagged, not hand-waved)
+### 4.1 Arrays and OpenAPI associative lists
 
 Index-based array merge is fragile: an element inserted at the front shifts every index, so a
-positional merge mis-aligns. The algorithm above degrades safely — **any dirty or length change makes
-the whole array atomic** (voter's fallback) — which is correct but coarse (your one-element edit
-conflicts with the server's unrelated append). The *right* answer for Kubernetes is a **keyed merge**
-for associative lists: k8s marks them with `x-kubernetes-list-type: map` +
-`x-kubernetes-list-map-keys` (e.g. containers by `name`, ports by `containerPort`), which is how
-server-side apply merges lists. **Recommendation:** ship atomic-on-change first; add keyed-list merge
-driven by the OpenAPI/CRD schema as a follow-up. This is the main open design question (§10). Note
-that RFC 7386 merge patch also replaces arrays wholesale, so atomic arrays and the patch format agree
-out of the box.
+positional merge mis-aligns. By default, arrays are **atomic**: a concurrent change conflicts with a
+local array edit and the user's complete array remains in the draft. That is the conservative behavior
+for ordinary JSON arrays and for malformed schemas/lists.
+
+For Kubernetes associative lists, wrap a policy with `withOpenAPIKeyedLists(policy, schema)`. It
+recognizes the structural OpenAPI extensions `x-kubernetes-list-type: map` and
+`x-kubernetes-list-map-keys` (for example, containers by `name` or ports by `containerPort`). The
+store then reconciles each element by key, carries an edit across a server reorder or an unrelated
+element change, and moves any conflict to the element's new displayed index. The host selects the
+exact GroupVersionKind schema; krm-stream does not fetch schemas or expose them to the browser.
+
+RFC 7386 still sends the resulting array as one value. That patch is built from the latest server
+array plus independent local keyed edits, so it avoids overwriting a concurrent append/reorder already
+observed by the stream. The host remains responsible for normal write authorization and any stale-write
+precondition.
 
 ---
 
@@ -454,12 +460,11 @@ I-IDEMPOTENT, I-NONINTERFERE, I-ORDER-EQ, I-PATCH-ROUNDTRIP.
 
 ---
 
-## 11. Open questions for the new repo
+## 11. Remaining extensions
 
-- **Array/list merge** (§4.1): atomic-on-change first; schema-driven keyed-list merge
-  (`x-kubernetes-list-map-keys`) as the real fix. Biggest open design item.
-- **Editability policy source:** static defaults vs OpenAPI/CRD-schema-driven (immutable fields,
-  associative lists, `x-kubernetes-` hints). Schema-driven unlocks keyed lists *and* read-only marking.
+- **Schema selection and editability policy:** keyed-list metadata is supported, but choosing and
+  caching the exact OpenAPI/CRD schema, immutable fields, and additional editability hints remains a
+  host responsibility.
 - **Patch format:** RFC 7386 merge patch (simple, arrays-whole) vs strategic-merge / server-side
   apply (better lists, field ownership) — decide per target API capability.
 - **Status editing:** default off; expose a `/status`-subresource path for admin tools?

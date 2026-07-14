@@ -140,11 +140,23 @@ func isDNSName(v string) bool {
 	return true
 }
 
+// ResourceScope states the Kubernetes scope of a resource in the host allowlist.
+type ResourceScope string
+
+const (
+	// ResourceScopeNamespaced is a resource such as ConfigMap or Deployment.
+	ResourceScopeNamespaced ResourceScope = "namespaced"
+	// ResourceScopeCluster is a resource such as Namespace or Node.
+	ResourceScopeCluster ResourceScope = "cluster"
+)
+
 // GroupResource names one kind of thing a gateway is willing to stream. Group is "" for the core
 // group ("" + "configmaps"), exactly as Kubernetes writes it.
 type GroupResource struct {
-	Group    string
-	Resource string
+	Group              string
+	Resource           string
+	Scope              ResourceScope
+	AllowAllNamespaces bool
 }
 
 // ScopePolicy is the allowlist spec §8 demands: "the scope is allowlisted and server-normalized".
@@ -162,16 +174,37 @@ type ScopePolicy struct {
 	Targets []string
 	// Resources are the group+resource pairs that may be streamed.
 	Resources []GroupResource
+	// AllowLabelSelector permits a caller to narrow an already-allowed scope with Kubernetes label
+	// selector syntax. The zero value refuses selectors rather than silently expanding the supported
+	// request surface. A host that enables it should still constrain selector complexity at its edge.
+	AllowLabelSelector bool
 }
 
 // Validate reports whether a scope is one this gateway will stream at all.
 func (p ScopePolicy) Validate(s Scope) *StreamError {
+	if s.LabelSelector != "" && !p.AllowLabelSelector {
+		return ScopeInvalid("label selectors are not enabled for this stream endpoint")
+	}
 	if !contains(p.Targets, s.Target) {
 		return ScopeInvalid("target is not allowlisted: " + quoteOrEmpty(s.Target))
 	}
 	for _, gr := range p.Resources {
-		if gr.Group == s.Group && gr.Resource == s.Resource {
+		if gr.Group != s.Group || gr.Resource != s.Resource {
+			continue
+		}
+		switch gr.Scope {
+		case ResourceScopeCluster:
+			if s.Namespace != "" {
+				return ScopeInvalid("cluster-scoped resource must not name a namespace: " + quoteOrEmpty(groupResourceOf(s)))
+			}
 			return nil
+		case ResourceScopeNamespaced:
+			if s.Namespace != "" || gr.AllowAllNamespaces {
+				return nil
+			}
+			return ScopeInvalid("all-namespaces watch is not allowlisted for: " + quoteOrEmpty(groupResourceOf(s)))
+		default:
+			return ScopeInvalid("resource scope is not configured for: " + quoteOrEmpty(groupResourceOf(s)))
 		}
 	}
 	// Deliberately does NOT echo back which resources are allowed: the allowlist is a policy

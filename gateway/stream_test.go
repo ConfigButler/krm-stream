@@ -163,6 +163,84 @@ func TestBookmarksAreAbsorbedExceptTheSnapshotBoundary(t *testing.T) {
 	}
 }
 
+func TestGatewayObserverReportsDeliveredAndSuppressedEvents(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+
+	var observations []Observation
+	gw := &Gateway{
+		Auth:       AllowAll{},
+		Projection: ProjectionSpec,
+		Clients: func(string, Principal) (Backend, error) {
+			return &stubBackend{events: []WatchEvent{
+				{Type: WatchAdded, Object: KRMObject{
+					"apiVersion": "apps/v1", "kind": "Deployment",
+					"metadata": map[string]any{"uid": "d1", "name": "web", "resourceVersion": "1"},
+					"spec":     map[string]any{"replicas": 1},
+					"status":   map[string]any{"readyReplicas": 0},
+				}},
+				{Type: WatchBookmark, InitialEventsEnd: true},
+				{Type: WatchModified, Object: KRMObject{
+					"apiVersion": "apps/v1", "kind": "Deployment",
+					"metadata": map[string]any{"uid": "d1", "name": "web", "resourceVersion": "2"},
+					"spec":     map[string]any{"replicas": 1},
+					"status":   map[string]any{"readyReplicas": 1},
+				}},
+			}}, nil
+		},
+		Observer: ObserverFunc(func(observation Observation) {
+			observations = append(observations, observation)
+			if observation.Kind == ObservationEventSuppressed {
+				cancel()
+			}
+		}),
+	}
+
+	err := gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "deployments"}, &recordingSink{})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("Stream() error = %v, want context cancellation after suppression", err)
+	}
+
+	if !sawObservation(observations, ObservationStreamOpened, "") ||
+		!sawObservation(observations, ObservationCycleStarted, "") ||
+		!sawObservation(observations, ObservationEventEmitted, EventReset) ||
+		!sawObservation(observations, ObservationEventEmitted, EventAdded) ||
+		!sawObservation(observations, ObservationEventEmitted, EventSynced) ||
+		!sawObservation(observations, ObservationEventSuppressed, EventModified) {
+		t.Fatalf("observations = %#v", observations)
+	}
+}
+
+func TestGatewayObserverReportsTerminalError(t *testing.T) {
+	var observations []Observation
+	gw := &Gateway{
+		Auth:       AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("no access") }),
+		Projection: ProjectionFull,
+		Clients:    func(string, Principal) (Backend, error) { return nil, nil },
+		Observer: ObserverFunc(func(observation Observation) {
+			observations = append(observations, observation)
+		}),
+	}
+
+	err := gw.Stream(t.Context(), nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, &recordingSink{})
+	var streamErr *StreamError
+	if !errors.As(err, &streamErr) || streamErr.Code != CodeForbidden {
+		t.Fatalf("Stream() error = %v, want terminal FORBIDDEN", err)
+	}
+	if !sawObservation(observations, ObservationTerminalError, "") || observations[len(observations)-1].Code != CodeForbidden {
+		t.Fatalf("terminal observation = %#v, want FORBIDDEN", observations)
+	}
+}
+
+func sawObservation(observations []Observation, kind ObservationKind, eventType EventType) bool {
+	for _, observation := range observations {
+		if observation.Kind == kind && (eventType == "" || observation.EventType == eventType) {
+			return true
+		}
+	}
+	return false
+}
+
 // Spec §4.2: if the gateway cannot recover a trustworthy uid it MUST NOT emit an ambiguous
 // `deleted`. It begins a new snapshot cycle instead and lets reset…synced prune. Guessing here
 // deletes the wrong object out of somebody's browser.

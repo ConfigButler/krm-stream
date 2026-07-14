@@ -21,7 +21,7 @@ mux.Handle("/resource-stream/v1", gateway.Handler(gateway.Options{
     Clients:    myClientForIdentity, // a client acting AS them — their RBAC, their attribution
     Scopes: gateway.ScopePolicy{     // deny-by-default: the zero value streams nothing
         Targets:   []string{""},
-        Resources: []gateway.GroupResource{{Resource: "configmaps"}},
+		Resources: []gateway.GroupResource{{Resource: "configmaps", Scope: gateway.ResourceScopeNamespaced}},
     },
 }))
 ```
@@ -206,16 +206,23 @@ otherwise would be teaching the rule with an example that cannot happen.
 
 Also: Go 1.26, Node 22 (client build + tests only — the shipped bundle has **zero** dependencies).
 
-## Status
+## Maturity
 
-**Early.** The specs are written and the conformance fixtures are the contract. The gateway and the
-client are being implemented against them, test-first. Nothing is published yet.
+This is a pre-1.0 library: the repository has no published Go or npm release yet, and breaking changes
+remain possible before the first tagged release. It is not a sketch, though; both implementations run
+the same conformance corpus and the gateway has real Kubernetes adapter coverage.
 
-The design record lives in [`docs/`](docs/):
-[client-state-model](docs/client-state-model.md) (the merge algorithm the client implements),
-[extraction-plan](docs/extraction-plan.md) (where this came from, and the order of the work), and
-[naming](docs/naming.md) (why `krm-stream` — and why not `krm-live`).
-[`CONTRIBUTING.md`](CONTRIBUTING.md) is how to run it.
+| Surface | Readiness | Notes |
+|---|---|---|
+| Protocol and conformance corpus | implemented, pre-1.0 | stable enough for coordinated adopters; version changes remain possible before release |
+| Core Go gateway | implemented, pre-1.0 | dependency-free core, SSE handler, projections, suppression, sequence checks |
+| `gateway/kube` adapter | implemented, pre-1.0 | opt-in client-go module; streaming-list and list-then-watch paths covered |
+| TypeScript client | implemented, pre-1.0 | headless store, transport helpers, sequence-gap detection; package not published yet |
+| Schema-aware keyed-list merge | implemented, pre-1.0 | opt-in OpenAPI support for `x-kubernetes-list-type: map`; unknown or malformed lists remain atomic |
+
+Start with [adopting.md](docs/adopting.md), then use [saving.md](docs/saving.md) and
+[operations.md](docs/operations.md). The design record remains in [`docs/`](docs/), and
+[`CONTRIBUTING.md`](CONTRIBUTING.md) is how to run the repository.
 
 ## Quick start
 

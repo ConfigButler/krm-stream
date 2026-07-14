@@ -126,7 +126,11 @@ func (g *Gateway) ServeStreamProjection(w http.ResponseWriter, r *http.Request, 
 
 	hb, stopHeartbeat := context.WithCancel(ctx)
 	defer stopHeartbeat()
-	go sink.Heartbeat(hb, HeartbeatInterval)
+	interval := g.HeartbeatInterval
+	if interval <= 0 {
+		interval = HeartbeatInterval
+	}
+	go sink.Heartbeat(hb, interval)
 
 	// The error is already ON the wire by the time Stream returns — emitting it is how the consumer
 	// learns anything. There is nothing left to tell the HTTP layer: the status line went out with

@@ -14,7 +14,7 @@
 // fields the server just removed. These are two layers, and conflating them is the ghost bug.
 
 import { clone, deepEqual, isPlainObject } from "./deep.ts";
-import { at, pathKey } from "./path.ts";
+import { at, isPrefix, pathKey } from "./path.ts";
 import type { Conflict, Path } from "./types.ts";
 
 /** The store's per-resource view of which paths are editable — the policy, minus the paths this
@@ -24,6 +24,8 @@ export interface Regions {
   editable(path: Path): boolean;
   /** Not editable itself, but an editable region lives underneath: recurse, don't replace. */
   container(path: Path): boolean;
+  /** Identity fields for a schema-declared Kubernetes associative list, if this is one. */
+  listMapKeys(path: Path): readonly string[] | undefined;
 }
 
 export interface MergeState {
@@ -74,6 +76,10 @@ function mergeContainer(s: MergeState, path: Path, base: unknown, ours: unknown,
 }
 
 function mergeEditable(s: MergeState, path: Path, base: unknown, ours: unknown, theirs: unknown): unknown {
+  const keys = s.regions.listMapKeys(path);
+  if (keys && isAssociativeList(base, keys) && isAssociativeList(ours, keys) && isAssociativeList(theirs, keys)) {
+    return mergeAssociativeList(s, path, keys, base, ours, theirs);
+  }
   const defined = [base, ours, theirs].filter((v) => v !== undefined);
   if (defined.length > 0 && defined.every(isPlainObject)) return recurse(s, path, base, ours, theirs);
 
@@ -98,6 +104,116 @@ function mergeEditable(s: MergeState, path: Path, base: unknown, ours: unknown, 
   }
   setConflict(s, path, theirs);
   return clone(ours);
+}
+
+/** Merge Kubernetes `listType: map` entries by their declared key rather than their position.
+ *
+ * A merge patch still writes the resulting array as a whole, because RFC 7386 has no keyed-array
+ * operation. The important part is that its value starts with the latest server list and carries the
+ * user's independent element edits across a reorder, append, or unrelated element change. */
+function mergeAssociativeList(
+  s: MergeState,
+  path: Path,
+  keys: readonly string[],
+  base: unknown[],
+  ours: unknown[],
+  theirs: unknown[],
+): unknown[] {
+  const baseByKey = indexAssociativeList(base, keys);
+  const oursByKey = indexAssociativeList(ours, keys);
+  const theirsByKey = indexAssociativeList(theirs, keys);
+  if (!baseByKey || !oursByKey || !theirsByKey) return mergeAtomic(s, path, base, ours, theirs) as unknown[];
+
+  // Server order is authoritative for entries it has. Locally-added or locally-preserved entries
+  // without a server position follow in their draft order, which keeps a user's new row stable.
+  const order = unique([...theirsByKey.order, ...oursByKey.order, ...baseByKey.order]);
+  const outputKeys = order.filter((key) =>
+    associativeEntrySurvives(baseByKey.values.get(key), oursByKey.values.get(key), theirsByKey.values.get(key)),
+  );
+  remapListConflicts(s, path, oursByKey.order, outputKeys);
+  const out: unknown[] = [];
+  for (const key of outputKeys) {
+    const value = mergeAssociativeEntry(
+      s,
+      [...path, out.length],
+      baseByKey.values.get(key),
+      oursByKey.values.get(key),
+      theirsByKey.values.get(key),
+    );
+    if (value !== undefined) out.push(value);
+  }
+  return out;
+}
+
+function associativeEntrySurvives(base: unknown, ours: unknown, theirs: unknown): boolean {
+  // This exactly covers atomic add/delete handling. When both sides agree an entry is absent, there
+  // is no value to put in the result; every other combination is retained or represented as a
+  // conflict by mergeAssociativeEntry.
+  return !(ours === undefined && deepEqual(base, theirs)) && !(theirs === undefined && deepEqual(base, ours));
+}
+
+function remapListConflicts(s: MergeState, path: Path, previousOrder: string[], outputKeys: string[]): void {
+  const outputIndex = new Map(outputKeys.map((key, index) => [key, index]));
+  const moved: Conflict[] = [];
+  for (const [encoded, conflict] of s.conflicts) {
+    const segment = conflict.path[path.length];
+    if (!isPrefix(path, conflict.path) || typeof segment !== "number") continue;
+    const key = previousOrder[segment];
+    const nextIndex = key === undefined ? undefined : outputIndex.get(key);
+    if (nextIndex === undefined || nextIndex === segment) continue;
+    s.conflicts.delete(encoded);
+    moved.push({ ...conflict, path: [...path, nextIndex, ...conflict.path.slice(path.length + 1)] });
+  }
+  for (const conflict of moved) s.conflicts.set(pathKey(conflict.path), conflict);
+}
+
+function mergeAssociativeEntry(s: MergeState, path: Path, base: unknown, ours: unknown, theirs: unknown): unknown {
+  // An added or deleted entry is an atomic user intent. Recursing through an absent object would
+  // turn a deletion into `{}` and erase the fact that the entry was removed.
+  if (base === undefined || ours === undefined || theirs === undefined) return mergeAtomic(s, path, base, ours, theirs);
+  return node(s, path, base, ours, theirs);
+}
+
+function mergeAtomic(s: MergeState, path: Path, base: unknown, ours: unknown, theirs: unknown): unknown {
+  if (deepEqual(base, ours)) {
+    if (!deepEqual(base, theirs)) s.flashed.push(path);
+    clearConflict(s, path);
+    return clone(theirs);
+  }
+  if (deepEqual(base, theirs)) return clone(ours);
+  if (deepEqual(ours, theirs)) {
+    clearConflict(s, path);
+    return clone(ours);
+  }
+  setConflict(s, path, theirs);
+  return clone(ours);
+}
+
+interface AssociativeListIndex {
+  order: string[];
+  values: Map<string, Record<string, unknown>>;
+}
+
+function isAssociativeList(value: unknown, keys: readonly string[]): value is unknown[] {
+  return Array.isArray(value) && indexAssociativeList(value, keys) !== undefined;
+}
+
+function indexAssociativeList(values: unknown[], keys: readonly string[]): AssociativeListIndex | undefined {
+  const indexed: AssociativeListIndex = { order: [], values: new Map() };
+  for (const value of values) {
+    if (!isPlainObject(value)) return undefined;
+    const identity = keys.map((key) => value[key]);
+    if (identity.some((part) => part === undefined || part === null || typeof part === "object")) return undefined;
+    const encoded = JSON.stringify(identity);
+    if (indexed.values.has(encoded)) return undefined;
+    indexed.order.push(encoded);
+    indexed.values.set(encoded, value);
+  }
+  return indexed;
+}
+
+function unique(values: string[]): string[] {
+  return [...new Set(values)];
 }
 
 function recurse(s: MergeState, path: Path, base: unknown, ours: unknown, theirs: unknown): unknown {

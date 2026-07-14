@@ -11,8 +11,8 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LiveResourceStore, readOnlyPolicy } from "../src/index.ts";
-import type { Path } from "../src/types.ts";
+import { defaultPolicy, LiveResourceStore, readOnlyPolicy, withOpenAPIKeyedLists } from "../src/index.ts";
+import type { KRMObject, Path } from "../src/types.ts";
 import { body } from "./conformance.ts";
 
 const CM = "cm-app.v1"; // ConfigMap: data.log-level=info, data.replicas="3", one dotted label
@@ -139,6 +139,135 @@ test("I-PATCH-ROUNDTRIP — applying patch(id) to the server object yields the d
   assert.equal(spec.template.spec.containers.length, 1);
 });
 
+test("OpenAPI associative lists merge a keyed element across server reordering", () => {
+  const schema = {
+    properties: {
+      spec: {
+        properties: {
+          template: {
+            properties: {
+              spec: {
+                properties: {
+                  containers: {
+                    "x-kubernetes-list-type": "map",
+                    "x-kubernetes-list-map-keys": ["name"],
+                    items: { properties: { name: {}, image: {}, resources: {} } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const store = new LiveResourceStore(withOpenAPIKeyedLists(defaultPolicy, schema));
+  const base = deploymentWithContainers([
+    { name: "web", image: "example/web:v1", resources: { requests: { cpu: "100m" } } },
+  ]);
+  store.applyServerEvent(base);
+  const id = base.metadata.uid;
+
+  // The edit was made when `web` was index zero. The server later prepends another container and
+  // changes a different field on web, so a positional merge would conflict or edit the wrong item.
+  store.setValue(id, ["spec", "template", "spec", "containers", 0, "image"], "example/web:v2");
+  const incoming = deploymentWithContainers([
+    { name: "sidecar", image: "example/sidecar:v1" },
+    { name: "web", image: "example/web:v1", resources: { requests: { cpu: "250m" } } },
+  ]);
+  const result = store.applyServerEvent(incoming);
+  const containers = containersOf(store.draft(id));
+
+  assert.deepEqual(containers, [
+    { name: "sidecar", image: "example/sidecar:v1" },
+    { name: "web", image: "example/web:v2", resources: { requests: { cpu: "250m" } } },
+  ]);
+  assert.deepEqual(result.conflicts, [], "independent keyed-element changes must not conflict");
+  assert.deepEqual(containersOf(store.patch(id) as KRMObject), containers, "RFC 7386 still sends one complete array");
+});
+
+test("OpenAPI associative lists keep a same-field conflict on the keyed element", () => {
+  const schema = {
+    properties: {
+      spec: {
+        properties: {
+          template: {
+            properties: {
+              spec: {
+                properties: {
+                  containers: {
+                    "x-kubernetes-list-type": "map",
+                    "x-kubernetes-list-map-keys": ["name"],
+                    items: { properties: { name: {}, image: {} } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const store = new LiveResourceStore(withOpenAPIKeyedLists(defaultPolicy, schema));
+  const base = deploymentWithContainers([{ name: "web", image: "example/web:v1" }]);
+  store.applyServerEvent(base);
+  const id = base.metadata.uid;
+  store.setValue(id, ["spec", "template", "spec", "containers", 0, "image"], "example/web:ours");
+  store.applyServerEvent(deploymentWithContainers([{ name: "web", image: "example/web:theirs" }]));
+
+  assert.deepEqual(store.conflicts(id), [
+    {
+      path: ["spec", "template", "spec", "containers", 0, "image"],
+      theirs: "example/web:theirs",
+    },
+  ]);
+});
+
+test("OpenAPI associative-list conflicts follow their entry across a reorder", () => {
+  const schema = {
+    properties: {
+      spec: {
+        properties: {
+          template: {
+            properties: {
+              spec: {
+                properties: {
+                  containers: {
+                    "x-kubernetes-list-type": "map",
+                    "x-kubernetes-list-map-keys": ["name"],
+                    items: { properties: { name: {}, image: {} } },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
+    },
+  };
+  const store = new LiveResourceStore(withOpenAPIKeyedLists(defaultPolicy, schema));
+  const base = deploymentWithContainers([{ name: "web", image: "example/web:v1" }]);
+  store.applyServerEvent(base);
+  const id = base.metadata.uid;
+  store.setValue(id, ["spec", "template", "spec", "containers", 0, "image"], "example/web:ours");
+  store.applyServerEvent(deploymentWithContainers([{ name: "web", image: "example/web:theirs" }]));
+
+  // The conflict already exists. A later prepend must move its public, index-shaped path to web's
+  // new location rather than leaving the UI pointing at sidecar.
+  store.applyServerEvent(
+    deploymentWithContainers([
+      { name: "sidecar", image: "example/sidecar:v1" },
+      { name: "web", image: "example/web:theirs" },
+    ]),
+  );
+  assert.deepEqual(store.conflicts(id), [
+    {
+      path: ["spec", "template", "spec", "containers", 1, "image"],
+      theirs: "example/web:theirs",
+    },
+  ]);
+});
+
 test("revert — takes the server's value back, and resolves the conflict with it", () => {
   const [store, id] = seeded(CM);
   store.setValue(id, ["data", "log-level"], "debug");
@@ -218,4 +347,18 @@ function applyMergePatch(target: unknown, patch: unknown): unknown {
     else out[k] = applyMergePatch(out[k], v);
   }
   return out;
+}
+
+function deploymentWithContainers(containers: Array<Record<string, unknown>>) {
+  return {
+    apiVersion: "apps/v1",
+    kind: "Deployment",
+    metadata: { uid: "keyed-deploy", name: "web", resourceVersion: "1" },
+    spec: { template: { spec: { containers } } },
+  };
+}
+
+function containersOf(object: KRMObject): Array<Record<string, unknown>> {
+  return (object.spec as { template: { spec: { containers: Array<Record<string, unknown>> } } }).template.spec
+    .containers;
 }

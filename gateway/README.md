@@ -1,6 +1,6 @@
 # KRM resource stream gateway — requirements & design spec
 
-> **Status:** specification, pre-extraction. The **producer** half of the
+> **Status:** implemented, pre-1.0. The **producer** half of the
 > [KRM resource stream protocol](../spec/v1.md) v1: a server component that turns a
 > Kubernetes watch into a browser-friendly SSE stream of **complete KRM objects** — including live
 > **`status`** — and applies edits back to the cluster *as the signed-in user*. Its consumer is any
@@ -28,7 +28,7 @@
    controllers write `status` constantly — so the fan-out, coalescing and backpressure rules (§8) exist
    mostly to serve *this*, not the editing case.
 2. **Live spec edit (read-write).** Stream the same object, let the user edit `spec`/`metadata` while
-   it changes underneath them (the engine three-way merges), then apply their patch **as them**.
+   it changes underneath them (the engine three-way merges), then let the host apply its patch **as them**.
 
 Both are the same stream. A pure status dashboard consumes half this spec and can ignore §7 entirely.
 
@@ -45,10 +45,8 @@ stream half — which is why it is its own component, not folded into the merge 
 
 **In scope:** authenticating a stream request; authorizing it to a bounded, allowlisted scope; running
 the Kubernetes watch (and reusing it across callers); **projecting** objects per a named, declared
-policy and emitting the protocol; SSE framing, heartbeats, fan-out, coalescing, backpressure; applying
-a save **as the caller** (RBAC + attribution) while refusing to write anything the caller was never
-shown; optionally binding the save's *reason* to a Git commit message; operational limits and
-observability.
+policy and emitting the protocol; SSE framing, heartbeats, fan-out, coalescing, backpressure;
+projection-aware merge-patch validation; operational limits and observability.
 
 **Non-goals** (from voter §3, and they matter): a raw proxy for arbitrary watch URLs; kubectl parity in
 the browser; **exposing Kubernetes bearer tokens to the browser**; supporting every selector combination
@@ -251,7 +249,7 @@ type StreamRequest struct { Target, Resource, Namespace, Name, LabelSelector str
 type ScopeKey struct {
     Target        string   // an allowlisted upstream id — NOT a URL
     Group, Version, Resource string
-    Namespace     string   // empty ⇒ the resource is cluster-scoped (NOT "all namespaces")
+    Namespace     string   // empty ⇒ cluster-scoped OR an explicitly-authorized all-namespaces scope
     Name          string   // empty ⇒ collection scope
     LabelSelector string   // empty unless the gateway allows and validates one
 }
@@ -272,8 +270,8 @@ Rules:
   but the field exists from day one, because retrofitting a target key into an informer cache and a
   uid map afterwards is the kind of change that breaks a released library.
 - Allowlist resources explicitly. Keep scopes narrow: one kind, one namespace, optionally one name.
-- **Cluster-scoped resources are supported.** Namespaced-with-no-namespace is a *denial*, not a
-  wildcard: **all-namespace watches are not in v1** — one namespace or one cluster-scoped resource.
+- **Cluster-scoped resources are supported.** A namespaced resource with no namespace is an
+  all-namespaces watch and must be explicitly allowlisted; it is never an accidental wildcard.
 - **Field selectors are not in v1.** A **label selector** MAY be accepted, and if so MUST be validated
   and MUST become part of the `ScopeKey` (so two callers asking the same selector share one informer).
 - gitops-api's current gateway hardcodes the scope (ConfigMaps in the caller's resolved namespace) — a
@@ -515,7 +513,7 @@ A fake watch/informer + a fake API suffice for most of these.
 | **Authorization & lifecycle** |
 | 26 | unauthorized scope request | denied before any watch opens |
 | 27 | non-allowlisted resource, or a raw URL in the request | denied; not proxied |
-| 28 | all-namespaces or field-selector request (v1) | denied — not silently widened |
+| 28 | all-namespaces request | accepted only when the host explicitly allowlists it; never silently widened |
 | 29 | two callers, same scope, different principals | one informer; both authorized **at the scope boundary** (§6a) |
 | 30 | browser disconnects | watch/subscription torn down; no goroutine leak (assert on `ctx.Done()`) |
 | 31 | auth token expires mid-stream | terminal `UNAUTHENTICATED`; connection closed |

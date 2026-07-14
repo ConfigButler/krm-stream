@@ -327,6 +327,7 @@ export class LiveResourceStore {
     return {
       editable: (path) => !isRedacted(path) && this.#policy.isEditable(object, path),
       container: (path) => this.#policy.containsEditable(object, path),
+      listMapKeys: (path) => this.#policy.listMapKeys?.(object, path),
     };
   }
 

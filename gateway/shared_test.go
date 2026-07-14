@@ -252,6 +252,39 @@ func TestASlowSubscriberIsResnapshottedNotBlocking(t *testing.T) {
 	}
 }
 
+func TestSharedBackendOptionsBoundQueueAndReportOverflow(t *testing.T) {
+	up := newFakeUpstream()
+	overflow := make(chan Observation, 1)
+	b := NewSharedBackendWithOptions(up, SharedOptions{
+		QueueDepth: 1,
+		Observer: ObserverFunc(func(observation Observation) {
+			if observation.Kind == ObservationSharedOverflow {
+				overflow <- observation
+			}
+		}),
+	})
+
+	w, err := b.Watch(t.Context(), sharedScopeUnderTest)
+	if err != nil {
+		t.Fatalf("Watch: %v", err)
+	}
+	defer w.Stop()
+	up.send(WatchEvent{Type: WatchBookmark, InitialEventsEnd: true})
+	drainSnapshot(t, w)
+
+	up.send(WatchEvent{Type: WatchModified, Object: obj("uid-a", "cm-a", "1")})
+	up.send(WatchEvent{Type: WatchModified, Object: obj("uid-a", "cm-a", "2")})
+
+	select {
+	case observation := <-overflow:
+		if observation.Scope != sharedScopeUnderTest {
+			t.Errorf("overflow scope = %+v, want %+v", observation.Scope, sharedScopeUnderTest)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("queue overflow was not observed")
+	}
+}
+
 // A partial object must never enter the cache. The stream loop guards its own output, but this cache
 // is REPLAYED to every future joiner: a husk forwarded once blanks one consumer's object; a husk
 // CACHED is served to everybody who arrives later, for as long as the scope lives.

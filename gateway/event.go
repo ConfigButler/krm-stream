@@ -104,12 +104,14 @@ type Identity struct {
 // scope; the server maps it to an allowlisted target + GVR + a namespace the caller may actually
 // see. A raw API-server URL is never accepted.
 type Scope struct {
-	Target        string `json:"target"`
-	Group         string `json:"group,omitempty"`
-	Version       string `json:"version"`
-	Resource      string `json:"resource"`
-	Namespace     string `json:"namespace,omitempty"` // absent => a cluster-scoped resource
-	Name          string `json:"name,omitempty"`      // present => a single-object scope
+	Target   string `json:"target"`
+	Group    string `json:"group,omitempty"`
+	Version  string `json:"version"`
+	Resource string `json:"resource"`
+	// Namespace is required for a namespaced scope. Its absence means either a cluster-scoped resource
+	// or an all-namespaces watch; ScopePolicy decides which of those the host permits.
+	Namespace     string `json:"namespace,omitempty"`
+	Name          string `json:"name,omitempty"` // present => a single-object scope
 	LabelSelector string `json:"labelSelector,omitempty"`
 }
 

@@ -53,7 +53,7 @@ func (*emptyWatcher) Stop() {}
 
 var configmapsAllowed = gateway.ScopePolicy{
 	Targets:   []string{""},
-	Resources: []gateway.GroupResource{{Resource: "configmaps"}},
+	Resources: []gateway.GroupResource{{Resource: "configmaps", Scope: gateway.ResourceScopeNamespaced}},
 }
 
 // serve runs one request to completion. The context is bounded because a HEALTHY stream never ends

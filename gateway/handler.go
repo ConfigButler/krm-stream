@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 // The http.Handler the README has been promising, and which did not exist.
@@ -20,7 +21,7 @@ import (
 //	    Principal:  func(r *http.Request) (gateway.Principal, error) { return userFrom(r) },
 //	    Authorizer: myAuthz,
 //	    Clients:    myClientFor,
-//	    Scopes:     gateway.ScopePolicy{Targets: []string{""}, Resources: []gateway.GroupResource{{Resource: "configmaps"}}},
+//	    Scopes:     gateway.ScopePolicy{Targets: []string{""}, Resources: []gateway.GroupResource{{Resource: "configmaps", Scope: gateway.ResourceScopeNamespaced}}},
 //	}))
 //
 // ServeStream stays exported. A host that wants to route, name or authorize scopes its own way still
@@ -60,6 +61,13 @@ type Options struct {
 
 	// Ordering defaults to OrderingStrict (Kubernetes 1.35+ conformance). See stream.go.
 	Ordering ResourceVersionOrdering
+
+	// Observer receives low-cardinality stream lifecycle signals. It must not block.
+	Observer Observer
+
+	// HeartbeatInterval defaults to HeartbeatInterval. Set a positive value to match a proxy's idle
+	// timeout; it affects HTTP streams only.
+	HeartbeatInterval time.Duration
 }
 
 // Handler mounts the stream on one route.
@@ -81,11 +89,13 @@ func Handler(o Options) http.Handler {
 	}
 
 	g := &Gateway{
-		Auth:        o.Authorizer,
-		Clients:     o.Clients,
-		Projection:  o.Projection,
-		Projections: o.Projections,
-		Ordering:    o.Ordering,
+		Auth:              o.Authorizer,
+		Clients:           o.Clients,
+		Projection:        o.Projection,
+		Projections:       o.Projections,
+		Ordering:          o.Ordering,
+		Observer:          o.Observer,
+		HeartbeatInterval: o.HeartbeatInterval,
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
