@@ -92,8 +92,10 @@
       let pending = new Set();
 
       connectWithEventSource(`/resource-stream/v1?fixture=${fixture}&pace=${pace}`, store, {
-        onChange: (flashed) => {
-          for (const p of flashed) pending.add(key(p));
+        // `change` names the resource (change.uid) as well as the paths, which is what a UI showing
+        // more than one object per stream needs — this demo shows one, so it only reads flashed.
+        onChange: (change) => {
+          for (const p of change.flashed) pending.add(key(p));
           render();
         },
         onSynced: () => { statusLine.textContent = "synced — live"; },

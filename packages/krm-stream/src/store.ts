@@ -139,6 +139,17 @@ export class LiveResourceStore {
   /** The save succeeded and this is the object it produced. The watch will echo it too — and that
    * echo is a harmless no-op (I-IDEMPOTENT) — but a UI should not have to wait for it to stop
    * showing the field as dirty. */
+  /** Adopt the object a save returned.
+   *
+   * `object` MUST be projected — the same projection the stream uses. An object straight from a
+   * Kubernetes client carries managedFields, status and the Secret values the projection withholds,
+   * and handing it here puts all of them in the browser through the one endpoint the stream does not
+   * guard. Project it on the server with `gateway.Project` first.
+   *
+   * You probably do not need this. The recommended save is 204: the write reaches the API server, the
+   * watch echoes it back down the stream already projected, and the store converges. Dirty state is
+   * derived from draft-versus-server, so there is nothing to adopt. Use this only when a host cannot
+   * wait for the echo. See docs/saving.md. */
   adoptSaved(object: KRMObject): void {
     const existing = this.#resources.get(object.metadata.uid);
     if (!existing) {

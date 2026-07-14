@@ -49,7 +49,7 @@ for (const f of wireFixtures()) {
     const store = new LiveResourceStore();
     const flashed: Path[] = [];
     for (const [i, ev] of events.entries()) {
-      flashed.push(...applyStreamEvent(store, ev));
+      flashed.push(...applyStreamEvent(store, ev).flashed);
       for (const edit of f.client?.edits ?? []) {
         if (edit.after === i) applyEdit(store, edit);
       }

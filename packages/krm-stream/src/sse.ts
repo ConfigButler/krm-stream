@@ -14,7 +14,7 @@
 // be allowed to see — forever, from every open tab.
 
 import type { LiveResourceStore } from "./store.ts";
-import type { ErrorCode, Path, StreamEvent } from "./types.ts";
+import type { ErrorCode, EventType, Path, StreamEvent } from "./types.ts";
 
 /** Incremental SSE parser. Bytes arrive in whatever chunks the network feels like — a frame can be
  * split down the middle, and it WILL be, under exactly the load where you least want to debug it —
@@ -92,27 +92,56 @@ function parseFrame(frame: string): StreamEvent | null {
  * it is exported because it IS the protocol — a host feeding a store from its own transport should
  * not have to reimplement the switch and get `synced` subtly wrong.
  *
- * Returns the paths that flashed, so a UI can highlight them. */
-export function applyStreamEvent(store: LiveResourceStore, ev: StreamEvent): Path[] {
+ * Returns the complete StreamChange — which resource, and what happened to it. */
+export function applyStreamEvent(store: LiveResourceStore, ev: StreamEvent): StreamChange {
   switch (ev.type) {
     case "reset":
       store.beginSnapshot();
-      return [];
+      return { type: ev.type, added: false, structural: false, flashed: [], conflicts: [] };
     case "added":
-    case "modified":
-      if (!ev.object) return [];
-      return store.applyServerEvent(ev.object, { redacted: ev.redacted }).flashed;
-    case "deleted":
-      if (ev.identity?.uid) store.removeResource(ev.identity.uid);
-      return [];
+    case "modified": {
+      if (!ev.object) return { type: ev.type, added: false, structural: false, flashed: [], conflicts: [] };
+      const result = store.applyServerEvent(ev.object, { redacted: ev.redacted });
+      return { type: ev.type, uid: ev.object.metadata.uid, ...result };
+    }
+    case "deleted": {
+      const uid = ev.identity?.uid;
+      if (uid) store.removeResource(uid);
+      // A removal IS structural: a row left the collection, and a UI that only re-reads values would
+      // keep rendering it.
+      return { type: ev.type, uid, added: false, structural: true, flashed: [], conflicts: [] };
+    }
     case "synced":
       store.endSnapshot();
-      return [];
+      return { type: ev.type, added: false, structural: false, flashed: [], conflicts: [] };
     default:
       // An unknown event type MUST be ignored, not treated as an error (spec §0). That is what lets
       // the gateway add an optional event type later without breaking a browser nobody can update.
-      return [];
+      return { type: ev.type, added: false, structural: false, flashed: [], conflicts: [] };
   }
+}
+
+/** What one stream event did to the store.
+ *
+ * This is the whole ApplyResult and the uid it belongs to, because anything less makes a host
+ * reimplement the stream loop to get the rest back. A UI rendering more than ONE resource per stream
+ * — which is most of them — cannot use a bare list of paths: it knows what moved and not what moved.
+ *
+ * Each field answers a question a renderer actually has:
+ *
+ *   uid         which resource. Absent only on reset/synced, which are about the stream, not an object.
+ *   added       an arrival, not a change. Animate it in; do not flash it as if a value moved.
+ *   structural  keys or rows appeared or disappeared. REBUILD the list; re-reading values is not enough.
+ *   flashed     the paths the server moved. Highlight these.
+ *   conflicts   the paths now conflicted, complete — not just the new ones.
+ */
+export interface StreamChange {
+  type: EventType;
+  uid?: string;
+  added: boolean;
+  structural: boolean;
+  flashed: Path[];
+  conflicts: Path[];
 }
 
 export interface StreamOptions {
@@ -121,8 +150,8 @@ export interface StreamOptions {
   onError?: (code: ErrorCode, message: string, terminal: boolean) => void;
   /** Called at the end of every snapshot cycle. The store is now consistent: a good moment to paint. */
   onSynced?: () => void;
-  /** Called after any change, with the paths that flashed. */
-  onChange?: (flashed: Path[]) => void;
+  /** Called after any change, with what the event did and which resource it did it to. */
+  onChange?: (change: StreamChange) => void;
   /** A missing or duplicated event was observed. The connection is closed; reconnect for a snapshot. */
   onGap?: (expected: number, received: number) => void;
   /** Abort the stream from outside. */
@@ -238,8 +267,8 @@ function feed(store: LiveResourceStore, sequence: StreamSequence, ev: StreamEven
     opts.onError?.(ev.code ?? "INTERNAL", ev.message ?? "", ev.terminal ?? false);
     return ev.terminal === true;
   }
-  const flashed = applyStreamEvent(store, ev);
+  const change = applyStreamEvent(store, ev);
   if (ev.type === "synced") opts.onSynced?.();
-  opts.onChange?.(flashed);
+  opts.onChange?.(change);
   return false;
 }

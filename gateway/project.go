@@ -47,6 +47,36 @@ type redactedValue struct {
 	value any
 }
 
+// Project applies a projection to an object, returning the object as it would go on the wire and the
+// RFC 6901 pointers whose values were withheld from it.
+//
+// This exists because the SAVE path needs it. A host that answers a save with the written object must
+// answer with a PROJECTED one — hand a browser what Kubernetes returned and you have just sent it
+// managedFields and the Secret value that the whole projection exists to withhold, through the one
+// endpoint the stream does not guard. Before this was exported there was no supported way to do that,
+// which made `store.adoptSaved(object)` a trap: the obvious thing to reach for, and no safe way to
+// feed it.
+//
+// The recommended save shape is still to answer 204 and let the watch echo the write back (see
+// docs/saving.md): the store converges on its own, dirty state is derived, and nothing needs
+// projecting. Use this when a host has a reason to hand the object back directly.
+//
+// # Why []string and not []Redaction
+//
+// Redaction carries a Rev, and Rev is not a property of an object — it is a counter the STREAM keeps
+// per uid, incremented when a withheld value changes underneath a consumer that cannot see it. There
+// is no honest Rev to give you here, and inventing a zero would be a field that looks like an answer.
+// The paths are the part that is true of the object alone. `adoptSaved` needs no Rev either: it keeps
+// the redactions the store already has.
+func Project(p Projection, in KRMObject) (KRMObject, []string) {
+	out, values := project(p, in)
+	paths := make([]string, 0, len(values))
+	for _, v := range values {
+		paths = append(paths, v.path)
+	}
+	return out, paths
+}
+
 func project(p Projection, in KRMObject) (KRMObject, []redactedValue) {
 	out := deepCopyObject(in)
 	redacted := []redactedValue{}
