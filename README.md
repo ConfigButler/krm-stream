@@ -18,6 +18,18 @@ a database request, a feature rollout, access policy, or a business workflow as 
 same live, conflict-aware editing experience should work wherever a resource expresses intent and a
 controller reports what became true.
 
+## Why a gateway
+
+Kubernetes already has a good change feed: a watch, documented under
+[efficient detection of changes](https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes).
+A browser cannot use it directly. Watching requires a cluster credential, the API server serves no
+CORS, and a watch hands back whole objects including `Secret` data. The gateway holds the credential,
+withholds what the browser should not see, and re-frames the stream as SSE that `EventSource` reads
+natively. It also shares one upstream watch per scope, so ten tabs are not ten watches on the API
+server.
+
+[Why a gateway](docs/why-a-gateway.md) works through this in full.
+
 ## How it fits
 
 ```mermaid
@@ -117,11 +129,14 @@ browser. Use [`gateway.ValidateMergePatch`](gateway/patch.go) in the host save h
 
 ## Guides
 
+- [Glossary for frontend developers](docs/glossary.md): the Kubernetes vocabulary you actually need, and where each word shows up in the library.
+- [Why a gateway](docs/why-a-gateway.md): why the browser cannot watch the API server, and why watches are shared.
 - [Adopting krm-stream](docs/adopting.md): same-origin cookie, bearer-token, and shared-watch setups.
 - [Authentication and authorization](docs/auth.md): identity and RBAC boundaries.
 - [Saving edits safely](docs/saving.md): patch validation and host write responsibilities.
 - [Operating krm-stream](docs/operations.md): metrics, alerts, and runtime controls.
 - [Client state model](docs/client-state-model.md): drafts, conflicts, redactions, and keyed lists.
+- [Alternatives and prior art](docs/alternatives.md): how this differs from Kubernetes clients, browser dashboards, and config-as-data systems.
 - [Releasing](docs/releasing.md): release workflow and publication prerequisites.
 
 ## Requirements and maturity
