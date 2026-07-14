@@ -1,20 +1,26 @@
-# krm-stream
+# krm-stream client
 
-**A live, faithful window onto Kubernetes resources, in the browser.**
+The `krm-stream` client is a dependency-free ESM package for consuming a KRM resource stream in a
+browser or JavaScript application. It provides:
 
-This npm package is the **browser client**: it reads the stream a `krm-stream` gateway serves, keeps
-a store of complete KRM objects in step with the cluster, three-way merges your local edits against
-the live object, and builds a merge patch. It has **zero runtime dependencies** and ships as plain
-ESM a browser imports with no bundler.
+- `LiveResourceStore` for server state, local drafts, conflicts, redactions, and merge patches.
+- `connectWithEventSource` for same-origin browser streams.
+- `connectResourceStream` for fetch-based transports with explicit headers.
+- `resourceStreamURL` for the v1 scope query format.
 
-It is one half of a pair. The other half — **the Go gateway that produces the stream** — is the
-product, and this client is the helper you would otherwise have had to write. Neither half is much
-use without the other, so the documentation lives in one place rather than being half-told here:
+The package is headless and does not choose a UI framework. It works with the Go gateway in this
+repository or any conforming producer.
 
-### 📖 **[Read the documentation → github.com/ConfigButler/krm-stream](https://github.com/ConfigButler/krm-stream)**
+```ts
+import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "krm-stream";
 
-```bash
-npm install krm-stream
+const store = new LiveResourceStore();
+connectWithEventSource(
+  resourceStreamURL("/resource-stream/v1", { version: "v1", resource: "configmaps", namespace: "app" }),
+  store,
+);
 ```
 
-Licensed under Apache-2.0.
+This project is pre-1.0 and has not been published to npm yet. See the repository
+[README](../../README.md), [client state model](../../docs/client-state-model.md), and
+[release guide](../../docs/releasing.md).

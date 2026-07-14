@@ -101,9 +101,9 @@ reading of anyone's memory. That distinction has already cost us two bugs.
 | `partial` | a metadata-only object (`PartialObjectMetadata`) delivered as an upsert. **It has a uid**; it has no `spec` and no `status` | **refuse it** and resnapshot. Forwarding it blanks the consumer's object |
 | `tombstone` | a `DELETED` whose object lost its identity (client-go's `DeletedFinalStateUnknown`) | **not guess.** Begin a new cycle and let `synced` prune |
 
-The last three were added by [proposal 0001](../docs/proposals/0001-watch-ops.md), because the corpus
-could not express three of the gateway's own MUST NOTs — and a mutation test proved it: emitting
-`synced` on every bookmark, and forwarding a partial object, both left every fixture green.
+The final three operations cover gateway safety rules that ordinary list and watch traffic cannot
+express. They ensure routine bookmarks, metadata-only objects, and ambiguous tombstones remain
+covered by the shared corpus.
 
 **Assertions.** `dirty` and `conflicts` are compared as exact sets (order-insensitive). `patch` is
 compared exactly — it is what gets sent to the API server, so "close enough" is not a thing.
@@ -127,7 +127,7 @@ Every fixture names the rule it defends, in `why:`. The ones that catch real bug
 | `edit-vs-unrelated-change` | **R-THREEWAY** — the base is the previous *server* object |
 | `conflict-and-converge` | a conflict clears when the server's value arrives at what you typed |
 | `dotted-label-keys` | **R-ID** — `app.kubernetes.io/name` is ONE path segment. Dot-joining it is silently wrong |
-| `array-atomic-on-change` | arrays merge atomically when lengths change (engine spec §4.1); a positional merge mis-aligns |
+| `array-atomic-on-change` | unannotated arrays merge atomically; a positional merge mis-aligns |
 | `secret-redaction` | a redacted value is never displayed, never dirty, and can never be written back over the real one |
 | `bookmark-absorbed` | a routine `BOOKMARK` is absorbed. Forward its object and you replace a live resource with a husk that has only a `resourceVersion` |
 | `partial-object-refused` | a `PartialObjectMetadata` **has a uid** — so "has a uid" was never a sufficient test for "is a complete object", and ours was wrong |

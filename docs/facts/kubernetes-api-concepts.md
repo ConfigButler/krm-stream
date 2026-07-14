@@ -6,9 +6,8 @@
 > separate — what each fact means for this repo.
 >
 > **Why this file exists.** `spec/v1.md` and `gateway/README.md` make claims about what a Kubernetes
-> watch does. Those claims were written from memory. Two of them were **wrong**, and one of the two
-> was a live bug in the gateway (§2). Design decisions here get grounded in what the API server
-> documents, or they do not get made.
+> watch does. This reference grounds those claims in Kubernetes documentation and distinguishes them
+> from behavior verified only by the real-cluster suite.
 >
 > **What is NOT in this file:** anything the page does not say. Where we rely on behaviour that lives
 > in `client-go`/`apimachinery` rather than in the documentation, it is called out as **[unverified
@@ -152,12 +151,11 @@ Preconditions, stated as requirements:
   synced at least to the moment the request began being processed.
 - `allowWatchBookmarks=true` is what makes the terminating bookmark appear at all.
 
-This maps **one-to-one** onto our protocol: the synthetic ADDEDs are the snapshot, the terminating
-bookmark **is** `synced`, everything after it is live. That is exactly what `gateway/README.md` §3a
-claims, and it checks out.
+This maps **one-to-one** onto the protocol: the synthetic ADDEDs are the snapshot, the terminating
+bookmark **is** `synced`, and everything after it is live.
 
 **One claim of ours the page does NOT support — now settled against a real cluster.**
-`gateway/README.md` §3a says the terminating bookmark is identified by
+The gateway identifies the terminating bookmark with
 `metadata.annotations["k8s.io/initial-events-end"] == "true"`. **That annotation appears nowhere on
 this page.** It is `metav1.InitialEventsAnnotationKey` in `apimachinery` (KEP-3157), and it was the
 single load-bearing assumption in the whole gateway — if it were wrong, `synced` would fire at the
@@ -176,7 +174,7 @@ Note also: with `resourceVersion` **unset** (no `sendInitialEvents` at all), a w
 Start at Most Recent" and *also* "begins with synthetic 'Added' events for all resource instances that
 exist at the starting resource version" — but with **no terminating bookmark**, so you cannot tell
 where the snapshot ends. That is the whole reason `sendInitialEvents` + `allowWatchBookmarks` exist,
-and the whole reason a list-then-watch fallback (§3b) has to synthesize the boundary itself.
+and the whole reason a list-then-watch fallback has to synthesize the boundary itself.
 
 ## 4. Losing continuity: `410 Gone`
 
@@ -244,15 +242,15 @@ Four PATCH content types, and the page names them exactly:
   client does not know how to handle - and then drop them as part of your update" — which is the exact
   argument `spec/v1.md` §3 makes for never round-tripping a projected object. Good: the protocol's
   most opinionated rule is one Kubernetes itself makes.
-- A PATCH may *also* carry `resourceVersion` as a precondition against lost updates. Our `patch(id)`
-  does not, today — a deliberate gap worth revisiting, since we *have* the resourceVersion and the
-  user has been staring at a three-way merge.
-- Strategic Merge Patch "has been superseded by Server-Side Apply", and **cannot** be used with CRDs.
-  → the keyed-list merge we want (docs §4.1, `x-kubernetes-list-map-keys`) points at **SSA**, not SMP.
+- A PATCH may carry `resourceVersion` as a precondition against lost updates. Hosts choose their own
+  stale-write policy because a suppressed projection can intentionally leave the streamed value stale.
+- Strategic Merge Patch is superseded by Server-Side Apply and cannot be used with CRDs. The client
+  uses structural OpenAPI metadata only for local keyed-list reconciliation; its save format remains
+  RFC 7386 merge patch.
 
-`x-kubernetes-list-type` / `x-kubernetes-list-map-keys` are **not on this page** (they live in the
-Server-Side Apply reference). The array-merge open question needs that page read the same way this one
-was, before it gets decided.
+`x-kubernetes-list-type` / `x-kubernetes-list-map-keys` are not on this page; they live in the
+Server-Side Apply reference. `withOpenAPIKeyedLists` consumes the structural subset supplied by the
+host.
 
 ---
 
@@ -267,10 +265,10 @@ was, before it gets decided.
 | 4 | `PartialObjectMetadata` has a **uid** | "no uid" is not a sufficient partial-object check; check the **kind** | **fixed** + fixture `partial-object-refused` |
 | 5 | Bookmarks may never arrive | nothing may depend on a bookmark's *arrival*, only on its meaning | holds — we only use the terminating one |
 | 6 | `k8s.io/initial-events-end` is not in the docs | our snapshot boundary rests on it | ✅ **CONFIRMED on v1.36.2** — [observed](observed-v1.36.2+k3s1.md) F1 |
-| 6b | **An aggregated API REJECTS `sendInitialEvents`** ("forbidden … unless the WatchList feature gate is enabled") | the streaming list is **not universal**. §3b's list-then-watch is not a fallback for old clusters — it is **mandatory**, today, for aggregated APIs | ❗ **open** — [observed](observed-v1.36.2+k3s1.md) F6. The gateway cannot serve a `Flunder` until it has this path |
+| 6b | **An aggregated API REJECTS `sendInitialEvents`** ("forbidden … unless the WatchList feature gate is enabled") | the streaming list is not universal; list-then-watch is required for these upstreams | **implemented** — [observed](observed-v1.36.2+k3s1.md) F6 |
 | 6c | An aggregated API has **its own** resourceVersion space, starting at ~1, and its store may be ephemeral | RVs can go **backwards** across a restart of that API server | ✅ survived — the high-water map is per-**cycle**, so a restart's new cycle clears it. A per-stream map would have swallowed every event after a restart |
-| 7 | Delete is two-phase; `deletionTimestamp` arrives as `MODIFIED` | "Terminating" is an observable state we must render, not a gap | **open** — no fixture yet |
-| 8 | `rv=0` watches may rewind and serve stale data | never open a watch with `resourceVersion=0` | holds — §3a uses `rv=""` |
+| 7 | Delete is two-phase; `deletionTimestamp` arrives as `MODIFIED` | "Terminating" is an observable state a consumer may render before deletion | documented behavior |
+| 8 | `rv=0` watches may rewind and serve stale data | never open a watch with `resourceVersion=0` | implemented |
 | 9 | RFC 7386 merge patch is a real k8s content type | `patch(id)` is directly usable, `application/merge-patch+json` | holds |
-| 10 | PATCH may carry `resourceVersion` as a lost-update precondition | we could, and probably should, offer it | **open** |
-| 11 | SMP is superseded and CRD-incompatible | keyed-list merge must go via **SSA**, not strategic merge | **open** (docs §4.1) |
+| 10 | PATCH may carry `resourceVersion` as a lost-update precondition | stale-write policy is host-owned | documented in `saving.md` |
+| 11 | SMP is superseded and CRD-incompatible | local keyed-list reconciliation uses host-supplied OpenAPI metadata; saves remain RFC 7386 merge patches | **implemented** |

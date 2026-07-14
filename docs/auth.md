@@ -15,9 +15,9 @@ native SSE request*.
 
 Everything else follows from that one sentence.
 
-## The supported route: OIDC via Dex, with a same-origin cookie
+## Recommended browser route: OIDC via Dex, with a same-origin cookie
 
-There is exactly one supported deployment in v1, and it is the one `EventSource` permits:
+For browser applications, use the same-origin route that native `EventSource` permits:
 
 ```mermaid
 sequenceDiagram
@@ -49,9 +49,8 @@ nothing an XSS can read.
 Then step 9 is the one that matters: **the upstream watch is opened as the user.** If they may not
 watch Secrets in that namespace, the API server refuses. No bug in this library can change that.
 
-> A fetch-based reader (`connectResourceStream`) *can* send an `Authorization` header, for a browser
-> that holds its own token. It exists, but it is **not the supported deployment in v1** — the cookie
-> route above is, and it is the one the corpus and the browser suite actually exercise.
+> A fetch-based reader (`connectResourceStream`) can send an `Authorization` header for a deliberate
+> token-bearing client. The cookie route above is the safer default for browser applications.
 
 ## The three seams, and what each is for
 
@@ -157,11 +156,9 @@ also how a revocation reaches a stream that is already open.
   and *your* save endpoint carries the duty to refuse a patch touching a redacted path, because a
   mask written back would overwrite the real Secret.
 
-## Known gaps
+## Save boundary
 
-- **A patch touching a *projection-removed* path** (`managedFields`, `last-applied-configuration`).
-  Your save endpoint should refuse one: the consumer never saw those fields either. It destroys
-  nothing, so it is not urgent — and the *catastrophic* version of this, a browser saving a mask back
-  over a real Secret, no longer exists: the projection deletes redacted values instead of masking them
-  ([proposal 0003](proposals/0003-validate-patch.md), spec §3.1). There is no poisoned value left to
-  write back.
+Projection is not authorization, and it is not a write policy. The host owns its save endpoint and
+must validate the active projection before sending a Kubernetes patch. Use
+`gateway.ValidateMergePatch` to reject redacted and projection-removed paths, then apply a narrow
+merge patch as the authenticated user. See [saving.md](saving.md).

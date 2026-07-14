@@ -1,7 +1,7 @@
 id: array-atomic-on-change
 title: When an array's length changes under an edit, the whole array conflicts — atomically.
 why: >
-  Engine spec §4.1, the known-coarse-but-correct rule. The user edited containers[0].image; the
+  Default array behavior. The user edited containers[0].image; the
   server injected a sidecar, so containers now has 2 elements. A positional merge would reconcile
   ours[0] against theirs[0] and ours[1] (absent) against theirs[1] — and with a PREPENDED element
   it would silently merge the user's edit into the wrong container.
@@ -11,8 +11,7 @@ why: >
   conflicts with an unrelated append — but never wrong. It also agrees with RFC 7386, which replaces
   arrays wholesale anyway, so the patch format needs no special case.
 
-  The right long-term answer is a keyed merge (x-kubernetes-list-map-keys: containers by `name`),
-  driven by the OpenAPI schema. That is the project's main open design question, not a TODO.
+  Hosts that supply an OpenAPI associative-list schema can opt into keyed-list merging instead.
 suites: [client]
 
 events:

@@ -134,10 +134,9 @@ func main() {
 
 // F1 + F2 — the streaming list, and the bookmark that IS the snapshot boundary.
 //
-// This is the one that matters. gateway/README §3a says: send `sendInitialEvents=true`, get the
-// objects as synthetic ADDEDs, then a BOOKMARK whose annotation `k8s.io/initial-events-end` marks the
-// end of the snapshot. That bookmark is what the gateway turns into `synced` — the event a consumer
-// prunes on. Nothing in the API docs mentions the annotation.
+// Verify the streaming-list framing used by the backend: synthetic ADDEDs followed by a BOOKMARK
+// whose `k8s.io/initial-events-end` annotation marks the end of the snapshot. The API docs do not
+// mention that annotation.
 func f1AndF2(ctx context.Context, dyn dynamic.Interface, cs kubernetes.Interface, ns string) finding {
 	f := finding{
 		ID:          "F1",
@@ -156,7 +155,7 @@ func f1AndF2(ctx context.Context, dyn dynamic.Interface, cs kubernetes.Interface
 		}
 	}
 
-	// EXACTLY the options gateway/README §3a specifies.
+	// The streaming-list options used by the Kubernetes backend.
 	w, err := dyn.Resource(configmaps).Namespace(ns).Watch(ctx, metav1.ListOptions{
 		SendInitialEvents:    ptr.To(true),
 		AllowWatchBookmarks:  true,
@@ -165,7 +164,7 @@ func f1AndF2(ctx context.Context, dyn dynamic.Interface, cs kubernetes.Interface
 	})
 	if err != nil {
 		f.Answer = fmt.Sprintf("the API server REFUSED the streaming-list watch: %v", err)
-		f.Detail = "gateway/README §3a assumes this request is accepted. It is not."
+		f.Detail = "The upstream refused this streaming-list request."
 		return f
 	}
 	defer w.Stop()
@@ -490,13 +489,11 @@ func f6(ctx context.Context, dyn dynamic.Interface, cs kubernetes.Interface, ns 
 	f.Answer = fmt.Sprintf("resourceVersion=%q (decimal/orderable=%v); streaming list %s; initial-events-end bookmark: %s",
 		rv, orderable, streaming, bookmark)
 	f.Detail = strings.Join([]string{
-		"**This is the most consequential thing the cluster told us, and it is a design change.**",
+		"**This confirms why the backend supports both watch paths.**",
 		"",
-		"1. **The streaming list is NOT universal.** An aggregated API server is a separate binary with its",
-		"   own feature gates, and this one refuses `sendInitialEvents` outright. gateway/README §3a treats",
-		"   the streaming list as *the* way to open a scope, and §3b's list-then-watch as a fallback for",
-		"   old clusters. That is backwards: the fallback is **mandatory** for aggregated APIs, on a",
-		"   current cluster, today. A gateway that only implements §3a cannot serve a Flunder at all.",
+		"1. **The streaming list is not universal.** An aggregated API server is a separate binary with its",
+		"   own feature gates, and this one refuses `sendInitialEvents` outright. List-then-watch is therefore",
+		"   required for this kind of upstream, even on a current cluster.",
 		"",
 		"2. **Its resourceVersion space is its own, and it starts at ~1.** This Flunder's is `\"2\"` — the",
 		"   sample-apiserver has its own etcd, numbering from scratch. And because that etcd is a sidecar",

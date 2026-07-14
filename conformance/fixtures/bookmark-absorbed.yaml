@@ -16,7 +16,7 @@ why: >
       so a mid-cycle `synced` prunes objects the snapshot had not reached yet: half the user's
       resources vanish, and reappear on the next relist.
 
-  Only the bookmark that TERMINATES the initial events is `synced` (spec §5, gateway §3a). Every other
+  Only the bookmark that TERMINATES the initial events is `synced` (spec §5). Every other
   one is absorbed for its resourceVersion and never spoken of again (spec §2).
 
   See docs/facts/kubernetes-api-concepts.md §1.1 — this rule is a quote from the API docs, not an

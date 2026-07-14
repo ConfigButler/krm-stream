@@ -1,6 +1,6 @@
 version: "3"
 
-# Everything in this repo is driven by `task` (same convention as gitops-api).
+# Everything in this repository is driven by `task`.
 # `task` with no argument lists what there is.
 
 run: once
@@ -268,7 +268,7 @@ tasks:
   # the aggregated API that refuses it (F6). It does not run in per-PR CI: it needs Docker-in-Docker
   # and it takes minutes, while the fixtures gate every PR in milliseconds.
   test-cluster:
-    desc: "The kube backend against a REAL API server — both paths (§3a and §3b)."
+    desc: "The kube backend against a real API server on both watch paths."
     deps: [cluster-up, cluster-aggregated-api]
     dir: gateway/kube
     env:

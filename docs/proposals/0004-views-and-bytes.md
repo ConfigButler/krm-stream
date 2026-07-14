@@ -1,6 +1,6 @@
 # Proposal 0004: views, suppression, and redaction revisions
 
-**Status:** accepted for the first public protocol release.
+**Status:** implemented, pre-1.0.
 
 ## Decision
 
@@ -12,7 +12,7 @@ The object remains a strict subset of the API-server object. The gateway may rem
 add or replace an object value. Information about removed values belongs in the event envelope, never
 in the Kubernetes object.
 
-This proposal intentionally makes a breaking pre-release protocol change:
+This decision made the following pre-release protocol changes:
 
 - `krm-editor/v1` is renamed to `krm-full/v1`.
 - `redactedPaths: string[]` is replaced with `redacted: [{ path, rev }]`.
@@ -49,9 +49,8 @@ The browser may request a projection name, but the host selects the effective pr
 principal and normalized scope. A browser never supplies projection rules. Projection choice is an
 authorization decision because it controls disclosure, particularly for `krm-raw/v1`.
 
-Additional named projections are a later extension. When added, their rules must match `(group, kind)`
-before matching a path: a generic `/data` rule would incorrectly redact ConfigMap contents as well as
-Secret contents.
+Additional projections must match `(group, kind)` before matching a path: a generic `/data` rule would
+otherwise redact ConfigMap contents as well as Secret contents.
 
 ## Suppression
 

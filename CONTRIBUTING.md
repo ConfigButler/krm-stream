@@ -1,145 +1,55 @@
 # Contributing
 
-## Get running
+## Prerequisites
 
-Open the repo in the devcontainer (*Reopen in Container*). Everything is already installed — Go 1.26,
-Node 22, Task, jq/yq, k3d, kubectl.
+The devcontainer provides Go 1.26, Node 22, Task, `kubectl`, and `k3d`.
 
 ```bash
-task            # what there is
-task test       # go test + node --test, both against the shared conformance fixtures
-task lint       # go vet + golangci-lint + tsc --noEmit
-task fixtures   # rebuild conformance/gen/*.json from the YAML sources
+task fixtures-check  # regenerate and verify shared fixture output
+task test            # gateway, Kubernetes adapter, and client suites
+task lint            # Go vet, golangci-lint, TypeScript, and Biome
+task build-client    # produce the dependency-free ESM bundle
 ```
 
-**Before every commit:** `task test` and `task lint` must pass, and `conformance/gen/` must not be
-stale (`task fixtures-check`). CI enforces all three.
+Run `task fixtures-check`, `task test`, and `task lint` before opening a pull request.
 
-## The one rule
+## Design rules
 
-```
-krm-stream  ──depends on──▶  nothing of ConfigButler's.  Ever.
-```
+- Keep the core gateway free of `client-go`; Kubernetes integration belongs in `gateway/kube`.
+- Keep the browser client framework-free and free of runtime dependencies.
+- Keep credentials, application identity, authorization policy, and writes in the host application.
+- Treat `spec/v1.md` and `conformance/` as the shared contract between gateway and client.
 
-This library knows **KRM**. It does not know GitOps, Flux, Dex, kcp, tenants, or ConfigButler. If the
-gateway ever seems to need "which namespace is this caller's?", that is a missing *interface*, not a
-missing import — inject it (`Authorizer`, `ClientFor(target, principal)`) and let the host answer.
+## Changing behavior
 
-The moment that rule bends, this stops being a library anyone else can adopt, and becomes a piece of
-someone's product with a misleading name.
+1. Update [spec/v1.md](spec/v1.md) when the wire contract changes.
+2. Add or update a fixture in [`conformance/`](conformance/) for behavior both sides share.
+3. Add focused package tests for behavior a fixture cannot express.
+4. Run the validation commands above.
 
-## The order of work
+Protocol compatibility is explicit. Additive optional fields are allowed when consumers can ignore them;
+incompatible event semantics require a new protocol version rather than a silent reinterpretation.
 
-The contract comes first, and it is already written. Both implementations are built *against* it.
+## Fixtures
 
-1. **[`spec/v1.md`](spec/v1.md)** — the wire. Normative; changes here are protocol changes.
-2. **[`conformance/`](conformance/)** — the spec, executable. KRM object bodies in YAML, scenarios that
-   say what the gateway must emit and what the client must then hold. **Both suites load the same
-   files** — that is the whole reason this is one repo.
-3. **[`packages/krm-stream/`](packages/krm-stream/)** — the client (`LiveResourceStore`). Pure logic,
-   no Kubernetes, fastest feedback. Implement the algorithm in
-   [`docs/client-state-model.md`](docs/client-state-model.md) until the fixtures are green.
-4. **[`gateway/`](gateway/)** — the Go producer. Test against a fake watch; then prove it against a
-   real API server (`task spike-up`).
+Fixtures use source YAML in `conformance/bodies/` and `conformance/fixtures/`. Run `task fixtures` to
+regenerate `conformance/gen/`; generated files are committed. Each fixture's `why` field should name
+the rule it protects.
 
-**Test-first is not a style preference here.** The merge logic this library replaces shipped three
-bugs in three days while living inline in an HTML file where no test could reach it. Each of those
-bugs is now a named fixture (`edit-vs-unrelated-change`, `conflict-and-converge`, `dotted-label-keys`).
-They exist so the rewrite cannot reintroduce them.
+## Test levels
 
-## The test ladder
+| Command | Purpose |
+|---|---|
+| `task test` | Deterministic gateway, adapter, client, and shared-fixture coverage. |
+| `task e2e-wire` | Real Go SSE bytes consumed by the TypeScript client over HTTP. |
+| `task e2e-browser` | Native `EventSource` and unbundled ESM in Chromium. |
+| `task cluster-facts` | Record observed Kubernetes behavior for the supported cluster version. |
+| `task test-cluster` | Exercise the Kubernetes backend against a real API server. |
 
-Each rung replaces one *simulated* boundary with a real one. They all replay the **same fixtures**, so
-a rung's job is not "more scenarios" — it is "the same scenarios, with one more thing that is really
-true."
-
-```mermaid
-flowchart LR
-    Y["conformance/*.yaml<br/><i>one scenario, end to end</i>"] --> W["watch:"] & E["events:"] & C["client:"]
-
-    W --> G["<b>gateway</b><br/>ScriptedBackend<br/><i>a fake watch</i>"]
-    G -- "must emit" --> E
-    E -- "is fed to" --> S["<b>store</b><br/>three-way merge"]
-    S -- "must hold" --> C
-
-    G -.-> SSE["<b>wire</b><br/>gen/sse/*.sse<br/><i>the bytes the gateway<br/>REALLY wrote</i>"]
-    SSE -.-> S
-
-    G ==> HTTP["<b>HTTP</b> · task e2e-wire<br/><i>real socket · real fetch</i>"]
-    HTTP ==> BR["<b>browser</b> · task e2e-browser<br/><i>real Chromium · native EventSource<br/>· unbundled ESM</i>"]
-
-    BR ==> K8S["<b>cluster</b> · task test-cluster<br/><i>a real API server · initial-events-end<br/>· an aggregated API that refuses it</i>"]
-
-    style E fill:#2563eb,color:#fff
-    style SSE fill:#2563eb,color:#fff
-    style K8S fill:#16a34a,color:#fff
-```
-
-`events:` is the meeting point — the gateway must *emit* it, the client is *fed* it. That is the whole
-reason this is one repository.
-
-| | what is real | what is faked | run it |
-|---|---|---|---|
-| **store** | the merge | the wire (events handed over as objects) | `task test` |
-| **gateway** | the stream loop, the projection | the API server (`ScriptedBackend`) | `task test` |
-| **wire** | the SSE bytes — the client parses transcripts the **gateway really wrote** | the socket | `task test` |
-| **HTTP** | a real Go server, a real socket, a real `fetch` | the API server | `task e2e-wire` |
-| **browser** | a real Chromium, native `EventSource`, the **unbundled ESM** | the API server | `task e2e-browser` |
-| **cluster** | a real API server — the streaming list, its bookmark, an aggregated API that refuses it | nothing | `task test-cluster` |
-
-Only the last rung needs a cluster, and that is not a compromise: every rule in the corpus is about
-framing, projection and merge, and a fake watch drives those deterministically in microseconds. What a
-fake *cannot* prove is exactly what the cluster rung exists for — and it earned its keep on the first
-run. The gateway's snapshot boundary rests on an annotation (`k8s.io/initial-events-end`) that appears
-**nowhere in the API documentation**; it is now a [witnessed fact](docs/facts/observed-v1.36.2+k3s1.md).
-And a real **aggregated API server refused the streaming list outright**, which turned `gateway/README`
-§3b from a fallback into a required path — a bug that would otherwise have been found by a user, in
-their cluster, and not by us (`docs/facts/…` F6).
-
-The cluster rung does **not** run in per-PR CI: it needs Docker-in-Docker and minutes, while the
-fixtures gate every PR in milliseconds. Its build tag is vetted on every PR all the same, because a
-suite that has quietly stopped compiling is a suite nobody notices has stopped running.
-
-**A green suite proves nothing until it can go red.** Before trusting a new test, break the code it
-covers and watch it fail. That habit has now found four real bugs in this repo — a `terminal` flag
-missing from the wire, an int64 `resourceVersion` overflow, a partial-object guard reading the wrong
-field, and two spec rules the corpus could not express at all. Every one of them was passing its tests.
-
-## Changing the protocol
-
-A protocol change is a change to `spec/v1.md` **and** to the fixtures **and** to both implementations,
-in one commit. CI is set up so that a change to `conformance/` re-runs both suites; if only one side
-compiles, you have broken the contract and the build will say so.
-
-Adding an *optional* event type or field is not a breaking change — consumers must ignore what they
-don't know (spec §0). Anything else gets a new path segment (`/v2`), not a silent redefinition.
-
-## Adding a fixture
-
-1. Add or reuse a body in `conformance/bodies/` — it is a plain Kubernetes object, written the way you
-   would `kubectl apply` it.
-2. Add `conformance/fixtures/<id>.yaml`. In `why:`, name the rule it defends. If it defends no rule,
-   ask whether it earns its keep.
-3. `task fixtures && task test`. Commit the YAML **and** the generated JSON.
+The cluster tasks need Docker and take longer; the fixture suites are the per-pull-request baseline.
 
 ## Style
 
-- **Go:** `gofmt`, `go vet`, `golangci-lint` clean. The wire types stay dependency-free — no client-go
-  in `event.go`.
-- **TypeScript:** `strict`, `biome check` clean. **No runtime dependencies, ever** — the published
-  bundle is plain ESM a browser can `import` with no bundler, and that rule is absolute.
-
-  **devDependencies are a different rule, and it is not "none".** They ship nothing, so the test is
-  whether they pay for themselves. Three do:
-
-  | | why |
-  |---|---|
-  | `typescript` | the compiler |
-  | `@types/node` | without it `tsc` cannot see `test/` **at all** — the tests import `node:test`. `node --test` *strips* types, it does not check them, so `tsconfig.test.json` is the only thing standing between us and an unverified conformance suite |
-  | `@biomejs/biome` | lint + format in one binary: the TypeScript half of what `gofmt`/`go vet`/`golangci-lint` do for the gateway. `task fmt-client` fixes what it can |
-
-  Two tsconfigs, and the difference matters: `tsconfig.json` is the **build** (`src/` only — its
-  `rootDir` is what ships); `tsconfig.test.json` is the **check** (`src/` + `test/`, `noEmit`). Both
-  run in `task lint` and in CI.
-- Comments explain *why*, and especially *what breaks if you do the obvious thing instead*. The
-  fixtures are the best example of the house style: every one of them says what it defends.
+- Format Go with `gofmt`; keep `go vet` and `golangci-lint` clean.
+- Keep TypeScript strict and pass `biome check`.
+- Prefer narrow changes and comments that explain constraints or non-obvious choices.
