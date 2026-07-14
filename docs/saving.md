@@ -35,36 +35,7 @@ func (s *server) saveConfigMap(w http.ResponseWriter, r *http.Request) {
 }
 ```
 
-## Answer 204 and let the watch echo it
-
-This is the recommended shape, and it is the one to reach for unless you have a specific reason not
-to.
-
-The object returned by a Kubernetes write is a *raw* object: `managedFields`, the last-applied
-annotation, `status`, and the Secret values your projection withholds. Writing it to the response
-hands the browser, through your save endpoint, precisely what the stream spent its whole design
-refusing to send. The save endpoint is not covered by the projection unless you cover it.
-
-You do not need to. The write goes to the API server, the watch sees it, and it arrives back down the
-stream as an ordinary `modified` event — projected, redacted, three-way merged into the draft the user
-is still holding. The store converges on its own. Dirty state is derived from `draft` versus `server`,
-so there is nothing to clear and nothing to adopt: the echo settles it.
-
-## If you must answer with the object
-
-`store.adoptSaved(object)` exists for a host that already holds a **projected** object — a host doing
-its own optimistic update, or one that cannot wait a round-trip for the echo. Project it first:
-
-```go
-projected, redacted := gateway.Project(gateway.ProjectionFull, result)
-_ = redacted // the paths withheld; the client keeps the redactions it already has
-writeJSON(w, projected)
-```
-
-`gateway.Project` applies the same projection the stream applies. Never hand `adoptSaved` an object
-straight from the Kubernetes client.
-
-The guard rejects:
+## What the guard rejects
 
 - a value declared in `redacted`, including deletion of a parent map such as `data: null`;
 - `metadata.managedFields` and the last-applied-configuration annotation, which every projection
@@ -79,6 +50,32 @@ intentionally incomplete, and a `PUT` can delete fields the browser never saw.
 `metadata.resourceVersion` may be stale when `krm-spec/v1` suppresses invisible status churn. Do not
 use the streamed value as a write precondition. The client-side three-way merge surfaces conflicts in
 the fields the user can see; send only the user's explicit merge-patch changes.
+
+## Answer 204 and let the watch echo it
+
+The object a Kubernetes write returns is a *raw* object: `managedFields`, the last-applied annotation,
+`status`, and the Secret values your projection withholds. Writing it to the response hands the
+browser, through your own save endpoint, exactly what the stream is designed to refuse. The save
+endpoint is not covered by the projection unless you cover it.
+
+You do not need to. The write reaches the API server, the watch sees it, and it comes back down the
+stream as an ordinary `modified` event: projected, redacted, and three-way merged into the draft the
+user is still holding. Dirty state is derived from `draft` versus `server`, so there is nothing to
+clear and nothing to adopt. The echo settles it.
+
+## If you must answer with the object
+
+`store.adoptSaved(object)` is for a host that already holds a **projected** object, such as one doing
+its own optimistic update. Project it first:
+
+```go
+projected, redacted := gateway.Project(gateway.ProjectionFull, result)
+_ = redacted // the paths withheld; the client keeps the redactions it already has
+writeJSON(w, projected)
+```
+
+`gateway.Project` applies the same projection the stream applies. Never hand `adoptSaved` an object
+straight from the Kubernetes client.
 
 ## Creating and deleting whole objects
 
