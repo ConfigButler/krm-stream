@@ -109,21 +109,73 @@ convergence promise is untouched.
 
 ### The wrinkle, and it is a real one
 
-`metadata.resourceVersion` **changes on every write**, including a status-only one. So two
-projections that differ in nothing a consumer can see will still differ in `resourceVersion`, and a
-naive digest suppresses nothing.
+`metadata.resourceVersion` **changes on every write**, including a status-only one. So two projections
+that differ in nothing a consumer can see will still differ in `resourceVersion`, and a naive digest
+suppresses nothing.
 
-The fix falls out of a rule we already have. Spec §6: **a consumer MUST NOT parse or order by
-`resourceVersion`** — it is opaque to them. Therefore:
+So the **suppression digest excludes `metadata.resourceVersion`** (as it already excludes
+`managedFields`, which the projection removes anyway).
 
-- the **suppression digest excludes `metadata.resourceVersion`** (and anything else that churns
-  without informing: `managedFields` is already removed);
-- a consumer may consequently hold an object whose `resourceVersion` is **older than the cluster's**.
-  That is *harmless precisely because §6 already forbids them from using it* — and if it were not
-  harmless, §6 would already be broken by coalescing.
+> **To be unambiguous, because this was read the other way: `resourceVersion` stays ON THE WIRE.** It
+> is part of the object, and the object is what the API server sent. We do not delete it, and §1's
+> subset rule does not ask us to. What is excluded is its participation in a *comparison we make
+> internally*.
 
-This is worth stating out loud in the spec, because it is the kind of thing that looks like a bug to
-someone reading a browser's devtools.
+### 3.1 …but suppression makes the consumer's `resourceVersion` **stale**, and that has teeth
+
+This is the part I under-sold, and the question that prompted this section is what exposed it.
+
+If we suppress, the consumer keeps the object it already had — **including its old
+`resourceVersion`**. Its *visible* content is correct and complete. But the `resourceVersion` it holds
+now trails the cluster's, and it trails it **precisely in the case that motivated this proposal**: the
+status-blind editor, watching an object whose `status` churns invisibly.
+
+Now imagine a host that uses that `resourceVersion` for optimistic concurrency — a `PUT` or a patch
+with a precondition. **Every save fails with a `409 Conflict`**, forever, on exactly the objects that
+churn most. Worse, it is a *false* conflict: nothing the user could see has changed. That would be a
+genuinely maddening bug, and it would look like ours.
+
+The protocol already forbids the thing that causes it, and the fix is to say so louder rather than to
+invent anything:
+
+- **Spec §3 already forbids a whole-object `PUT`** built from a projected object. Saves are a
+  constrained **merge patch**, and a merge patch carries no `resourceVersion`. A conforming consumer
+  therefore never sends one.
+- **Spec §6 already forbids a consumer parsing or ordering by `resourceVersion`.** It is opaque.
+- What we must now add, explicitly: **a consumer MUST NOT use `resourceVersion` as a save
+  precondition.** If a host wants optimistic concurrency, it does the read **server-side, at save
+  time** — it has an API client and the browser does not. The browser's copy is *a view*, not a
+  transaction handle, and it never was.
+
+**So why keep it on the wire at all?** Because it is part of the object, it is priceless in devtools
+and in a raw/operator view, and deleting a field to stop people misusing it is how you end up with a
+protocol full of holes. Keep it, and be explicit — which is exactly what §8 is for.
+
+### 3.2 A correction on what Kubernetes actually guarantees
+
+Both looser and stricter than it is usually stated, and this repo has the receipts:
+
+- **kube-apiserver, 1.35+: it IS guaranteed** to be orderable as a monotonically increasing integer —
+  that is a *Certified Kubernetes conformance requirement*, for base API objects **and** CRDs, and it
+  is the entire basis of this gateway's `OrderingStrict` default (see `stream.go`). So "never
+  guaranteed increasing" is too pessimistic for the main case.
+- **But the guarantee is per-storage, and it is not universal.** Our own cluster run (F6) found the
+  aggregated API server (`wardle`) numbering **its own `resourceVersion` space from ~1**, in its own
+  etcd — and because that etcd was an ephemeral sidecar, **a restart sends them backwards.** That is
+  not a hypothetical: it is in `docs/facts/observed-v1.36.2+k3s1.md`.
+- **And the API contract to clients says "opaque" regardless.** A guarantee the *server* must uphold
+  is not a licence for a *client* to depend on it.
+
+Which is the whole argument for §8: the gateway may reason about `resourceVersion` (carefully, with an
+escape hatch, having verified it against a real cluster). **A browser never should — so give it a
+number that is honestly ours.**
+
+### It composes with what exists
+
+`SharedBackend` fans one upstream watch out to N subscribers. Projection and suppression are
+**per-subscriber**, downstream of the shared cache — so one watch can feed a status dashboard and a
+status-blind editor at the same time, each seeing exactly what it asked for. Nothing about the sharing
+changes.
 
 ### It composes with what exists
 
@@ -204,15 +256,78 @@ target — but if a future view ever discloses a value, compression for that vie
 
 ---
 
+---
+
+## 8. The envelope, and a sequence number that is honestly ours
+
+**Yes. Do this, and do it now.** It is the cheapest thing in this document and it is the one with a
+property nothing else provides.
+
+We already *have* an envelope — `type`, `target`, `scope`, `projection`, `object`, `redactedPaths`,
+`identity`, `code`, `terminal`. Nothing needs inventing. What it lacks is a number:
+
+```jsonc
+{ "seq": 4712, "type": "modified", "object": { … }, "redactedPaths": [] }
+```
+
+**`seq`** — a `uint64`, **per stream**, starting at 1, incremented by one for **every event actually
+written** to that consumer. Strictly increasing. No gaps.
+
+### What it buys, and the third one is the real reason
+
+1. **It gives the consumer an order that is legitimately theirs to use.** Today a client that wants to
+   reason about ordering has exactly one number available, and it is the one thing the spec forbids it
+   from touching (§6, §3.2 above). That is a trap we set. `seq` removes the temptation by supplying the
+   honest alternative — *and it is ours*, so no aggregated API server can restart and send it
+   backwards.
+
+2. **It makes suppression and coalescing legible.** `seq` is assigned **at emit time, not at
+   generation time** — so a suppressed or coalesced event consumes no number, and the stream a
+   consumer sees is gapless *by construction*. "I dropped 200 status events for you" is invisible, as
+   it should be, rather than showing up as a suspicious hole.
+
+3. **A gap is therefore proof of loss.** This is the one that is genuinely new. Today, if an
+   intermediary truncates or drops an SSE frame, the consumer applies the events it *did* get,
+   converges to a wrong state, and **never finds out**. It looks fine. With a gapless `seq`, a
+   consumer that sees 4711 → 4713 *knows* it lost something, and can do the one correct thing:
+   reconnect and take a fresh snapshot. We currently have no way to detect that at all.
+
+### The rules that keep it honest
+
+- **`seq` is per-connection, not per-cycle.** It does not reset on a `reset` — otherwise a gap across
+  a resync would be invisible, which defeats (3).
+- **It is NOT a resume token, and it MUST NOT go in the SSE `id:` field.** Spec §7 bans `id:` lines for
+  a good reason: `EventSource` would replay it as `Last-Event-ID` on reconnect, promising a delta
+  resume that v1 does not have. `seq` lives in the JSON envelope, where it makes no such promise. A
+  reconnect starts a new stream, a new `seq`, and a fresh snapshot.
+- **It is per-subscriber**, because suppression and coalescing are. Two tabs on the same scope have
+  different `seq` streams, and that is correct — `seq` describes *this conversation*, not the cluster.
+- **It is not a cluster clock.** It says nothing about other objects, other scopes, or other streams.
+  Say so in the spec, or someone will build a distributed system on it.
+
+### Cost
+
+About twenty bytes per event and a counter. **And it is additive**, so it is compatible with the
+unknown-fields rule (§0 of the spec) — but there is no reason to lean on that: we have no users, the
+protocol is unreleased, and adding a field to the envelope now is free in a way it will never be
+again. That is the actual argument for doing it *now*.
+
+---
+
 ## 6. What I would build, in order
 
+0. **`seq` in the envelope** (§8). First, because it is free *now* and never again, because it is the
+   only thing here that can detect a lost frame at all, and because it is what lets us tell a consumer
+   "never look at `resourceVersion`" while handing them something they *can* look at.
 1. **Suppression** (§3), under the existing projections. Immediate, invisible, no protocol change —
    and it already helps: `krm-editor/v1` drops `managedFields`, so a `managedFields`-only update is
    already a no-op event we currently forward.
-2. **`krm-editor-nostatus/v1` and `krm-status/v1`** (§2), plus the `view` scope parameter. With (1)
-   in place, this is where "the frontend does not care about status" becomes *zero traffic*.
-3. **Spec §6 note**: a consumer may hold a stale `resourceVersion` because of suppression, and this is
-   fine — it is already forbidden from looking at it.
+2. **The `resourceVersion` rules, stated** (§3.1). `resourceVersion` stays on the wire; a consumer MUST
+   NOT use it as a save precondition; optimistic concurrency is done server-side at save time. Without
+   this, suppression hands a host a `409` storm on exactly the objects it cares about — a false
+   conflict, and it would look like our bug.
+3. **`krm-editor-nostatus/v1` and `krm-status/v1`** (§2), plus the `view` scope parameter. With (1) in
+   place, this is where "the frontend does not care about status" becomes *zero traffic*.
 4. **Measure gzip.** Before anything in §5 below the line.
 5. **`redacted[].changeToken`** (§4) — last, opt-in, and only if someone actually wants
    "the Secret rotated" in a UI. It is the smallest win and the only one with a security footgun.
