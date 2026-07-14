@@ -22,13 +22,9 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # The two languages nobody counts as languages.
-  #
-  # Half this repo's supply-chain surface IS a workflow YAML and a Dockerfile, and until this job
-  # existed they were the only files here with no linter pointed at them. That is not a coincidence:
-  # the bug that packed a bundle it had never built lived in a workflow, and it was invisible to every
-  # Go and TypeScript check in this pipeline. actionlint also runs shellcheck over every `run:` block,
-  # which is where the `tar | grep -q` / pipefail class of bug hides.
+  # A workflow YAML and a Dockerfile are half this repo's supply-chain surface, and were the only
+  # files here with no linter. The bug that packed a bundle it had never built lived in a workflow,
+  # invisible to every Go and TypeScript check in this pipeline.
   hygiene:
     name: workflows and Dockerfile
     runs-on: ubuntu-latest
@@ -37,9 +33,8 @@ jobs:
         with:
           persist-credentials: false
 
-      # Versions come from the devcontainer's ENV block — ONE definition, so CI and a developer's
-      # shell cannot lint with different rules and disagree about whether the tree is clean. A second
-      # hand-copied version number here is exactly the drift this whole PR is about.
+      # Versions come from the devcontainer's ENV block, so CI and a developer's shell cannot lint
+      # with different rules and disagree about whether the tree is clean.
       - name: install actionlint and hadolint (versions from .devcontainer/Dockerfile)
         run: |
           set -euo pipefail
@@ -54,7 +49,7 @@ jobs:
           sudo chmod +x /usr/local/bin/hadolint
 
       # No path argument: actionlint discovers every workflow itself, so a new one is checked the day
-      # it lands rather than the day someone remembers to add it to a list.
+      # it lands rather than the day someone remembers to list it.
       - run: actionlint
 
       - run: hadolint .devcontainer/Dockerfile
@@ -183,8 +178,7 @@ jobs:
       - name: no module may carry a `replace`
         run: |
           set -euo pipefail
-          # shellcheck disable=SC2016  # the backticks in the message below are LITERAL prose, not a
-          # substitution — single quotes are exactly right, and expanding them is what would be wrong.
+          # shellcheck disable=SC2016  # the backticks below are literal prose, not a substitution.
           if grep -nE '^[[:space:]]*replace([[:space:]]|\()' gateway/go.mod gateway/kube/go.mod; then
             echo '::error::a `replace` directive applies ONLY to the main module. It works in this checkout and is IGNORED by everyone who runs `go get`, so it makes the module unconsumable while every test here still passes. go.work is how this repo points the modules at each other; see the comment at the top of it.'
             exit 1
@@ -275,18 +269,13 @@ jobs:
         working-directory: packages/krm-stream
       - run: npx biome ci
         working-directory: packages/krm-stream
-      # The build and the pack, as ONE task — the same one a developer runs as `task pack-client`.
+      # The same task a developer runs. It builds (tsc AND the esbuild flatten), packs, and asserts
+      # every entry point in the exports map is really in the tarball. Nothing else can prove that: a
+      # missing ./bundle builds, tests, packs and publishes green, then fails for the first consumer
+      # who imports it. `npx tsc` alone used to produce exactly that tarball.
       #
-      # It builds (tsc AND the esbuild flatten — `npx tsc` alone silently produces a dist with no
-      # bundle), packs the tarball the release workflow will publish, and then ASSERTS that every entry
-      # point in the exports map is actually in that tarball. That last check is the one nothing else
-      # can do: a missing ./bundle builds green, tests green, packs green, publishes green, and fails
-      # for the first consumer who imports the entry point we advertised.
-      #
-      # These are the bytes release.yml publishes — it does not rebuild them, so the things on npm are
-      # the things this pipeline proved, and not a second build that merely ought to match. The
-      # versions inside are already correct on a release commit: release-please bumps package.json in
-      # the release PR, so by the time this runs on main the tree IS the release.
+      # release.yml publishes these bytes rather than rebuilding, so npm gets what this pipeline
+      # proved. Versions are already correct here: release-please bumps package.json in the release PR.
       - name: build, pack, and prove the tarball is complete
         run: task pack-client PACK_DIR=/tmp/npm
 

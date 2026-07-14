@@ -15,10 +15,9 @@ FROM golang:1.26.5-bookworm@sha256:18aedc16aa19b3fd7ded7245fc14b109e054d65d22ed5
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-# shellcheck is here for ACTIONLINT, not for us: actionlint shells out to it to check every `run:`
-# block, and if it is absent actionlint SILENTLY SKIPS that half of its job and still exits 0. The
-# local lint then passes on a workflow CI rejects — which is not a weaker check, it is a check that
-# lies. (Found exactly that way: `task lint` green, `actionlint` in CI red, on the same commit.)
+# shellcheck is here for actionlint, which shells out to it to check every `run:` block. Without it
+# actionlint silently skips that half of its job and still exits 0, so the local lint passes on a
+# workflow CI rejects. Found exactly that way: `task lint` green, CI red, same commit.
 RUN apt-get update \
     && apt-get -y install --no-install-recommends \
     git curl ca-certificates vim less jq sudo acl gnupg unzip openssh-client shellcheck \
@@ -46,9 +45,8 @@ RUN apt-get update \
 #   natively (type stripping), which is why this repo's client suite needs ZERO test deps.
 # ACTIONLINT_VERSION    -> https://github.com/rhysd/actionlint/releases
 # HADOLINT_VERSION      -> https://github.com/hadolint/hadolint/releases
-#   The two languages nobody thinks of as languages. Half this repo's supply-chain surface is a
-#   workflow YAML and a Dockerfile, and until these landed they were the only files here with no
-#   linter at all — which is precisely how CI came to pack a bundle it had never built.
+#   A workflow YAML and a Dockerfile were the only files here with no linter, which is how CI came to
+#   pack a bundle it had never built.
 ENV PATH="/go/bin:/usr/local/go/bin:${PATH}" \
     GOLANGCI_LINT_VERSION=v2.12.2 \
     TASK_VERSION=v3.51.1 \
@@ -76,15 +74,15 @@ RUN curl -fsSL -o /usr/local/bin/kubectl "https://dl.k8s.io/release/${KUBECTL_VE
 RUN curl -fsSL -o /usr/local/bin/k3d "https://github.com/k3d-io/k3d/releases/download/${K3D_VERSION}/k3d-linux-amd64" \
     && chmod +x /usr/local/bin/k3d
 
-# actionlint — static analysis for the workflows. It typechecks `${{ }}` expressions, catches invalid
-# `runs-on`/`needs` references, and runs shellcheck over every `run:` block.
+# actionlint: typechecks `${{ }}` expressions, catches invalid `runs-on`/`needs`, and shellchecks
+# every `run:` block.
 RUN curl -fsSL "https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz" \
     | tar -xzO actionlint > /usr/local/bin/actionlint \
     && chmod +x /usr/local/bin/actionlint \
     && actionlint --version
 
-# hadolint — the same for the Dockerfile. Config in .hadolint.yaml; the `# hadolint ignore=` comments
-# already scattered through this file have, until now, been talking to a linter that was never here.
+# hadolint: the same for this file. Config in .hadolint.yaml. The `# hadolint ignore=` comments below
+# have, until now, been talking to a linter that was not installed.
 RUN curl -fsSL -o /usr/local/bin/hadolint "https://github.com/hadolint/hadolint/releases/download/v${HADOLINT_VERSION}/hadolint-Linux-x86_64" \
     && chmod +x /usr/local/bin/hadolint \
     && hadolint --version

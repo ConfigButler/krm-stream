@@ -50,6 +50,6 @@ almost all *disclosure* failures. The things we would treat as security bugs:
 
 The boundaries this library claims to hold, and where they are enforced:
 
-- [docs/auth.md](docs/auth.md) — identity, RBAC, and the `SharedBackend` trade.
-- [docs/saving.md](docs/saving.md) — the write path, and why a save answers 204.
-- [docs/why-a-gateway.md](docs/why-a-gateway.md) — why the browser never holds a cluster credential.
+- [docs/auth.md](docs/auth.md): identity, RBAC, and the `SharedBackend` trade.
+- [docs/saving.md](docs/saving.md): the write path, and why a save answers 204.
+- [docs/why-a-gateway.md](docs/why-a-gateway.md): why the browser never holds a cluster credential.
