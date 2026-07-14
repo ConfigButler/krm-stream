@@ -1,5 +1,5 @@
 {
-  "packages/krm-stream": "0.1.1",
-  "gateway": "0.1.1",
-  "gateway/kube": "0.1.1"
+  "packages/krm-stream": "0.2.0",
+  "gateway": "0.2.0",
+  "gateway/kube": "0.2.0"
 }
