@@ -315,8 +315,7 @@ export class LiveResourceStore {
 
   /** Every edit goes through here: a write to `status`, to `metadata.name`, or to a redacted path is
    * refused. The engine is not the security boundary — the gateway rejects such a patch too — but a
-   * UI that cannot even form the edit is the difference between "safe" and "safe if the client is
-   * honest". */
+   * UI that cannot even form the edit is safer than one that relies on client cooperation. */
   #editable(id: string, path: Path): Resource {
     const res = this.#must(id);
     if (!this.isEditable(id, path)) {

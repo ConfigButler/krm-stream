@@ -29,7 +29,7 @@
       "style": {
         // Off, deliberately, and it is not laziness: tsconfig has `noUncheckedIndexedAccess`, so
         // EVERY array index is `T | undefined` — including `path[i]` inside a loop bounded by
-        // `path.length`. Given that stricter setting, `path[i]!` is the honest expression of a fact
+        // `path.length`. Given that stricter setting, `path[i]!` accurately expresses a fact
         // the loop bound already guarantees; the alternative is a runtime guard for a branch that
         // cannot happen, which is worse code. Dropping noUncheckedIndexedAccess to satisfy this rule
         // instead would trade a real check for a cosmetic one.

@@ -1,4 +1,4 @@
-// krm-stream — a live, honest window onto Kubernetes resources, in the browser.
+// krm-stream — live Kubernetes resource updates and three-way merges for browser applications.
 //
 // The public surface is small on purpose:
 //
