@@ -37,8 +37,8 @@ changed. Nothing derived from the secret ever leaves the process, and the entire
 — HMACs, per-stream keys, offline-cracking risk — **evaporates**. §4.
 
 Both cases then collapse into one vocabulary: a projection decides, per path, whether to **send**,
-**withhold** (you learn it exists and when it changes, never what it is) or **drop** (it is as if it
-did not exist). **"Redaction" is just `withhold` with a bad name.** §2.1.
+**redact** (you learn the path exists and when it changes, never what it is) or **remove** (it is as
+if it never existed). **"Redaction" was never a feature — it is one of three verbs.** §2.
 
 ---
 
@@ -68,71 +68,127 @@ nothing can round-trip it into a cluster.
 
 ---
 
-## 2. Views: "I don't want status" is just a projection
+## 2. There is no "redaction feature". There are three verbs.
 
-We already have the machinery. `projection` is on every `reset`, it is server-declared, and it names
-what the gateway removed. **A view is a projection.** No new concept:
-
-| projection | object contains | for |
-|---|---|---|
-| `krm-raw/v1` | everything, minus machinery | debugging, operators |
-| `krm-editor/v1` *(default)* | the above, minus Secret values | the editing case |
-| **`krm-editor-nostatus/v1`** | the above, **minus `status`** | an editor that never renders status |
-| **`krm-status/v1`** | `metadata` + `status` only, **no `spec`** | a status dashboard that never edits |
-
-Two design rules, and both come straight from §8's existing stance:
-
-- **Views are named and server-declared, never a caller-supplied field list.** An arbitrary
-  `?omit=/spec/template/spec/containers/0` is unbounded input, an unbounded number of projection
-  identifiers on the wire, and an unbounded cache/fan-out key space. The scope is *server-normalized*
-  (§8); so is the view. Adding a named view is a code change, on purpose.
-- **The consumer asks; the gateway decides.** `?view=nostatus` is a *request*. The `reset` echoes the
-  projection actually in force, and a consumer that gets something else must believe the `reset`.
-
-**This costs almost nothing to build**: `project()` already takes a `Projection` and returns
-`redactedPaths`. A view is a `switch` arm.
-
-### 2.1 The unification: **there is no "redaction feature"** — there are three verbs
-
-*"Can we drop the whole redaction thing by making the projection smarter?"* — and the answer is yes,
-in the sense that matters: **redaction stops being a feature and becomes one of three things a
-projection can say about a path.**
+*"Can we drop the whole redaction thing by making the projection smarter?"* — yes, in the sense that
+matters. **Redaction stops being a feature and becomes one of three things a projection says about a
+path.**
 
 > ## A projection decides, per path, exactly one of:
 >
-> | verb | the value | you are told it exists | you are woken when it changes |
+> | verb | the value | you are told the path exists | you are woken when it changes |
 > |---|---|---|---|
 > | **`send`** | you get it | — | ✅ |
-> | **`withhold`** | **never leaves the gateway** | ✅ (`withheld[].path`) | ✅ (`withheld[].rev`) |
-> | **`drop`** | never leaves the gateway | ❌ — it is as if it did not exist | ❌ **never. Zero events.** |
+> | **`redact`** | **never leaves the gateway** | ✅ (`redacted[].path`) | ✅ (`redacted[].rev`) |
+> | **`remove`** | never leaves the gateway | ❌ — it is as if it never existed | ❌ **never. Zero events.** |
 
-Everything in this document collapses into that table:
+### On the naming, because an earlier draft got it wrong
+
+That draft called these `withhold` and `drop`. **`redact` is the right word and it was already ours.**
+A redacted document has a *black bar*: you can see that something was taken, and you cannot see what.
+That is precisely `redact` — and it is exactly what `redactedPaths` has always meant. Inventing
+`withhold` was inventing a word for a concept that already had one.
+
+And the silent case already has a word too, in spec §3's own text: a field the gateway **removed** —
+*"never shown, and never named"*. So the vocabulary is `send` / `redact` / `remove`, all three of them
+words the spec is already using. **The generalisation is real; the neologism was not.**
+
+Everything in this document collapses into the table:
 
 | path | verb | why |
 |---|---|---|
-| `metadata.managedFields` | `drop` | nobody wants it, and nobody wants to be woken by it |
-| `Secret` `/data/*` values | **`withhold`** | *"I may not see it, but I want to know it rotated"* — the owner's case, exactly |
-| `status`, for a status-blind editor | `drop` | the motivating case: **zero traffic** |
-| `status`, for a dashboard | `send` | the product's headline |
-| `spec`, for a pure status dashboard | `drop` | it never renders it |
+| `metadata.managedFields` | `remove` | nobody wants it, and nobody wants to be woken by it |
+| `Secret` `/data/*` values | **`redact`** | *"I may not see it, but I want to know it rotated"* — the owner's case, exactly |
+| `status`, for a status-blind editor | `remove` | the motivating case: **zero traffic** |
+| `status`, for an editor or a dashboard | `send` | the product's headline |
 
-**"Redaction" was just `withhold` with a bad name and its own plumbing.** `redactedPaths` becomes
-`withheld[]`, and it carries the `rev` from §4 for free. One concept, one envelope field, one code
-path — instead of a Secret-shaped special case bolted to the side of the projection.
+`redactedPaths` becomes `redacted[]` and carries the `rev` from §4 for free. **One concept, one
+envelope field, one code path** — instead of a Secret-shaped special case bolted to the side.
 
-### And it makes the central trade *explicit* rather than hidden
+### It makes the central trade *explicit* rather than hidden
 
-`withhold` and `drop` differ in exactly one way, and it is the finding from §0:
+`redact` and `remove` differ in exactly one way, and it is the finding from §0:
 
-- **`drop` = zero events.** A change you are not told about cannot wake you.
-- **`withhold` = one small event per change.** You asked to know, so you get told — and being told
-  *costs an event*, which is the whole thing §0 warns about.
+- **`remove` = zero events.** A change you were never told about cannot wake you.
+- **`redact` = one small event per change.** You asked to know, so you get told — and *being told costs
+  an event*, which is the whole thing §0 warns about.
 
-So a consumer choosing `withhold` for `status` is choosing "wake me on every status change but do not
-send me the bytes". That may be exactly right for a list view with a *changed* dot — **and now it is a
-choice someone makes on purpose**, in the projection's definition, rather than a consequence they
-discover in production. The old design hid that trade inside the word "redaction". This one puts it in
-the vocabulary.
+So `redact` on `status` would mean "wake me on every status change, but do not send me the bytes".
+Someone might want that for a list view with a *changed* dot — **and now it is a choice made on
+purpose**, in a projection's definition, rather than a consequence discovered in production. The old
+design hid that trade inside the word "redaction". This one puts it in the vocabulary.
+
+---
+
+## 2.1 The projections, and there are three
+
+Short list, on purpose. Each one is a **code change** to add, which is the point (§2.2).
+
+| projection | `metadata` | `spec` | `status` | `Secret` values | for |
+|---|---|---|---|---|---|
+| `krm-raw/v1` | send | send | send | **send** ⚠️ | an operator console that is *meant* to disclose |
+| **`krm-full/v1`** *(default)* | send | send | send | **redact** | the editing case, and the live-status case. Both. |
+| **`krm-spec/v1`** | send | send | **remove** | redact | an editor that never renders status → **zero traffic** under status churn |
+
+*(All three `remove` `managedFields` and the last-applied annotation. Nothing wants those.)*
+
+### Two naming notes, one of which is a safety property
+
+- **The disclosing projection must have a frightening name.** `krm-raw/v1` is the one that puts Secret
+  values in a browser. It should *sound* like the loaded gun it is, because the name is what shows up
+  in a code review. **"verbose" fails that test** — it sounds like a log level. Keep `raw`, or call it
+  `krm-unredacted/v1`, but do not make it sound benign.
+- `krm-full/v1` and `krm-spec/v1` say what you *get*, which is what a caller is choosing between.
+
+### Why there is **no status-only projection**
+
+An earlier draft proposed `krm-status/v1` — `metadata` + `status`, no `spec` — for a dashboard that
+never edits. **Dropped, and the owner's instinct was right for a reason worth writing down:**
+
+**An object with its `spec` removed is not a KRM object any more.** It is a fragment that looks like a
+resource and is not one — you cannot round-trip it, you cannot diff it against the cluster, and every
+consumer that receives one has to know it is holding half a thing. This project's entire thesis is
+*"the payload is a Kubernetes object — not an abstracted document"* (spec §0). A projection that
+removes `spec` quietly abandons that.
+
+**And the byte argument for it does not survive contact with §5.** The obvious case for it is: under
+`I-REPLACE`, every status event re-sends the whole object, *including a `spec` that did not change* —
+and a Deployment's `spec.template` is large. That sounds expensive. But an SSE stream is **one gzip
+stream with one sliding window**: the previous event's `spec` is still in that window, so re-sending
+an identical `spec` costs **almost nothing on the wire.** Compression eats this problem for free,
+without inventing a payload that is not a KRM object.
+
+So: pay for `remove` when you want **zero events** (that is `krm-spec/v1`, and it is a real win that
+compression cannot give you). Do not pay for it merely to shave repeated bytes — gzip already did.
+
+## 2.2 Custom projections: yes, but only the **host** may define one
+
+Worth doing, and cheap — but the shape matters, because **a projection is a security policy**. It is
+the thing that redacts Secrets.
+
+- **A caller-supplied projection is never acceptable.** Not `?omit=…`, not a JSON-Pointer list, not
+  ever. If the browser can define the projection, the browser can define one that does not redact —
+  and it has just un-redacted your Secrets. It is also unbounded input, an unbounded set of projection
+  identifiers on the wire, and an unbounded cache-key space. The scope is server-normalized (§8); so is
+  the projection.
+- **A host-registered projection is fine**, and is the flexibility that is actually wanted:
+
+  ```go
+  gateway.Handler(gateway.Options{
+      Projections: map[gateway.Projection]gateway.Rules{
+          "acme-console/v1": {Remove: []string{"/status", "/metadata/annotations"}},
+      },
+      // …and the caller may only ASK for a name that is registered.
+  })
+  ```
+
+The rule, in one line: **the consumer picks a projection from a list; it never describes one.** The
+`reset` echoes the projection actually in force, and a consumer that gets something other than what it
+asked for must believe the `reset`.
+
+*(Agreed this is not the first thing to build — but the seam should exist from the start, because
+retrofitting "the host may define one" onto a hard-coded `switch` is a refactor, and reserving it now
+is free.)*
 
 ---
 
@@ -147,7 +203,7 @@ if digest(projected) == lastEmittedDigest[uid] {
 }
 ```
 
-Under `krm-editor-nostatus/v1`, a Deployment reconciling through a rollout produces **N status-only
+Under `krm-spec/v1`, a Deployment reconciling through a rollout produces **N status-only
 MODIFIEDs upstream and zero events downstream**. Not smaller events. *No* events. No frame, no wakeup,
 no re-render, no coalescing pressure, no bandwidth.
 
@@ -273,14 +329,14 @@ prefix. We would have disclosed the secret we were protecting while believing we
 
 ### The shape
 
-Per path, per stream, a small integer that increments **when the withheld value actually changes**:
+Per path, per stream, a small integer that increments **when the redacted value actually changes**:
 
 ```jsonc
 {
   "seq": 4712,
   "type": "modified",
   "object": { "kind": "Secret", "data": {} },
-  "withheld": [
+  "redacted": [
     { "path": "/data/token",    "rev": 3 },   // ← rotated twice since this stream began
     { "path": "/data/username", "rev": 1 }
   ]
@@ -293,7 +349,7 @@ still sees that `rev` moved. It leaks only what a boolean leaks over time — th
 and when.
 
 **The honest limit, stated in the spec:** `rev` is scoped to one stream. **You cannot know whether a
-withheld value changed while you were disconnected** — and *no* design can tell you that without
+redacted value changed while you were disconnected** — and *no* design can tell you that without
 publishing a stable, content-derived identifier, which is exactly the thing we must never publish. So
 a consumer that cares treats **every `reset` as "this may have changed"**. That is a real limitation
 and it is the correct one.
@@ -392,18 +448,17 @@ again. That is the actual argument for doing it *now*.
    only thing here that can detect a lost frame at all, and because it is what lets us tell a consumer
    "never look at `resourceVersion`" while handing them something they *can* look at.
 1. **Suppression** (§3), under the existing projections. Immediate, invisible, no protocol change —
-   and it already helps: `krm-editor/v1` drops `managedFields`, so a `managedFields`-only update is
+   and it already helps: every projection removes `managedFields`, so a `managedFields`-only update is
    already a no-op event we currently forward.
 2. **The `resourceVersion` rules, stated** (§3.1). `resourceVersion` stays on the wire; a consumer MUST
    NOT use it as a save precondition; optimistic concurrency is done server-side at save time. Without
    this, suppression hands a host a `409` storm on exactly the objects it cares about — a false
    conflict, and it would look like our bug.
-3. **`krm-editor-nostatus/v1` and `krm-status/v1`** (§2), plus the `view` scope parameter. With (1) in
-   place, this is where "the frontend does not care about status" becomes *zero traffic*.
+3. **`krm-spec/v1`** (§2.1), plus the `projection` scope parameter. With (1) in place, this is where
+   "the frontend does not care about status" becomes *zero traffic*.
 4. **Measure gzip.** Before anything in §5 below the line.
-5. **`withheld[]` with `rev`** (§2.1, §4) — replacing `redactedPaths`, and giving the owner's case
-   ("did the Secret rotate?") an answer that needs no crypto, no key management and no security
-   review. It is a rename plus a counter.
+5. **`redacted[]` with `rev`** (§2, §4) — `redactedPaths` grows a counter, and the owner's case ("did
+   the Secret rotate?") gets an answer that needs no crypto, no key management and no security review.
 
 ## 7. Open questions
 
@@ -415,5 +470,6 @@ again. That is the actual argument for doing it *now*.
 - **Should a view change the *scope key*?** Two subscribers to the same scope with different views
   share an upstream watch (good) but not a projection. Nothing breaks; it is worth confirming that
   fan-out accounting does not accidentally key on the projection.
-- **Does anyone actually want `krm-status/v1`?** It is the mirror of the motivating case and it is
-  free once views exist. But an unused projection is a maintained projection.
+- **Memory, for a large scope.** A joiner to a 5,000-object scope now materialises the whole snapshot
+  at once (see the `SharedBackend` snapshot/live split). That is inherent to *any* snapshot — it is
+  what the consumer asked for — but the number should be measured rather than assumed.
