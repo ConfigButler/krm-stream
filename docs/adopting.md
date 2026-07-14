@@ -44,7 +44,7 @@ func mount(mux *http.ServeMux, dynamicClientFor func(*User) dynamic.Interface) {
             return nil
         }),
         // Build a dynamic client acting as this user. Kubernetes RBAC remains the boundary.
-        Clients: func(_ string, p gateway.Principal) (gateway.Backend, error) {
+        Clients: func(_ context.Context, _ string, p gateway.Principal) (gateway.Backend, error) {
             return kube.NewBackend(dynamicClientFor(p.(*User))), nil
         },
         Scopes: gateway.ScopePolicy{
@@ -115,7 +115,7 @@ shared := gateway.NewSharedBackendWithOptions(serviceAccountBackend, gateway.Sha
 })
 
 options.Authorizer = kube.SSARAuthorizer(clientset, subjectFromUser)
-options.Clients = func(string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
+options.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 ```
 
 Read [auth.md](auth.md) before using this configuration. The shared-cache authorizer is a security

@@ -24,7 +24,7 @@ credential from a browser request.
 handler := gateway.Handler(gateway.Options{
 	Principal:  principalFromSession,
 	Authorizer: authorizeScope,
-	Clients: func(target string, p gateway.Principal) (gateway.Backend, error) {
+	Clients: func(_ context.Context, target string, p gateway.Principal) (gateway.Backend, error) {
 		return kube.NewBackend(dynamicClientFor(target, p)), nil
 	},
 	Scopes: gateway.ScopePolicy{

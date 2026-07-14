@@ -128,7 +128,7 @@ function mergeAssociativeList(
   // without a server position follow in their draft order, which keeps a user's new row stable.
   const order = unique([...theirsByKey.order, ...oursByKey.order, ...baseByKey.order]);
   const outputKeys = order.filter((key) =>
-    associativeEntrySurvives(baseByKey.values.get(key), oursByKey.values.get(key), theirsByKey.values.get(key)),
+    associativeEntrySurvives(oursByKey.values.get(key), theirsByKey.values.get(key)),
   );
   remapListConflicts(s, path, oursByKey.order, outputKeys);
   const out: unknown[] = [];
@@ -145,11 +145,10 @@ function mergeAssociativeList(
   return out;
 }
 
-function associativeEntrySurvives(base: unknown, ours: unknown, theirs: unknown): boolean {
-  // This exactly covers atomic add/delete handling. When both sides agree an entry is absent, there
-  // is no value to put in the result; every other combination is retained or represented as a
-  // conflict by mergeAssociativeEntry.
-  return !(ours === undefined && deepEqual(base, theirs)) && !(theirs === undefined && deepEqual(base, ours));
+function associativeEntrySurvives(ours: unknown, theirs: unknown): boolean {
+  // When both sides agree an entry is absent, there is no value to put in the result. Every other
+  // combination is retained or represented as a conflict by mergeAssociativeEntry.
+  return ours !== undefined || theirs !== undefined;
 }
 
 function remapListConflicts(s: MergeState, path: Path, previousOrder: string[], outputKeys: string[]): void {

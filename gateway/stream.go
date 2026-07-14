@@ -157,7 +157,7 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 			return g.emitTerminal(ctx, sink, scope, projection, &StreamError{Code: CodeInternal, Terminal: true, Message: "projection policy selected an unknown projection: " + string(projection)})
 		}
 		g.observe(Observation{Kind: ObservationCycleStarted, Scope: scope, Projection: projection})
-		backend, err := g.Clients(scope.Target, principal)
+		backend, err := g.Clients(ctx, scope.Target, principal)
 		if err != nil {
 			return g.emitTerminal(ctx, sink, scope, projection, err)
 		}
@@ -233,6 +233,11 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 					return err
 				}
 				g.observe(Observation{Kind: ObservationEventEmitted, Scope: scope, Projection: projection, EventType: EventSynced})
+				for uid := range revisions {
+					if _, present := emitted[uid]; !present {
+						delete(revisions, uid)
+					}
+				}
 			}
 
 		case WatchAdded, WatchModified:
@@ -284,6 +289,13 @@ func (g *Gateway) cycle(ctx context.Context, backend Backend, scope Scope, proje
 				// out of someone's browser. A new snapshot cycle removes it correctly instead, at
 				// the cost of one relist (spec §4.2).
 				return ResyncRequired("deletion tombstone carried no trustworthy uid")
+			}
+			stale, err := isStale(g.Ordering, emitted, id.UID, ev.Object)
+			if err != nil {
+				return err
+			}
+			if stale {
+				continue
 			}
 			// No `object` on the tombstone: the protocol makes it optional ("when the gateway has
 			// it"), and the final state of an object nobody can see any more is not worth the bytes

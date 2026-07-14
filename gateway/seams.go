@@ -56,7 +56,7 @@ func (f AuthorizerFunc) Authorize(ctx context.Context, p Principal, s Scope) err
 //
 // The browser never supplies an API-server URL, so this is also the choke point that makes that
 // impossible rather than merely forbidden: there is nowhere to put one.
-type ClientFor func(target string, principal Principal) (Backend, error)
+type ClientFor func(ctx context.Context, target string, principal Principal) (Backend, error)
 
 // Backend is the upstream: one Kubernetes API server (or anything that behaves like one).
 //

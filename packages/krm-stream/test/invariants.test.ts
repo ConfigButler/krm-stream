@@ -124,6 +124,12 @@ test("removeKey and renameKey — a deletion is a null in the patch, and a renam
   assert.deepEqual(Object.keys(store2.draft(id2).data as object), ["logLevel", "replicas"], "order is preserved");
 });
 
+test("renameKey refuses to overwrite an existing key", () => {
+  const [store, id] = seeded(CM);
+  assert.throws(() => store.renameKey(id, ["data"], "log-level", "replicas"), /already exists/);
+  assert.deepEqual(store.patch(id), null);
+});
+
 test("I-PATCH-ROUNDTRIP — applying patch(id) to the server object yields the draft", () => {
   const [store, id] = seeded(DEPLOY);
   store.setValue(id, ["spec", "replicas"], 5);
@@ -290,6 +296,16 @@ test("adoptSaved — the save landed; stop showing it as dirty without waiting f
   const r = store.applyServerEvent(body("cm-app.v4")); // ...and the watch echoes it: a no-op
   assert.deepEqual(r.flashed, []);
   assert.equal(store.patch(id), null);
+});
+
+test("adoptSaved preserves an edit made after the save request", () => {
+  const [store, id] = seeded(CM);
+  store.setValue(id, ["data", "log-level"], "debug");
+  store.setValue(id, ["data", "replicas"], "4"); // made after the first edit was submitted
+  store.adoptSaved(body("cm-app.v4")); // the server accepted log-level=debug, but not the later edit
+
+  assert.equal((store.draft(id).data as Record<string, string>)["log-level"], "debug");
+  assert.deepEqual(store.patch(id), { data: { replicas: "4" } });
 });
 
 test("I-REDACT — a redacted value is ABSENT, is read-only, and cannot reach a patch", () => {

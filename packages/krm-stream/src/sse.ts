@@ -27,9 +27,11 @@ export class SSEDecoder {
     this.#buffer += chunk;
     const out: StreamEvent[] = [];
 
-    // Frames are separated by a blank line. Normalize the line endings first: an SSE line may end
-    // \n, \r\n or bare \r, and a proxy is entitled to rewrite them.
-    this.#buffer = this.#buffer.replace(/\r\n|\r/g, "\n");
+    // Frames are separated by a blank line. Normalize completed line endings first: an SSE line may
+    // end \n, \r\n or bare \r, but a trailing \r may be the first byte of a split \r\n pair.
+    const trailingCR = this.#buffer.endsWith("\r");
+    const complete = trailingCR ? this.#buffer.slice(0, -1) : this.#buffer;
+    this.#buffer = complete.replace(/\r\n|\r/g, "\n") + (trailingCR ? "\r" : "");
 
     for (;;) {
       const sep = this.#buffer.indexOf("\n\n");
@@ -139,9 +141,10 @@ export interface StreamHandle {
 /** Consume a resource stream over fetch, feeding a store. Use this when the gateway authenticates
  * with a bearer token — native EventSource cannot send the header. */
 export function connectResourceStream(url: string, store: LiveResourceStore, opts: StreamOptions = {}): StreamHandle {
+  if (opts.signal?.aborted) return { close: () => {}, closed: Promise.resolve() };
   const controller = new AbortController();
   const fetchImpl = opts.fetch ?? globalThis.fetch;
-  if (opts.signal) opts.signal.addEventListener("abort", () => controller.abort(), { once: true });
+  opts.signal?.addEventListener("abort", () => controller.abort(), { once: true });
 
   const closed = (async () => {
     const res = await fetchImpl(url, {
@@ -190,6 +193,7 @@ export function connectWithEventSource(
   store: LiveResourceStore,
   opts: Omit<StreamOptions, "fetch" | "headers"> = {},
 ): StreamHandle {
+  if (opts.signal?.aborted) return { close: () => {}, closed: Promise.resolve() };
   const es = new EventSource(url, { withCredentials: true });
   const sequence = new StreamSequence();
   let resolve: () => void;

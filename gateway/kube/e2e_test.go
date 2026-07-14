@@ -14,7 +14,6 @@ package kube_test
 import (
 	"context"
 	"errors"
-	"strings"
 	"testing"
 	"time"
 
@@ -71,14 +70,14 @@ func clients(t *testing.T) (kubernetes.Interface, dynamic.Interface) {
 // the suite would have shipped, and it took one run against a real cluster to find.
 func scratchNamespace(t *testing.T, cs kubernetes.Interface) string {
 	t.Helper()
-	ns := "krm-stream-e2e-" + strings.ToLower(strings.NewReplacer("/", "-", "_", "-").Replace(t.Name()))
 	ctx := context.Background()
-	_, err := cs.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: ns},
+	created, err := cs.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: "krm-stream-e2e-"},
 	}, metav1.CreateOptions{})
-	if err != nil && !apierrors.IsAlreadyExists(err) {
-		t.Fatalf("create namespace %s: %v", ns, err)
+	if err != nil {
+		t.Fatalf("create scratch namespace: %v", err)
 	}
+	ns := created.Name
 	t.Cleanup(func() {
 		_ = cs.CoreV1().Namespaces().Delete(context.Background(), ns, metav1.DeleteOptions{})
 	})
@@ -94,7 +93,7 @@ func stream(t *testing.T, dyn dynamic.Interface, scope gateway.Scope) <-chan gat
 	backend := kube.NewBackend(dyn)
 	g := &gateway.Gateway{
 		Auth:    gateway.AllowAll{},
-		Clients: func(string, gateway.Principal) (gateway.Backend, error) { return backend, nil },
+		Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return backend, nil },
 	}
 	sink := chanSink{ch: make(chan gateway.Event, 128)}
 	go func() {

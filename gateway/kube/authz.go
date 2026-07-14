@@ -29,7 +29,7 @@ import (
 //
 //	shared := gateway.NewSharedBackend(serviceAccountBackend)   // one watch, one identity
 //	opts.Authorizer = kube.SSARAuthorizer(clientset, subjectOf) // …but RBAC still decides
-//	opts.Clients    = func(string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
+//	opts.Clients    = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 //
 // Because the gateway re-authorizes on every snapshot cycle (stream.go), this is also how a
 // revocation reaches a stream that is already open.

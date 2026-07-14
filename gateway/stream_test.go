@@ -67,7 +67,7 @@ func run(t *testing.T, projection Projection, auth Authorizer, events []WatchEve
 	gw := &Gateway{
 		Auth:       auth,
 		Projection: projection,
-		Clients: func(string, Principal) (Backend, error) {
+		Clients: func(context.Context, string, Principal) (Backend, error) {
 			return &stubBackend{events: events}, nil
 		},
 	}
@@ -171,7 +171,7 @@ func TestGatewayObserverReportsDeliveredAndSuppressedEvents(t *testing.T) {
 	gw := &Gateway{
 		Auth:       AllowAll{},
 		Projection: ProjectionSpec,
-		Clients: func(string, Principal) (Backend, error) {
+		Clients: func(context.Context, string, Principal) (Backend, error) {
 			return &stubBackend{events: []WatchEvent{
 				{Type: WatchAdded, Object: KRMObject{
 					"apiVersion": "apps/v1", "kind": "Deployment",
@@ -216,7 +216,7 @@ func TestGatewayObserverReportsTerminalError(t *testing.T) {
 	gw := &Gateway{
 		Auth:       AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("no access") }),
 		Projection: ProjectionFull,
-		Clients:    func(string, Principal) (Backend, error) { return nil, nil },
+		Clients:    func(context.Context, string, Principal) (Backend, error) { return nil, nil },
 		Observer: ObserverFunc(func(observation Observation) {
 			observations = append(observations, observation)
 		}),
@@ -366,7 +366,7 @@ func TestLenientOrderingDropsNothingItCannotOrder(t *testing.T) {
 	gw := &Gateway{
 		Auth:     AllowAll{},
 		Ordering: OrderingLenient,
-		Clients: func(string, Principal) (Backend, error) {
+		Clients: func(context.Context, string, Principal) (Backend, error) {
 			return &stubBackend{events: []WatchEvent{
 				{Type: WatchAdded, Object: cm("u1", "opaque-b", map[string]any{"v": "b"})},
 				{Type: WatchBookmark, InitialEventsEnd: true},
@@ -585,7 +585,7 @@ func TestSequenceIsGapFreeAndProjectionRequestIsAuthorized(t *testing.T) {
 	}
 
 	backend := &stubBackend{events: []WatchEvent{{Type: WatchBookmark, InitialEventsEnd: true}}}
-	gw := &Gateway{Auth: AllowAll{}, Projection: ProjectionFull, Clients: func(string, Principal) (Backend, error) { return backend, nil }}
+	gw := &Gateway{Auth: AllowAll{}, Projection: ProjectionFull, Clients: func(context.Context, string, Principal) (Backend, error) { return backend, nil }}
 	sink := &recordingSink{}
 	if err := gw.StreamProjection(t.Context(), nil, Scope{Target: "demo"}, ProjectionRaw, sink); err == nil {
 		t.Fatal("an unauthorized raw projection request succeeded")
@@ -603,7 +603,7 @@ func TestAuthorizerDeniesBeforeTheWatchIsEverOpened(t *testing.T) {
 		Auth: AuthorizerFunc(func(context.Context, Principal, Scope) error {
 			return Forbidden("this scope is not yours")
 		}),
-		Clients: func(string, Principal) (Backend, error) { return backend, nil },
+		Clients: func(context.Context, string, Principal) (Backend, error) { return backend, nil },
 	}
 	sink := &recordingSink{}
 	err := gw.Stream(t.Context(), nil, Scope{Target: "demo"}, sink)

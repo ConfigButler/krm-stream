@@ -99,21 +99,21 @@ func Handler(o Options) http.Handler {
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		scope, serr := ScopeFromQuery(r.URL.Query())
-		if serr == nil {
-			serr = o.Scopes.Validate(scope)
-		}
-		if serr != nil {
-			refuse(w, serr)
-			return
-		}
-
 		principal, err := o.Principal(r)
 		if err != nil {
 			// Forbidden, not the host's error verbatim: whatever went wrong identifying this caller
 			// is the host's business and possibly its internals. The caller learns that they may not
 			// have this, and nothing else.
 			refuse(w, Forbidden("not authenticated"))
+			return
+		}
+
+		scope, serr := ScopeFromQuery(r.URL.Query())
+		if serr == nil {
+			serr = o.Scopes.Validate(scope)
+		}
+		if serr != nil {
+			refuse(w, serr)
 			return
 		}
 

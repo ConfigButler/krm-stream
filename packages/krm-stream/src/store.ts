@@ -145,10 +145,9 @@ export class LiveResourceStore {
       this.applyServerEvent(object);
       return;
     }
-    existing.server = clone(object);
-    existing.draft = clone(object);
-    existing.conflicts.clear();
-    this.#notify();
+    // A save response is another complete server object. Reconcile it rather than replacing the
+    // draft so an edit made after the request was sent survives the response arriving.
+    this.applyServerEvent(object, { redacted: existing.redacted });
   }
 
   // ------------------------------------------------------------------------- edits --
@@ -181,6 +180,10 @@ export class LiveResourceStore {
     this.#editable(id, [...path, newKey]);
     const map = get(res.draft, path);
     if (!isPlainObject(map)) throw new Error(`krm-stream: ${pathKey(path)} is not a map`);
+    if (!Object.hasOwn(map, oldKey)) throw new Error(`krm-stream: key ${JSON.stringify(oldKey)} does not exist`);
+    if (oldKey !== newKey && Object.hasOwn(map, newKey)) {
+      throw new Error(`krm-stream: key ${JSON.stringify(newKey)} already exists`);
+    }
     const renamed: Record<string, unknown> = {};
     for (const [k, v] of Object.entries(map)) renamed[k === oldKey ? newKey : k] = v;
     setAt(res.draft, path, renamed);

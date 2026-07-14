@@ -58,7 +58,7 @@ type finding struct {
 func main() {
 	kubeconfig := flag.String("kubeconfig", filepath.Join(os.Getenv("HOME"), ".kube", "config"), "path to kubeconfig")
 	out := flag.String("out", "", "directory to write the observed-facts markdown into (optional)")
-	ns := flag.String("namespace", "krm-stream-facts", "a scratch namespace, created and deleted")
+	namespacePrefix := flag.String("namespace-prefix", "krm-stream-facts", "prefix for a scratch namespace, created and deleted")
 	flag.Parse()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -83,23 +83,25 @@ func main() {
 	}
 	fmt.Printf("cluster: %s\n\n", version.GitVersion)
 
-	// A scratch namespace, torn down afterwards. Nothing here is precious.
-	if _, err := cs.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: *ns},
-	}, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+	// A scratch namespace, torn down afterwards. GenerateName makes the cleanup ownership explicit.
+	createdNamespace, err := cs.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{GenerateName: *namespacePrefix + "-"},
+	}, metav1.CreateOptions{})
+	if err != nil {
 		fatal("create namespace: %v", err)
 	}
+	ns := createdNamespace.Name
 	defer func() {
-		_ = cs.CoreV1().Namespaces().Delete(context.Background(), *ns, metav1.DeleteOptions{})
+		_ = cs.CoreV1().Namespaces().Delete(context.Background(), ns, metav1.DeleteOptions{})
 	}()
 
 	var findings []finding
-	findings = append(findings, f1AndF2(ctx, dyn, cs, *ns))
-	findings = append(findings, f3(ctx, dyn, *ns))
-	findings = append(findings, f4(ctx, dyn, cs, *ns))
-	findings = append(findings, f5(ctx, cs, *ns))
-	findings = append(findings, f6(ctx, dyn, cs, *ns))
-	findings = append(findings, f7(ctx, dyn, *ns))
+	findings = append(findings, f1AndF2(ctx, dyn, cs, ns))
+	findings = append(findings, f3(ctx, dyn, ns))
+	findings = append(findings, f4(ctx, dyn, cs, ns))
+	findings = append(findings, f5(ctx, cs, ns))
+	findings = append(findings, f6(ctx, dyn, cs, ns))
+	findings = append(findings, f7(ctx, dyn, ns))
 
 	fmt.Println()
 	failed := 0
@@ -197,7 +199,7 @@ func f1AndF2(ctx context.Context, dyn dynamic.Interface, cs kubernetes.Interface
 				// guard at all: the docs say a bookmark's object carries ONLY metadata.resourceVersion.
 				shape := describeBookmark(obj)
 
-				if !present {
+				if !present || val != "true" {
 					f.Answer = fmt.Sprintf("BOOKMARK arrived after %d ADDED — but WITHOUT the annotation. Annotations: %v", added, anns)
 					f.Detail = shape
 					return f
@@ -273,7 +275,7 @@ func f3(ctx context.Context, dyn dynamic.Interface, ns string) finding {
 					f.Answer = fmt.Sprintf("a watch ERROR arrived carrying %T, not a *metav1.Status", ev.Object)
 					return f
 				}
-				f.OK = true
+				f.OK = status.Code == 410 || status.Reason == metav1.StatusReasonExpired || status.Reason == metav1.StatusReasonGone
 				f.Answer = fmt.Sprintf("as a watch ERROR event: code=%d reason=%q", status.Code, status.Reason)
 				f.Detail = fmt.Sprintf("message: %q — so the gateway must map watch.Error{Reason: Expired} to RESYNC_REQUIRED and begin a new cycle.", status.Message)
 				return f
@@ -344,19 +346,23 @@ func f5(ctx context.Context, cs kubernetes.Interface, ns string) finding {
 			},
 		},
 	}
-	if _, err := cs.AppsV1().Deployments(ns).Create(ctx, dep, metav1.CreateOptions{}); err != nil && !apierrors.IsAlreadyExists(err) {
+	created, err := cs.AppsV1().Deployments(ns).Create(ctx, dep, metav1.CreateOptions{})
+	if err != nil {
 		f.Answer = fmt.Sprintf("create deployment: %v", err)
 		return f
 	}
 
-	w, err := cs.AppsV1().Deployments(ns).Watch(ctx, metav1.ListOptions{FieldSelector: "metadata.name=web"})
+	firstSpec, _ := json.Marshal(created.Spec)
+	w, err := cs.AppsV1().Deployments(ns).Watch(ctx, metav1.ListOptions{
+		FieldSelector:   "metadata.name=web",
+		ResourceVersion: created.ResourceVersion,
+	})
 	if err != nil {
 		f.Answer = fmt.Sprintf("watch: %v", err)
 		return f
 	}
 	defer w.Stop()
 
-	var firstSpec []byte
 	statusOnly, specChanged, total := 0, 0, 0
 	deadline := time.After(60 * time.Second)
 
@@ -375,14 +381,10 @@ func f5(ctx context.Context, cs kubernetes.Interface, ns string) finding {
 			if !isDep {
 				continue
 			}
-			spec, _ := json.Marshal(d.Spec)
-			if firstSpec == nil {
-				firstSpec = spec
-				continue
-			}
 			if ev.Type != watch.Modified {
 				continue
 			}
+			spec, _ := json.Marshal(d.Spec)
 			total++
 			if string(spec) == string(firstSpec) {
 				statusOnly++
@@ -488,25 +490,23 @@ func f6(ctx context.Context, dyn dynamic.Interface, cs kubernetes.Interface, ns 
 	f.OK = orderable && strings.HasPrefix(bookmark, "YES")
 	f.Answer = fmt.Sprintf("resourceVersion=%q (decimal/orderable=%v); streaming list %s; initial-events-end bookmark: %s",
 		rv, orderable, streaming, bookmark)
-	f.Detail = strings.Join([]string{
-		"**This confirms why the backend supports both watch paths.**",
+	detail := []string{
+		"**Observed aggregated API behavior.**",
 		"",
-		"1. **The streaming list is not universal.** An aggregated API server is a separate binary with its",
-		"   own feature gates, and this one refuses `sendInitialEvents` outright. List-then-watch is therefore",
-		"   required for this kind of upstream, even on a current cluster.",
-		"",
-		"2. **Its resourceVersion space is its own, and it starts at ~1.** This Flunder's is `\"2\"` — the",
-		"   sample-apiserver has its own etcd, numbering from scratch. And because that etcd is a sidecar",
-		"   with no persistence, a pod restart RESETS it: resourceVersions for the same resource can go",
-		"   BACKWARDS. Per-object monotonicity survives this only because the gateway's high-water map is",
-		"   per-CYCLE and not per-stream — a restart forces a new cycle, which clears it. A per-stream map",
-		"   would have silently swallowed every event after such a restart. That decision was made for a",
-		"   different reason, and this is the cluster confirming it.",
-		"",
-		"3. Its resourceVersions ARE orderable decimals — so `OrderingLenient` remains unexercised here.",
-		"   That is a fact about *this* sample-apiserver, not a guarantee about aggregated APIs in general,",
-		"   which is exactly why the escape hatch exists.",
-	}, "\n")
+		fmt.Sprintf("The created Flunder had resourceVersion %q (decimal/orderable=%v).", rv, orderable),
+	}
+	if werr != nil {
+		detail = append(detail, "The aggregated API rejected the streaming-list request, so the backend must use list-then-watch for this resource.")
+	} else {
+		detail = append(detail, "The aggregated API accepted the streaming-list request.")
+	}
+	if strings.HasPrefix(bookmark, "YES") {
+		detail = append(detail, "The stream delivered an initial-events-end bookmark.")
+	} else {
+		detail = append(detail, "No qualifying initial-events-end bookmark was observed: "+bookmark)
+	}
+	detail = append(detail, "This is an observation of one aggregated API implementation, not a guarantee about aggregated APIs in general.")
+	f.Detail = strings.Join(detail, "\n\n")
 	return f
 }
 

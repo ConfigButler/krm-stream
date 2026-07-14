@@ -19,7 +19,7 @@ func testOptions(policy gateway.ScopePolicy) gateway.Options {
 	return gateway.Options{
 		Principal:  func(*http.Request) (gateway.Principal, error) { return "alice", nil },
 		Authorizer: gateway.AllowAll{},
-		Clients: func(string, gateway.Principal) (gateway.Backend, error) {
+		Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
 			return &emptyBackend{}, nil
 		},
 		Scopes: policy,
@@ -148,6 +148,15 @@ func TestHandlerRefusalsAreTerminalStreamEvents(t *testing.T) {
 	}
 }
 
+func TestHandlerAuthenticatesBeforeDescribingScopeFailures(t *testing.T) {
+	o := testOptions(configmapsAllowed)
+	o.Principal = func(*http.Request) (gateway.Principal, error) { return nil, http.ErrNoCookie }
+	rec := serve(t, o, "/s?resource=secrets") // malformed and disallowed, but caller is unauthenticated
+	if body := rec.Body.String(); !strings.Contains(body, `"code":"FORBIDDEN"`) || strings.Contains(body, `"code":"SCOPE_INVALID"`) {
+		t.Errorf("unauthenticated request disclosed scope validation: %s", body)
+	}
+}
+
 // Deny-by-default, and this is the whole reason ScopePolicy's zero value is what it is: a host that
 // forgets to configure the allowlist serves NOTHING, rather than serving Secrets from every
 // namespace in every cluster it can reach.
@@ -166,8 +175,8 @@ func TestHandlerPanicsOnMissingSeams(t *testing.T) {
 		name string
 		opts gateway.Options
 	}{
-		{"no Principal", gateway.Options{Authorizer: gateway.AllowAll{}, Clients: func(string, gateway.Principal) (gateway.Backend, error) { return nil, nil }}},
-		{"no Authorizer", gateway.Options{Principal: func(*http.Request) (gateway.Principal, error) { return nil, nil }, Clients: func(string, gateway.Principal) (gateway.Backend, error) { return nil, nil }}},
+		{"no Principal", gateway.Options{Authorizer: gateway.AllowAll{}, Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return nil, nil }}},
+		{"no Authorizer", gateway.Options{Principal: func(*http.Request) (gateway.Principal, error) { return nil, nil }, Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return nil, nil }}},
 		{"no Clients", gateway.Options{Principal: func(*http.Request) (gateway.Principal, error) { return nil, nil }, Authorizer: gateway.AllowAll{}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

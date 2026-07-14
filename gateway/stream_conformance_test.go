@@ -75,12 +75,14 @@ func replay(t *testing.T, c Corpus, f Fixture, newSink func(conn int) Sink, done
 
 	gw := &Gateway{Auth: AllowAll{}, Projection: f.Projection}
 
-	for i, conn := range splitConnections(f.Watch) {
+	connections := splitConnections(f.Watch)
+	endsTerminally := len(f.Events) > 0 && f.Events[len(f.Events)-1].Type == EventError && f.Events[len(f.Events)-1].Terminal
+	for i, conn := range connections {
 		backend, err := NewScriptedBackend(c, conn)
 		if err != nil {
 			t.Fatalf("scripted backend: %v", err)
 		}
-		gw.Clients = func(_ string, _ Principal) (Backend, error) { return backend, nil }
+		gw.Clients = func(context.Context, string, Principal) (Backend, error) { return backend, nil }
 
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		sink := newSink(i)
@@ -93,6 +95,9 @@ func replay(t *testing.T, c Corpus, f Fixture, newSink func(conn int) Sink, done
 		// pull-based upstream makes the handoff a synchronisation point for free.
 		select {
 		case <-backend.Exhausted():
+			if endsTerminally && i == len(connections)-1 {
+				t.Fatal("gateway requested another upstream event after emitting a terminal error")
+			}
 			cancel()
 			if err := <-finished; err != nil && !isCanceled(err) {
 				t.Fatalf("stream: %v", err)

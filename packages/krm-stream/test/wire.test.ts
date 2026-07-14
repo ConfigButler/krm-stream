@@ -17,7 +17,13 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { applyStreamEvent, LiveResourceStore, SSEDecoder, StreamSequence } from "../src/index.ts";
+import {
+  applyStreamEvent,
+  connectResourceStream,
+  LiveResourceStore,
+  SSEDecoder,
+  StreamSequence,
+} from "../src/index.ts";
 import type { Path, StreamEvent } from "../src/types.ts";
 import { clientFixtures, resolve } from "./conformance.ts";
 import { applyEdit, check } from "./expect.ts";
@@ -143,6 +149,28 @@ test("a truncated stream yields no half-parsed event", () => {
   const d = new SSEDecoder();
   assert.deepEqual(d.push('data: {"type":"added","object":{"apiV'), []);
   assert.deepEqual(d.push(""), []);
+});
+
+test("a CRLF delimiter split across chunks is one newline, not two", () => {
+  const d = new SSEDecoder();
+  assert.deepEqual(d.push('data: {"seq":1,"type":"reset"}\r'), []);
+  assert.deepEqual(d.push("\n\r"), []);
+  assert.deepEqual(d.push("\n"), [{ seq: 1, type: "reset" }]);
+});
+
+test("an already-aborted signal never opens a fetch stream", async () => {
+  const signal = new AbortController();
+  signal.abort();
+  let calls = 0;
+  const handle = connectResourceStream("https://example.invalid/stream", new LiveResourceStore(), {
+    signal: signal.signal,
+    fetch: async () => {
+      calls++;
+      return new Response();
+    },
+  });
+  await handle.closed;
+  assert.equal(calls, 0);
 });
 
 /** Decode the whole transcript, feeding it `size` characters at a time. */

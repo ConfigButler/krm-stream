@@ -14,7 +14,7 @@ Mount a scoped stream endpoint in an existing Go application:
 mux.Handle("/resource-stream/v1", gateway.Handler(gateway.Options{
 	Principal:  func(r *http.Request) (gateway.Principal, error) { return userFromSession(r) },
 	Authorizer: authorizeScope,
-	Clients: func(_ string, p gateway.Principal) (gateway.Backend, error) {
+	Clients: func(_ context.Context, _ string, p gateway.Principal) (gateway.Backend, error) {
 		return kube.NewBackend(dynamicClientFor(p.(*User))), nil
 	},
 	Scopes: gateway.ScopePolicy{

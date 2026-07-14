@@ -147,11 +147,18 @@
               editable: store.isEditable(id, path),
               dirty: store.isDirty(id, path),
               conflict: conflicts.has(key(path)) ? conflicts.get(key(path)) : undefined,
-              onInput: (v) => {
-                // Numbers stay numbers: `replicas: "4"` is not the same object as `replicas: 4`, and
-                // the API server will tell you so.
-                const next = typeof value === "number" && v !== "" && !Number.isNaN(Number(v)) ? Number(v) : v;
-                store.setValue(id, path, next);
+              onInput: (input) => {
+                if (typeof value === "string") {
+                  input.setCustomValidity("");
+                  store.setValue(id, path, input.value);
+                  return;
+                }
+                try {
+                  store.setValue(id, path, JSON.parse(input.value));
+                  input.setCustomValidity("");
+                } catch {
+                  input.setCustomValidity("Enter a valid JSON value");
+                }
               },
             }),
           ),
@@ -182,7 +189,7 @@
           const input = document.createElement("input");
           input.value = Array.isArray(value) || (value && typeof value === "object") ? JSON.stringify(value) : String(value ?? "");
           input.dataset.testid = `input:${key(path)}`;
-          input.addEventListener("input", (e) => onInput(e.target.value));
+          input.addEventListener("input", () => onInput(input));
           td.append(input);
         } else {
           td.textContent = Array.isArray(value) ? JSON.stringify(value) : String(value ?? "");

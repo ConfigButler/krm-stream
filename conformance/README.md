@@ -84,8 +84,8 @@ name does not) obvious at a glance.
 
 ## The watch ops
 
-`watch:` is a scripted Kubernetes watch — the gateway's input. Every op is something a real API server
-really does; where that is not obvious, the reference is
+`watch:` models conditions handled across the gateway pipeline — API-server watch behavior, browser
+disconnects, and client-go cache tombstones. Where an operation maps to Kubernetes API behavior, the reference is
 [docs/facts/kubernetes-api-concepts.md](../docs/facts/kubernetes-api-concepts.md), which is a reading
 of the [API concepts page](https://kubernetes.io/docs/reference/using-api/api-concepts/) rather than a
 reading of anyone's memory. That distinction has already cost us two bugs.
@@ -97,7 +97,7 @@ reading of anyone's memory. That distinction has already cost us two bugs.
 | `deleted` | the object left scope | emit `deleted` with its identity |
 | `relist` | **upstream** continuity lost (410 Gone / cache reset) — the SSE connection is fine | announce `RESYNC_REQUIRED`, then a fresh cycle **on the same connection** |
 | `disconnect` | the **browser's** connection dropped | nothing — the next connection is a new stream |
-| `bookmark` | a routine `BOOKMARK`. Its object carries **only** `metadata.resourceVersion` — that is what the API server sends, on every stream that asked for bookmarks | **absorb it.** Never forward it; never mistake it for `synced` |
+| `bookmark` | a routine `BOOKMARK`, which may arrive on a watch that requested bookmarks. Its object can include type metadata alongside `metadata.resourceVersion` | **absorb it.** Never forward it; never mistake it for `synced` |
 | `partial` | a metadata-only object (`PartialObjectMetadata`) delivered as an upsert. **It has a uid**; it has no `spec` and no `status` | **refuse it** and resnapshot. Forwarding it blanks the consumer's object |
 | `tombstone` | a `DELETED` whose object lost its identity (client-go's `DeletedFinalStateUnknown`) | **not guess.** Begin a new cycle and let `synced` prune |
 

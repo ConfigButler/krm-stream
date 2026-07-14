@@ -129,7 +129,7 @@ func stream(corpus gateway.Corpus, pace time.Duration) http.HandlerFunc {
 		gw := &gateway.Gateway{
 			Auth:       gateway.AllowAll{},
 			Projection: f.Projection,
-			Clients: func(string, gateway.Principal) (gateway.Backend, error) {
+			Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
 				return paced{backend, delay}, nil
 			},
 		}

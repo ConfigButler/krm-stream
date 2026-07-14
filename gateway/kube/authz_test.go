@@ -164,7 +164,9 @@ func TestANamedScopeAsksAboutThatName(t *testing.T) {
 		t.Fatalf("Authorize: %v", err)
 	}
 
-	if got := (*asked)[0].Spec.ResourceAttributes.Name; got != "app-config" {
-		t.Errorf("asked about name %q, want app-config", got)
+	for _, sar := range *asked {
+		if got := sar.Spec.ResourceAttributes.Name; got != "app-config" {
+			t.Errorf("%s asked about name %q, want app-config", sar.Spec.ResourceAttributes.Verb, got)
+		}
 	}
 }

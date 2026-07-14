@@ -37,7 +37,7 @@ sequenceDiagram
 
     B->>S: 7. EventSource("/resource-stream/v1?…")<br/>carries the cookie, and nothing else
     S->>S: 8. Principal(r) — cookie → session → this user + their token
-    S->>K: 9. ClientFor(target, principal) — a client bearing THEIR token
+    S->>K: 9. ClientFor(ctx, target, principal) — a client bearing THEIR token
     K-->>S: 10. watch … or 403, if their RBAC says no
     S-->>B: 11. reset · added · synced · …
 ```
@@ -63,7 +63,7 @@ gateway.Handler(gateway.Options{
     Authorizer: myAuthz,
 
     // Reach the cluster AS them — their token, their RBAC, their audit trail.
-    Clients: func(target string, p gateway.Principal) (gateway.Backend, error) {
+    Clients: func(_ context.Context, target string, p gateway.Principal) (gateway.Backend, error) {
         return kube.NewBackend(dynamicClientBearing(p.(*User).Token)), nil
     },
     Scopes: myScopePolicy,
@@ -125,7 +125,7 @@ If you turn it on, use **`kube.SSARAuthorizer`**, and Kubernetes is the boundary
 ```go
 shared := gateway.NewSharedBackend(serviceAccountBackend)     // one watch, one identity…
 opts.Authorizer = kube.SSARAuthorizer(clientset, subjectOf)   // …but RBAC still decides
-opts.Clients = func(string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
+opts.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 ```
 
 Before a subscriber is served from the shared cache, it asks the API server — with a

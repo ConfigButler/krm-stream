@@ -31,7 +31,7 @@ import (
 //
 //	shared := gateway.NewSharedBackend(myServiceAccountBackend)    // one watch, ONE identity…
 //	opts.Authorizer = kube.SSARAuthorizer(clientset, subjectOf)    // …but Kubernetes still decides
-//	opts.Clients = func(string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
+//	opts.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 //
 // kube.SSARAuthorizer asks the API server, with a SubjectAccessReview, whether THIS user may list and
 // watch THIS resource here — before the subscriber is served from the shared cache. RBAC is the

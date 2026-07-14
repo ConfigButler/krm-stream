@@ -72,7 +72,7 @@ func TestRevokedAccessTerminatesAnOpenStream(t *testing.T) {
 			}
 			return Forbidden("your access to this scope was revoked")
 		}),
-		Clients: func(string, Principal) (Backend, error) { return &closingBackend{}, nil },
+		Clients: func(context.Context, string, Principal) (Backend, error) { return &closingBackend{}, nil },
 	}
 
 	_ = g.Stream(t.Context(), "alice", Scope{Version: "v1", Resource: "configmaps"}, sink)
@@ -101,7 +101,7 @@ func TestTheClientIsResolvedOnEveryCycle(t *testing.T) {
 	sink := &authSink{}
 	g := &Gateway{
 		Auth: AllowAll{},
-		Clients: func(string, Principal) (Backend, error) {
+		Clients: func(context.Context, string, Principal) (Backend, error) {
 			// Three cycles is enough to show it is per-cycle and not once-ever.
 			if resolved.Add(1) >= 3 {
 				return nil, Forbidden("the credential could not be refreshed")
@@ -124,6 +124,24 @@ func TestTheClientIsResolvedOnEveryCycle(t *testing.T) {
 	}
 }
 
+func TestClientResolutionReceivesTheStreamContext(t *testing.T) {
+	type contextKey struct{}
+	ctx := context.WithValue(t.Context(), contextKey{}, "request-value")
+	var received any
+
+	g := &Gateway{
+		Auth: AllowAll{},
+		Clients: func(ctx context.Context, _ string, _ Principal) (Backend, error) {
+			received = ctx.Value(contextKey{})
+			return nil, Forbidden("stop after checking context")
+		},
+	}
+	_ = g.Stream(ctx, "alice", Scope{Version: "v1", Resource: "configmaps"}, &authSink{})
+	if received != "request-value" {
+		t.Errorf("ClientFor context value = %v, want request context value", received)
+	}
+}
+
 // Denial still comes BEFORE any watch is opened. Opening the watch and filtering afterwards has
 // already leaked the object's existence — and, if it logs, its contents.
 func TestDenialOpensNoWatchAtAll(t *testing.T) {
@@ -131,7 +149,7 @@ func TestDenialOpensNoWatchAtAll(t *testing.T) {
 	sink := &authSink{}
 	g := &Gateway{
 		Auth:    AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("no") }),
-		Clients: func(string, Principal) (Backend, error) { return backend, nil },
+		Clients: func(context.Context, string, Principal) (Backend, error) { return backend, nil },
 	}
 
 	_ = g.Stream(t.Context(), "mallory", Scope{Version: "v1", Resource: "secrets"}, sink)
