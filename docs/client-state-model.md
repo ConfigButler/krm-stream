@@ -57,6 +57,49 @@ Redacted paths are not placeholders and do not appear in the object. Render a wi
 `redactions(id)`, and do not offer an editor for it. The host save endpoint must also call
 [`gateway.ValidateMergePatch`](../gateway/patch.go) before writing to Kubernetes.
 
+## Creating and deleting whole objects
+
+The store holds only objects the stream delivered, keyed by `metadata.uid`. That limit is deliberate,
+and it is why two operations do not live here:
+
+- A pending **create** has no server object, so no uid and no key. There is nothing to merge it
+  against; `changes()`, `patch()`, and `conflicts()` have no meaning for it.
+- A **delete** has no fields to reconcile.
+
+Staging a pending create or delete is therefore the consumer's job, the same way the write itself is
+(see [saving edits safely](saving.md)). Keep them in page-local state and render all three sources as
+one review list under one Save:
+
+```ts
+const pendingCreates = []; // id-less drafts: { id, name, data } — no server object yet
+const pendingDeletes = new Set(); // uids marked for removal
+
+// One list, one Save:
+//   pendingCreates      → "create <name>"
+//   pendingDeletes      → "delete <name>"
+//   store.changes(uid)  → field edits   (skip a uid that is in pendingDeletes)
+```
+
+### Reflecting the result
+
+The recommended shape is still 204 and let the watch echo it (see [saving edits safely](saving.md)): a
+create arrives as an `added` event, a delete as a `deleted` event, and the store converges on its own.
+Two primitives exist for a host that cannot wait for the echo, and both are idempotent with it
+(`I-IDEMPOTENT`):
+
+- `adoptSaved(object)` — insert the created object once the save returns it. The echo that follows is
+  a no-op, not a second card.
+- `removeResource(uid)` — drop a deleted object before its `deleted` event arrives.
+
+Two caveats keep this honest:
+
+- **A create reflects only _after_ the server responds.** `adoptSaved` needs the server-assigned uid
+  and a **projected** object (never a raw Kubernetes object — see [saving edits safely](saving.md)). Do
+  not fabricate a uid for a pending draft; keep it page-local until the create returns the object.
+- **An optimistic delete is not self-healing.** A delete that _fails_ server-side produces no watch
+  event, so a `removeResource`d object does not reappear until the next snapshot. Re-add it on failure,
+  or skip the optimism and let the `deleted` echo do it.
+
 ## Arrays and associative lists
 
 Arrays are atomic by default. A concurrent array change conflicts with a local array edit, which is

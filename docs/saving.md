@@ -79,3 +79,51 @@ intentionally incomplete, and a `PUT` can delete fields the browser never saw.
 `metadata.resourceVersion` may be stale when `krm-spec/v1` suppresses invisible status churn. Do not
 use the streamed value as a write precondition. The client-side three-way merge surfaces conflicts in
 the fields the user can see; send only the user's explicit merge-patch changes.
+
+## Creating and deleting whole objects
+
+A create and a delete are host writes exactly as a save is, and they stay host-side for the same
+reasons: RBAC, attribution, and — for a create body — validation all live on the server. The client
+stages the *intent*; your endpoint performs the *write*. See
+[client state model](client-state-model.md#creating-and-deleting-whole-objects) for the client half —
+the store keys on uid and has no merge for these, so the consumer aggregates staged create/delete with
+`changes()` into one review list.
+
+```go
+// POST /console/configmaps — create
+func (s *server) createConfigMap(w http.ResponseWriter, r *http.Request) {
+    user := userFromSession(r)
+    scope := authorizedScope(user, r)
+    object := readObject(r) // the new object the browser assembled
+
+    created, err := s.dynamicFor(user).Resource(configMaps).Namespace(scope.Namespace).
+        Create(r.Context(), object, metav1.CreateOptions{})
+    if err != nil {
+        http.Error(w, "create failed", http.StatusBadGateway)
+        return
+    }
+
+    // 204 and let the watch echo it — the same recommendation as save. To reflect it now instead,
+    // project it first and return it; the browser calls store.adoptSaved(projected).
+    _ = created
+    w.WriteHeader(http.StatusNoContent)
+}
+
+// DELETE /console/configmaps/{name} — delete
+func (s *server) deleteConfigMap(w http.ResponseWriter, r *http.Request) {
+    user := userFromSession(r)
+    scope := authorizedScope(user, r)
+    if err := s.dynamicFor(user).Resource(configMaps).Namespace(scope.Namespace).
+        Delete(r.Context(), scope.Name, metav1.DeleteOptions{}); err != nil {
+        http.Error(w, "delete failed", http.StatusBadGateway)
+        return
+    }
+    // 204; the `deleted` event prunes it from every open stream. Or store.removeResource(uid) now.
+    w.WriteHeader(http.StatusNoContent)
+}
+```
+
+`ValidateMergePatch` guards a *patch*. A create sends a whole object, so validate it your own way —
+admission, a schema, or an allowlist of the fields a browser may set — before it reaches the API
+server; a projected or redacted field must no more ride in on a create body than in a patch. A delete
+carries no body to guard.
