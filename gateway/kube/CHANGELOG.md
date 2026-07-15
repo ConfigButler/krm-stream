@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.2.0...gateway/kube/v0.2.1) (2026-07-15)
+
+
+### Miscellaneous Chores
+
+* **gateway/kube:** Synchronize krm-stream versions
+
 ## [0.2.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.1.1...gateway/kube/v0.2.0) (2026-07-14)
 
 
