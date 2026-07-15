@@ -96,6 +96,13 @@ func (s *server) createConfigMap(w http.ResponseWriter, r *http.Request) {
     scope := authorizedScope(user, r)
     object := readObject(r) // the new object the browser assembled
 
+    // Validate on the host, before the write — pin the GVK, the authorized scope and name, and an
+    // allowlist of the fields a browser may set. Never trust the assembled object as-is.
+    if err := validateCreate(object, scope); err != nil {
+        http.Error(w, err.Error(), http.StatusBadRequest)
+        return
+    }
+
     created, err := s.dynamicFor(user).Resource(configMaps).Namespace(scope.Namespace).
         Create(r.Context(), object, metav1.CreateOptions{})
     if err != nil {
@@ -118,12 +125,14 @@ func (s *server) deleteConfigMap(w http.ResponseWriter, r *http.Request) {
         http.Error(w, "delete failed", http.StatusBadGateway)
         return
     }
-    // 204; the `deleted` event prunes it from every open stream. Or store.removeResource(uid) now.
+    // 204; the `deleted` event prunes it from every open stream. To reflect it now instead, the
+    // browser calls store.removeResource(uid) with the uid it already tracks.
     w.WriteHeader(http.StatusNoContent)
 }
 ```
 
-`ValidateMergePatch` guards a *patch*. A create sends a whole object, so validate it your own way —
-admission, a schema, or an allowlist of the fields a browser may set — before it reaches the API
-server; a projected or redacted field must no more ride in on a create body than in a patch. A delete
-carries no body to guard.
+`ValidateMergePatch` guards a *patch*. A create sends a whole object, so validate it yourself before
+the call — the `validateCreate` above stands in for a schema check or a field allowlist — and pass only
+the sanitized object to `Create`. A projected or redacted field must no more ride in on a create body
+than in a patch. API-server admission sits behind this as defense in depth, not as a substitute for the
+host-side check. A delete carries no body to guard.

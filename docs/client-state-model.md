@@ -59,8 +59,9 @@ Redacted paths are not placeholders and do not appear in the object. Render a wi
 
 ## Creating and deleting whole objects
 
-The store holds only objects the stream delivered, keyed by `metadata.uid`. That limit is deliberate,
-and it is why two operations do not live here:
+The store holds only objects with a server identity — a `metadata.uid` — whether the stream delivered
+them or `adoptSaved` inserted one from a save response before its echo arrived. That limit is
+deliberate, and it is why two operations do not live here:
 
 - A pending **create** has no server object, so no uid and no key. There is nothing to merge it
   against; `changes()`, `patch()`, and `conflicts()` have no meaning for it.
@@ -71,7 +72,7 @@ Staging a pending create or delete is therefore the consumer's job, the same way
 one review list under one Save:
 
 ```ts
-const pendingCreates = []; // id-less drafts: { id, name, data } — no server object yet
+const pendingCreates = []; // client-only drafts keyed by a local draftId, never a uid: { draftId, name, data }
 const pendingDeletes = new Set(); // uids marked for removal
 
 // One list, one Save:
@@ -90,6 +91,10 @@ Two primitives exist for a host that cannot wait for the echo, and both are idem
 - `adoptSaved(object)` — insert the created object once the save returns it. The echo that follows is
   a no-op, not a second card.
 - `removeResource(uid)` — drop a deleted object before its `deleted` event arrives.
+
+Either way, clear the page-local entry — the `pendingCreates` draft or the `pendingDeletes` uid — when
+its write succeeds. Those primitives update the store, not your pending lists; a completed mutation
+left staged reappears in the review list and can be submitted twice.
 
 Two caveats keep this honest:
 
