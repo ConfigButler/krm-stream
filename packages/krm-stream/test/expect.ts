@@ -19,12 +19,18 @@
 import assert from "node:assert/strict";
 import type { LiveResourceStore } from "../src/index.ts";
 import type { Path } from "../src/types.ts";
-import type { FixtureEdit, FixtureExpect } from "./conformance.ts";
+import { body, type FixtureEdit, type FixtureExpect } from "./conformance.ts";
 
 /** `path` in a fixture edit always addresses the FIELD, not its container — even for the two ops
  * whose store signature takes the map plus a key. Keeping the fixture format uniform is worth the one
  * line of translation. */
 export function applyEdit(store: LiveResourceStore, e: FixtureEdit): void {
+  // `adopt` is not an edit to a delivered object — it delivers one, the way a save response does. It
+  // carries a `body`, not a `uid`/`path`, so it returns before we touch either.
+  if (e.op === "adopt") {
+    store.adoptSaved(body(e.body!));
+    return;
+  }
   const parent = e.path.slice(0, -1);
   const last = e.path[e.path.length - 1];
   switch (e.op) {

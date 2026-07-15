@@ -26,11 +26,15 @@ const CONFORMANCE = new URL("../../../conformance/", import.meta.url);
  * A fixture format that could not express that ordering could not test a three-way merge at all. */
 export interface FixtureEdit {
   after: number;
-  op: "set" | "remove" | "addKey" | "renameKey" | "revert";
+  op: "set" | "remove" | "addKey" | "renameKey" | "revert" | "adopt";
   uid: string;
   path: Path;
   value?: unknown;
   newKey?: string;
+  /** `adopt` only: the bodies/ reference to hand `store.adoptSaved`. An adopt is not an edit to a
+   * delivered object — it IS a delivery, of the object a save returned — so it carries a `body`, not a
+   * `uid`/`path` like the other ops. */
+  body?: string;
 }
 
 export interface FixtureExpect {

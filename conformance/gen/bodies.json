@@ -111,6 +111,19 @@
       "log-level": "info"
     }
   },
+  "cm-created.v1": {
+    "apiVersion": "v1",
+    "kind": "ConfigMap",
+    "metadata": {
+      "uid": "cm-created-0007",
+      "name": "feature-flags",
+      "namespace": "app",
+      "resourceVersion": "3001"
+    },
+    "data": {
+      "beta": "true"
+    }
+  },
   "cm-flags.v1": {
     "apiVersion": "v1",
     "kind": "ConfigMap",

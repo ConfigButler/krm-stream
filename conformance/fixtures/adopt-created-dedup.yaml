@@ -1,0 +1,26 @@
+id: adopt-created-dedup
+title: An optimistic create (adoptSaved) and the watch echo of it are the SAME object, by uid.
+why: >
+  I-IDEMPOTENT. A create is host-owned: the store keys on metadata.uid and a pending create has none,
+  so staging it is the consumer's job (docs/client-state-model.md). Once the save returns the created
+  object the host may adoptSaved it, so the UI need not wait for the watch. The watch then echoes it as
+  `added` — and that echo must be a no-op, not a second card. Reconciled by uid, the optimistic insert
+  and its echo converge to one object, with nothing dirty and nothing to save.
+suites: [client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-full/v1
+
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }
+  - { type: added, body: cm-created.v1 }        # the watch catches up to the create
+
+client:
+  edits:
+    - { after: 2, op: adopt, body: cm-created.v1 }   # host adopts the save response BEFORE the echo
+  expect:
+    uids: [cm-app-0001, cm-created-0007]             # two objects, not three — the echo deduped by uid
+    dirty: []
+    conflicts: []
+    patch: null
