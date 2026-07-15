@@ -44,21 +44,20 @@ and no reconnection logic in your application.
 ## Why watches are shared
 
 A watch is not free upstream. Each one is a connection and a registered watcher on the API server,
-and it delivers every event in its scope. Ten tabs on the same namespace, watching directly, are ten
-watches, ten snapshots and ten copies of the same object graph. Close a floor of laptop lids and
-reopen them and the reconnect storm arrives at the API server multiplied by the number of tabs.
+delivering every event in its scope. Ten tabs on the same namespace, watching directly, are ten
+watches, ten snapshots and ten copies of the same object graph. Reopen a floor of laptops at once and
+that reconnect storm hits the API server multiplied by the number of tabs.
 
 [`gateway.SharedBackend`](../gateway/shared.go) opens one upstream watch per scope rather than per
 tab, and serves every subscriber from its cache. A tab joining a scope that is already open gets its
 `reset`…`synced` snapshot from that warm cache without reaching the API server at all.
 
-Sharing is opt-in, and the reason is a real trade. A shared watch can be opened only once, so it can
-be opened as only one identity: your service account. Without sharing, the client acts as the caller
-and Kubernetes RBAC is the enforcement, so no bug in this library can hand a caller an object they
-may not see. With sharing, your `Authorizer` becomes the only thing between a caller and the cache.
+Sharing is opt-in, because the trade is real. A shared watch can be opened only once, so it runs as
+one identity: your service account. Without sharing, the client acts as the caller and Kubernetes RBAC
+enforces the boundary, so no bug in this library can hand someone an object they may not see. With
+sharing, your `Authorizer` is the only thing between a caller and the cache.
 
-There is a way to take the fan-out without giving up the boundary. Pair `SharedBackend` with
-[`kube.SSARAuthorizer`](../gateway/kube/authz.go), which asks the API server, through a
-SubjectAccessReview, whether this user may list and watch this resource here, before the subscriber
-is served from the shared cache. Kubernetes decides again, per user, per snapshot cycle, and the
-sharing costs one round-trip. Read [auth.md](auth.md) before wiring it.
+You can have both. Pair `SharedBackend` with [`kube.SSARAuthorizer`](../gateway/kube/authz.go), which
+asks the API server through a SubjectAccessReview whether this user may list and watch this resource
+here, before serving them from the shared cache. Kubernetes decides again, per user, per snapshot
+cycle, at the cost of one round-trip. Read [auth.md](auth.md) before wiring it.
