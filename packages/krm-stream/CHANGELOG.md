@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.2.1](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.2.0...@configbutler/krm-stream-v0.2.1) (2026-07-15)
+
+
+### Documentation
+
+* bless staging whole-object create + delete (edit/create/delete in one review + save) ([#16](https://github.com/ConfigButler/krm-stream/issues/16)) ([a16d803](https://github.com/ConfigButler/krm-stream/commit/a16d8037ca33ea3f7dc338a15e537ab0abe3d697))
+
 ## [0.2.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.1.1...@configbutler/krm-stream-v0.2.0) (2026-07-14)
 
 
