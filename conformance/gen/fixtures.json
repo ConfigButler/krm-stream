@@ -1,5 +1,54 @@
 [
   {
+    "id": "adopt-created-dedup",
+    "title": "An optimistic create (adoptSaved) and the watch echo of it are the SAME object, by uid.",
+    "why": "I-IDEMPOTENT. A create is host-owned: the store keys on metadata.uid and a pending create has none, so staging it is the consumer's job (docs/client-state-model.md). Once the save returns the created object the host may adoptSaved it, so the UI need not wait for the watch. The watch then echoes it as `added` — and that echo must be a no-op, not a second card. Reconciled by uid, the optimistic insert and its echo converge to one object, with nothing dirty and nothing to save.\n",
+    "suites": [
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-full/v1",
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "added",
+        "body": "cm-created.v1"
+      }
+    ],
+    "client": {
+      "edits": [
+        {
+          "after": 2,
+          "op": "adopt",
+          "body": "cm-created.v1"
+        }
+      ],
+      "expect": {
+        "uids": [
+          "cm-app-0001",
+          "cm-created-0007"
+        ],
+        "dirty": [],
+        "conflicts": [],
+        "patch": null
+      }
+    }
+  },
+  {
     "id": "array-atomic-on-change",
     "title": "When an array's length changes under an edit, the whole array conflicts — atomically.",
     "why": "Default array behavior. The user edited containers[0].image; the server injected a sidecar, so containers now has 2 elements. A positional merge would reconcile ours[0] against theirs[0] and ours[1] (absent) against theirs[1] — and with a PREPENDED element it would silently merge the user's edit into the wrong container.\nSo: any array that is dirty or whose length moved is treated as ONE value. The user's array wins until they resolve it, and the whole array is the conflict. Coarse — their one-field edit now conflicts with an unrelated append — but never wrong. It also agrees with RFC 7386, which replaces arrays wholesale anyway, so the patch format needs no special case.\nHosts that supply an OpenAPI associative-list schema can opt into keyed-list merging instead.\n",

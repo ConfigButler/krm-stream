@@ -83,6 +83,10 @@ test("a snapshot cycle is reset … added* … synced", () => {
 test("client fixtures edit objects the stream actually delivered", () => {
   for (const f of clientFixtures()) {
     for (const edit of f.client?.edits ?? []) {
+      // `adopt` is the exception that proves the rule: it delivers an object the stream has NOT yet
+      // sent (the whole point is that its echo arrives later and must dedup by uid), and it carries a
+      // `body`, not a `uid`/`path`. The delivered-and-has-a-path checks are for edits, which it is not.
+      if (edit.op === "adopt") continue;
       const delivered = deliveredUidsBefore(f, edit.after);
       assert.ok(
         delivered.has(edit.uid),
@@ -102,7 +106,7 @@ test("paths are segment arrays, never dot-joined strings", () => {
       ...(f.client?.expect?.absentPaths ?? []),
       ...(f.client?.expect?.readOnlyPaths ?? []),
       ...(f.client?.expect?.flashed ?? []),
-      ...(f.client?.edits ?? []).map((e) => e.path),
+      ...(f.client?.edits ?? []).filter((e) => e.op !== "adopt").map((e) => e.path),
     ];
     for (const p of paths) {
       assert.ok(Array.isArray(p), `${f.id}: ${JSON.stringify(p)} must be a segment array`);

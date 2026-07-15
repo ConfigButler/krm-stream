@@ -1,0 +1,12 @@
+# A ConfigMap that did not exist when the stream started: the host created it, the save returned this
+# projected object, and the browser called adoptSaved on it. The watch echoes the SAME uid a beat
+# later. New uid, new name — nothing about it collides with the baseline app-config.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  uid: cm-created-0007
+  name: feature-flags
+  namespace: app
+  resourceVersion: "3001"
+data:
+  beta: "true"

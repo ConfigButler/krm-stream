@@ -121,6 +121,7 @@ Every fixture names the rule it defends, in `why:`. The ones that catch real bug
 | `reconnect-prune` | pruning is gated on `synced`; a reconnect removes what vanished while away |
 | `partial-cycle-no-prune` | a cycle that never reaches `synced` prunes **nothing** |
 | `delete-recreate-uid` | identity is `uid`, never `name`; no state bleeds across a recreate |
+| `adopt-created-dedup` | **I-IDEMPOTENT** — an optimistic `adoptSaved` and the watch echo of the create are one object by uid, not two |
 | `resync-midstream` | upstream continuity can be lost *without* the SSE connection dropping → a fresh cycle mid-stream |
 | `nested-field-removed` | `added`/`modified` **replace**; a deep-merge would resurrect a field the server deleted (a ghost) |
 | `status-follow-live` | `status` is read-only under the full projection: it follows the server live, and never becomes dirty, never conflicts, never enters a patch |
