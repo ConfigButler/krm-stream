@@ -28,7 +28,7 @@ require (
 )
 
 require (
-	github.com/ConfigButler/krm-stream/gateway v0.0.0-20260713074452-d622f2413d1e
+	github.com/ConfigButler/krm-stream/gateway v0.2.1
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/emicklei/go-restful/v3 v3.13.0 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
