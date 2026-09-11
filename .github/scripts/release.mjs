@@ -23,30 +23,38 @@ export function validateRelease(version, shas, manifest, pkg) {
   return shas[0];
 }
 
-export async function registryVersion(version, fetcher = fetch) {
-  const response = await fetcher(`https://registry.npmjs.org/${encodeURIComponent(packageName)}/${version}`, {
+// Keep the outbound URL constant: manifest and workflow-input data stay local.
+export async function registryMetadata(fetcher = fetch) {
+  const response = await fetcher('https://registry.npmjs.org/@configbutler%2Fkrm-stream', {
+    headers: { Accept: 'application/vnd.npm.install-v1+json' },
     signal: AbortSignal.timeout(30_000),
   });
   if (response.status === 404) return null;
   assert.ok(response.ok, `npm registry request failed: HTTP ${response.status}`);
-  const pkg = await response.json();
-  assert.equal(pkg.name, packageName);
-  assert.equal(typeof pkg.version, 'string');
-  if (version !== 'latest') assert.equal(pkg.version, version);
-  return pkg;
+  const metadata = await response.json();
+  assert.equal(metadata.name, packageName);
+  assert.ok(metadata.versions && typeof metadata.versions === 'object');
+  assert.ok(metadata['dist-tags'] && typeof metadata['dist-tags'] === 'object');
+  return metadata;
 }
 
 export async function needsPublish(version, fetcher = fetch) {
   releaseTags(version);
-  if (await registryVersion(version, fetcher)) return false;
-  const latest = await registryVersion('latest', fetcher);
+  const metadata = await registryMetadata(fetcher);
+  if (!metadata) return true;
+  const existing = metadata.versions[version];
+  if (existing) {
+    assert.equal(existing.version, version);
+    return false;
+  }
+  const latest = metadata['dist-tags'].latest;
   if (latest) {
-    releaseTags(latest.version);
+    releaseTags(latest);
     const candidate = version.split('.').map(Number);
-    const current = latest.version.split('.').map(Number);
+    const current = latest.split('.').map(Number);
     const differing = candidate.findIndex((part, i) => part !== current[i]);
     assert.ok(differing >= 0 && candidate[differing] > current[differing],
-      `refusing to move npm latest backwards from ${latest.version} to ${version}`);
+      `refusing to move npm latest backwards from ${latest} to ${version}`);
   }
   return true;
 }
