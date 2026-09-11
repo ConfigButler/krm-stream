@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.2.1...@configbutler/krm-stream-v0.3.0) (2026-09-11)
+
+
+### Features
+
+* add managed recovery and safe live-editor integration ([#25](https://github.com/ConfigButler/krm-stream/issues/25)) ([df5f97f](https://github.com/ConfigButler/krm-stream/commit/df5f97f758d53e0ab328cb8b333382541a24e07a))
+
 ## [0.2.1](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.2.0...@configbutler/krm-stream-v0.2.1) (2026-07-15)
 
 
