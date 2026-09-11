@@ -27,14 +27,19 @@ part of CI or future releases; new consumers should install `@configbutler/krm-s
 
 ## Publishing setup
 
-`release.yml` validates the push, then lets Release Please create tags. It resolves the release tags
-to one commit and runs the full CI suite on that immutable commit before publishing its exact npm
-tarball using npm trusted publishing. Before the first automated release, create the official npm package and configure its
-trusted publisher to allow the `ConfigButler/krm-stream` repository's `release.yml` workflow. No
-long-lived `NPM_TOKEN` is required after that setup.
+`release.yml` follows one path:
 
-Go modules are published by their version tags. The release workflow verifies the new tags from a
-clean module consumer after publication.
+1. Release Please creates tags and selects the release commit.
+2. CI validates and packs that commit once, including a clean consumer of the public Go tag.
+3. npm publishes the tarball produced by that CI run.
+
+If there is no pending npm release, CI checks the triggering push and publishing is skipped.
+Tags are created before release CI; npm publication waits for every CI job to pass. A failed CI
+run can therefore leave GitHub/Go tags present without an npm package. Fix source problems in a
+new release rather than moving public tags.
+
+Configure npm trusted publishing for `ConfigButler/krm-stream`, workflow `release.yml`. No
+long-lived `NPM_TOKEN` is required. `krm-stream` is frozen and needs no publisher configuration.
 
 ## Before merging a release PR
 
@@ -48,24 +53,32 @@ task build-client
 Confirm that the release PR has passed CI and that the npm trusted-publisher configuration exists
 for `@configbutler/krm-stream`.
 
-## Recovery and closely spaced merges
+## Retry a failed release
 
-It is safe to merge a release PR while a preceding push is still running CI. Release Please reads
-live `main`, so an older run may create the newer commit's tags. Publishing resolves those tags and
-validates their commit separately; it never uses the older push's tarball. All three component tags,
-the release manifest, the package version, and the artifact's recorded commit must agree.
+Use **Re-run failed jobs** on the original Actions run, or:
 
-Publication does not depend on Release Please creating a tag in that run. If GitHub releases exist
-but npm publication failed, the next run can recover it. An already published npm version is a
-successful no-op. Registry errors fail the run instead of being treated as a missing version, and
-recovery refuses to move npm's `latest` tag backwards.
+```bash
+gh run rerun RUN_ID --failed
+```
 
-To recover a specific existing release, run the **release** workflow on **main**, optionally setting
-`version` (for example, `0.3.0`):
+If npm publication fails, this retries publishing with the **same tested tarball**. Successful
+preparation and CI jobs are reused: no new commit, tag, build, or release version is needed. If
+npm accepted the upload before the job failed, the retry detects the existing version and succeeds
+without publishing again. A failed CI job must pass before publishing can start.
+
+Tarballs are retained for 30 days, matching [GitHub's job retry window](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).
+If the artifact was deleted or expired, an explicit recovery run rebuilds and validates once:
 
 ```bash
 gh workflow run release.yml --ref main -f version=0.3.0
 ```
 
-This reruns validation and the Go consumer check before publishing. Do not delete or move release
-tags, rename an older tarball, or remove the version/commit checks to recover a failed publication.
+Recovery fails on registry errors and refuses to move npm's `latest` backwards. Do not delete or
+move release tags, rename an older tarball, or remove the version checks to recover a failure.
+
+## Closely spaced merges
+
+Release Please reads live `main`, so an older push can create a newer release commit's tags.
+Preparation resolves all component tags to one immutable commit **before** CI starts. CI checks
+out that commit and publishes its artifact, so the triggering push's older package cannot be
+mistaken for the release. Publication does not depend on a tag being newly created in that run.

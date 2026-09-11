@@ -1,5 +1,4 @@
 import assert from 'node:assert/strict';
-import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -59,9 +58,7 @@ export async function needsPublish(version, fetcher = fetch) {
   return true;
 }
 
-export function validateArtifact(metadata, pkg, integrity, sha, version) {
-  assert.equal(metadata.sha, sha, 'artifact was built from a different commit');
-  assert.equal(metadata.integrity, integrity, 'artifact bytes disagree with build metadata');
+export function validatePackage(pkg, version) {
   assert.equal(pkg.name, packageName);
   assert.equal(pkg.version, version, 'tarball version disagrees with release');
 }
@@ -89,16 +86,12 @@ async function main() {
     git('merge-base', '--is-ancestor', sha, 'origin/main');
     output('sha', sha);
     output('version', version);
-    output('gateway_tag', tags[1]);
-    output('kube_tag', tags[2]);
     output('needed', await needsPublish(version));
     console.log(`Release ${version} resolves to ${sha}.`);
   } else if (process.argv[2] === 'verify') {
     const tarball = `/tmp/npm/configbutler-krm-stream-${version}.tgz`;
     const pkg = JSON.parse(execFileSync('tar', ['-xOf', tarball, 'package/package.json'], { encoding: 'utf8' }));
-    const metadata = JSON.parse(readFileSync('/tmp/npm/source.json'));
-    const integrity = `sha512-${createHash('sha512').update(readFileSync(tarball)).digest('base64')}`;
-    validateArtifact(metadata, pkg, integrity, process.env.RELEASE_SHA, version);
+    validatePackage(pkg, version);
     // A retry after npm accepted the upload is successful without another publish attempt.
     output('needed', await needsPublish(version));
     output('tarball', tarball);
