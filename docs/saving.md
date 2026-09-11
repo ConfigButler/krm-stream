@@ -29,7 +29,7 @@ before starting that GET:
 const reconcile = store.captureReconciliation(uid);
 const { object, redactedPaths } = await hostRead();
 reconcile(object, { redactedPaths });
-// false means a newer server event/response won, or the UID disappeared/changed. Do not force it.
+// false can also mean snapshot recovery or unknown redaction paths. Do not force it.
 ```
 
 Local edits made during the request survive reconciliation. Render the current draft and conflicts;
@@ -50,10 +50,14 @@ It does not grant write permission, choose a projection, fetch the object, issue
 optimistic concurrency. Those stay with the host. Do not use whole-object `PUT`: projected objects are
 intentionally incomplete, and a `PUT` can delete fields the browser never saw.
 
-`metadata.resourceVersion` may be stale when a projection suppresses invisible changes. It remains
-safe as a write precondition: a stale version causes a 409 instead of a lost update. Reconcile a fresh
-projected read and capture a new intent after review. Invisible churn may cause extra conflicts;
-removing concurrency protection to avoid those conflicts is unsafe.
+Every projection can hold an older `metadata.resourceVersion`: all suppress changes to stripped
+bookkeeping metadata, and `krm-spec/v1` additionally suppresses status-only changes. A version
+precondition remains safe: rejection prevents a lost update. Sustained invisible churn can prevent
+save progress, but a 409 is a failed version precondition, not necessarily a disagreement at an
+editable field. An accepted projected GET advances the base without requiring a snapshot. Render
+actual draft conflicts separately; when none exist, explain the refreshed base and offer a newly
+captured save. If reconciliation is refused, preserve the draft and recover before writing again.
+Do not remove concurrency protection or blindly retry the old patch with a newer version.
 
 ## Answer 204 and let the watch echo it
 
@@ -79,7 +83,7 @@ Kubernetes response: project it first and provide the correct redaction metadata
 redacted resources can return `redactedPaths` directly from `gateway.Project`. The guard retains
 known stream revisions for paths still present and removes paths absent from that list. Omitted
 redaction metadata preserves existing protections. Unknown paths reject the entire response: open a
-fresh stream snapshot before retrying reconciliation. Never invent revision counters for a GET.
+later authoritative upsert for that UID or a fresh stream snapshot before retrying reconciliation. Never invent revision counters for a GET.
 An explicit `redacted` array is still supported when the host has authoritative stream revisions.
 
 ## Creating and deleting whole objects

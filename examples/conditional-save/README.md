@@ -17,7 +17,10 @@ const store = new LiveResourceStore();
 const connection = connectManagedResourceStream(streamURL, store, {
   onStateChange: state => renderConnection(state),
 });
-const editor = conditionalEditor(store, uid, "/editor/configmap", hostFetch);
+const editor = conditionalEditor(
+  store, uid, "/editor/configmap", hostFetch,
+  () => connection.state.status === "live",
+);
 const unsubscribe = store.subscribe(renderEditor);
 // Enable Save only while connection.state.status === "live" and !editor.saving.
 // On Save: await editor.save(), then render errors/conflicts and the current draft.
@@ -35,7 +38,9 @@ removes drafts of deleted objects.
 A narrow merge patch is **not concurrency protection**. JSON merge patch replaces arrays as a whole,
 even when the client merges keyed list items intelligently. This endpoint puts the captured UID and
 resourceVersion into the Kubernetes patch. A stale version produces a safe 409, including when
-invisible status changes were suppressed by the stream. Reconcile first; never transplant an old
+bookkeeping-only changes were suppressed by the full projection. Spec projection also suppresses
+status-only updates. This is safe rejection, but sustained churn can hinder save progress. An accepted
+GET advances the base without requiring a snapshot. Reconcile first; never transplant an old
 patch onto the latest version. No automatic write retry is performed.
 
 Successful writes return 204. The stream echo settles the saved values while retaining later edits.
@@ -43,6 +48,17 @@ If the echo is delayed, dirty state remains visible; prevent repeated saves unti
 acknowledgment UX allows them. Save results never feed raw Kubernetes objects back into the store.
 
 The GET returns `redactedPaths` from `gateway.Project`, without stream revision counters. The client
-preserves revisions for known paths. Unknown redaction paths reject reconciliation; open a fresh
-managed stream on the same store to obtain its snapshot before retrying. The editor returns
-`conflict` without automatically retrying writes. Omitted redaction metadata never clears protection.
+preserves revisions for known paths. Unknown redaction paths reject reconciliation; a later
+authoritative upsert for that UID or a fresh stream snapshot supplies the missing metadata.
+Omitted redaction metadata never clears protection.
+
+The example distinguishes `draft-conflict` (show conflicting paths), `version-stale` (base refreshed,
+o field disagreement), `recovering` (a usable base is not established), and `unavailable` (missing or
+replacement UID), alongside `unchanged`, `busy` and `saved`. Transport and validation failures throw
+host errors. The live-state callback is checked before saving and after reconciliation.
+
+After a refused read, `recovering` preserves the draft. Wait for stream recovery or authoritative
+metadata, then the next Save performs only a guarded GET. An accepted read returns `version-stale`
+(or actual draft conflicts); a subsequent user action captures a fresh write intent. This conservative
+example may perform an extra read when a newer watch already won. It never guesses why the guard
+returned false, installs a background retry loop, or retries a PATCH automatically.

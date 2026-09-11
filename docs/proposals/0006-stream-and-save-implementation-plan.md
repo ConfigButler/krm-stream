@@ -95,8 +95,9 @@ On 409, capture the reconciliation guard before GET, then inspect its result and
 A rejected GET can mean newer data won, the resource disappeared, a snapshot intervened, or redaction
 metadata is insufficient. The boolean is not an error taxonomy. If readiness cannot be established
 from existing state, conservatively return `recovering`; do not add a public diagnostic API merely
-to label every rejection. Clear a recovery wait only after relevant stream progress and readiness,
-not because another click or a timer elapsed. Keep any temporary subscriptions scoped and cleaned up.
+to label every rejection. The example conservatively requires a later guarded GET accepted while
+live before permitting a new write. A recovery click performs only that read; it does not clear the wait by itself. This
+avoids subscriptions and diagnostic APIs at the cost of an extra read when a watch already won.
 
 ```mermaid
 flowchart TD
@@ -119,7 +120,12 @@ No automatic write retry. No replacement of an old patch's RV with the GET's RV.
 snapshot membership. These constraints keep the example useful without turning it into a writer
 framework.
 
-## 4. Required regression coverage
+## 4. Regression coverage and follow-ups
+
+The final review narrows the immediate gate to adopter guidance, example outcomes with direct tests,
+and the `Gateway.Stream` teardown/recovery regression. Connection-test simplification, real-API
+status/save composition, and UID-race classification are follow-up hardening, not merge blockers.
+The table below retains that broader backlog; it does not assert that every row shipped in PR #25.
 
 | Test location | Scenario and assertion |
 |---|---|
@@ -143,8 +149,9 @@ presentation and later progress rather than asking the user to resolve an empty 
 Force deletion/recreation between the host's preflight read and PATCH using a test-only client
 wrapper/barrier. Record the structured API Status and verify the replacement UID's contents remain
 unchanged. Keep exact 409/422 classification evidence-based. Only normalize a specifically proven
-identity-mismatch case; ordinary validation errors retain their meaning. This safety assertion belongs
-in the correction; expanding host error normalization beyond what the test proves does not.
+identity-mismatch case; ordinary validation errors retain their meaning. This race test and any
+resulting classification belong in follow-up hardening; do not change normalization before the
+evidence exists.
 
 **Acceptance:** the original winner and drafts are preserved, outcomes describe current state, and
 normal version rejection never requires imaginary field conflicts. The added tests run from existing
@@ -236,8 +243,8 @@ detection, wire/browser integration, lint, fixture checks and package validation
 example test is actually discovered, not merely typechecked. Run the real API cases via
 `task test-cluster`; attach the server version and results to the implementation PR.
 
-Current CI does not execute the real-cluster suite on every PR. Add a focused real-API job for the
-new save/identity cases using the existing cluster tooling, or wire them into an explicitly invoked
+Current CI does not execute the real-cluster suite on every PR. In the follow-up hardening PR, add
+a focused real-API job for the new save/identity cases using the existing cluster tooling, or wire them into an explicitly invoked
 workflow whose successful run is part of the merge evidence. Keep the broader aggregated-API suite
 available through `task test-cluster`; don't imply a fake-client job covers API behavior. Update Task
 and workflow comments to match whichever coverage is implemented.

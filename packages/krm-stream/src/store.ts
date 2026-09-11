@@ -347,7 +347,7 @@ export class LiveResourceStore {
    * Snapshot recovery also invalidates responses; a GET must never count as snapshot membership.
    * Use the same projection as the stream. Omitted metadata preserves existing redactions.
    * redactedPaths preserves known revisions and removes absent paths; an unknown path rejects the
-   * response. Recover with a fresh stream snapshot to obtain authoritative revision counters. */
+   * response. A later authoritative upsert or fresh snapshot can supply the missing revision counters. */
   captureReconciliation(id: string): (object: KRMObject, opts?: ReconciliationOptions) => boolean {
     const revision = this.#must(id).revision;
     const snapshotRevision = this.#snapshotRevision;
