@@ -122,7 +122,10 @@ store.subscribe(() => render(store));
 
 For a bearer-token client, use `connectManagedResourceStream(url, store, { headers: { Authorization: ... } })`.
 That is useful for a non-browser client or an intentionally token-bearing browser application; the
-same-origin cookie route is the safer browser default.
+same-origin cookie route is the safer browser default. The host must enforce HTTPS for bearer-token
+requests, including the resolved destination of relative URLs and any redirects. Validate the
+trusted endpoint before supplying credentials and enforce the same policy in a custom fetch wrapper.
+The stream connectors delegate transport to fetch; they do not enforce a credential transport policy.
 
 For Deployment or CRD editing, a host may opt into OpenAPI-declared associative-list merging without
 exposing schemas to the browser:

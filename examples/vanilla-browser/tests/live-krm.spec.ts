@@ -242,7 +242,7 @@ test("the visible editor recovers and retains typing during a reconnect", async 
     });
   });
   await visit("fixture=snapshot-then-deltas&pace=0ms");
-  await expect(page.locator("#status-line")).toHaveAttribute("data-state", "retrying");
+  await expect(page.locator("#status-line")).toHaveAttribute("data-state", /^(retrying|connecting)$/);
   const field = page.getByTestId(`input:${path("data", "value")}`);
   await field.fill("typed while disconnected");
   release();

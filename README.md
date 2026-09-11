@@ -102,14 +102,14 @@ There are two halves, and they are usually two different people.
 
 ### The browser half
 
-No bundler, no framework, no Kubernetes client. `EventSource` is native, and the store is plain ESM:
+No bundler, no framework, no Kubernetes client. The managed connector uses fetch, and the store is plain ESM:
 
 ```ts
 import { LiveResourceStore, connectManagedResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
 
-connectManagedResourceStream(
+const connection = connectManagedResourceStream(
   resourceStreamURL("/resource-stream/v1", {
     target: "production",
     version: "v1",
@@ -126,6 +126,9 @@ connectManagedResourceStream(
 store.setValue(uid, ["spec", "replicas"], 3);
 store.conflicts(uid); // paths where the server disagreed with an edit the user actually made
 store.patch(uid); // an RFC 7386 merge patch of just their changes, or null
+
+// In your host/view teardown callback:
+connection.close(); // stop the stream and pending retries
 ```
 
 If you have no bundler at all and vendor the library by copying it, import

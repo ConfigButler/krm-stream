@@ -316,3 +316,34 @@ test("unknown redaction metadata blocks writes until an authoritative update ena
   assert.equal(patches, 1);
   assert.deepEqual(store.redactions("u"), [{ path: ["data", "token"], rev: 7 }]);
 });
+
+test("editor forwards both redaction formats and preserves omitted metadata", async () => {
+  const { conditionalEditor } = await import("../../../examples/conditional-save/editor.ts");
+  for (const metadata of [
+    { redacted: [{ path: "/data/token", rev: 9 }] },
+    {},
+    { redactedPaths: ["/data/token"], redacted: [{ path: "/data/token", rev: 99 }] },
+  ]) {
+    const store = new LiveResourceStore();
+    store.applyServerEvent(object("1"), { redacted: [{ path: "/data/token", rev: 7 }] });
+    store.setValue("u", ["metadata", "labels", "edited"], "yes");
+    const editor = conditionalEditor(
+      store,
+      "u",
+      "/save",
+      async (_url, init) => {
+        if (init?.method === "PATCH") return new Response(null, { status: 409 });
+        return Response.json({ object: object("2"), ...metadata });
+      },
+      () => true,
+    );
+    assert.equal(await editor.save(), "version-stale");
+    assert.deepEqual(store.redactions("u"), [
+      {
+        path: ["data", "token"],
+        rev: "redactedPaths" in metadata ? 7 : (metadata.redacted?.[0]?.rev ?? 7),
+      },
+    ]);
+    assert.equal(store.isEditable("u", ["data", "token"]), false);
+  }
+});

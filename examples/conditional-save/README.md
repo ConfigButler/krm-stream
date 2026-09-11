@@ -50,6 +50,8 @@ acknowledgment UX allows them. Save results never feed raw Kubernetes objects ba
 The GET returns `redactedPaths` from `gateway.Project`, without stream revision counters. The client
 preserves revisions for known paths. Unknown redaction paths reject reconciliation; a later
 authoritative upsert for that UID or a fresh stream snapshot supplies the missing metadata.
+A host with authoritative stream revisions may instead return `redacted`; the editor forwards
+that array when `redactedPaths` is absent. If both are supplied, `redactedPaths` takes precedence.
 Omitted redaction metadata never clears protection.
 
 The example distinguishes `draft-conflict` (show conflicting paths), `version-stale` (base refreshed,

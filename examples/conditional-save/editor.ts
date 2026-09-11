@@ -1,4 +1,4 @@
-import type { KRMObject, LiveResourceStore } from "../../packages/krm-stream/src/index.ts";
+import type { KRMObject, LiveResourceStore, Redaction } from "../../packages/krm-stream/src/index.ts";
 
 export type SaveOutcome =
   | "unchanged"
@@ -25,9 +25,20 @@ export function conditionalEditor(
     const latest = await request(url, { cache: "no-store" });
     if (latest.status === 404) return "unavailable";
     if (!latest.ok) throw new Error(`Reconciliation failed: HTTP ${latest.status}`);
-    const body = (await latest.json()) as { object: KRMObject; redactedPaths: string[] };
+    const body = (await latest.json()) as {
+      object: KRMObject;
+      redactedPaths?: string[];
+      redacted?: Redaction[];
+    };
     if (!store.ids().includes(uid) || body.object.metadata.uid !== uid) return "unavailable";
-    const accepted = reconcile(body.object, { redactedPaths: body.redactedPaths });
+    const accepted = reconcile(
+      body.object,
+      body.redactedPaths !== undefined
+        ? { redactedPaths: body.redactedPaths }
+        : body.redacted !== undefined
+          ? { redacted: body.redacted }
+          : undefined,
+    );
     // false has several causes. Do not infer readiness from it or force a refused response.
     // A later Save attempts only another guarded read until one is accepted while live.
     if (!isLive()) return "recovering";

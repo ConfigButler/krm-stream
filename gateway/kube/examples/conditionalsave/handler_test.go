@@ -2,6 +2,7 @@ package conditionalsave
 
 import (
 	"bytes"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -58,5 +59,42 @@ func TestHostRejectsIdentityAndProjectionBypasses(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHostGETReturnsProjectedEnvelope(t *testing.T) {
+	cs := fake.NewSimpleClientset(&corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+		Name: "cm", Namespace: "app", UID: "u", ResourceVersion: "2",
+		Annotations:   map[string]string{"kubectl.kubernetes.io/last-applied-configuration": "private"},
+		ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "host"}},
+	}, Data: map[string]string{"value": "base"}})
+	response := httptest.NewRecorder()
+	Handler(func(*http.Request) (kubernetes.Interface, error) { return cs, nil }, "app", "cm").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	if response.Code != http.StatusOK {
+		t.Fatalf("got HTTP %d", response.Code)
+	}
+	var envelope map[string]json.RawMessage
+	if err := json.Unmarshal(response.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	if len(envelope) != 2 || envelope["object"] == nil || envelope["redactedPaths"] == nil {
+		t.Fatalf("wrong envelope: %s", response.Body.String())
+	}
+	var object corev1.ConfigMap
+	if err := json.Unmarshal(envelope["object"], &object); err != nil {
+		t.Fatal(err)
+	}
+	if object.UID != "u" || object.ResourceVersion != "2" || object.Data["value"] != "base" {
+		t.Fatalf("lost object fields: %+v", object)
+	}
+	if len(object.ManagedFields) != 0 || object.Annotations["kubectl.kubernetes.io/last-applied-configuration"] != "" {
+		t.Fatal("GET leaked stripped metadata")
+	}
+	var paths []string
+	if err := json.Unmarshal(envelope["redactedPaths"], &paths); err != nil {
+		t.Fatal(err)
+	}
+	if len(paths) != 0 {
+		t.Fatalf("unexpected ConfigMap redactions: %v", paths)
 	}
 }
