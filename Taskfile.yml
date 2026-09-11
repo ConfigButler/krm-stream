@@ -181,7 +181,7 @@ tasks:
     # and it cannot do that with no node_modules there. On a developer's machine that directory is
     # already populated by `task test`, which is exactly why this gap survived until the first CI run
     # on a clean checkout found it.
-    deps: [fixtures, build-client, _example-deps, test-vue]
+    deps: [fixtures, build-client, _example-deps]
     dir: examples/vanilla-browser
     cmds:
       # The only place the library's central promise is actually tested: that the published ESM
