@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { needsPublish, packageName, registryMetadata, releaseTags, validateArtifact, validateRelease } from './release.mjs';
+import { needsPublish, packageName, registryMetadata, releaseTags, validatePackage, validateRelease } from './release.mjs';
 
 const sha = 'a'.repeat(40);
 const manifest = { 'packages/krm-stream': '0.3.0', gateway: '0.3.0', 'gateway/kube': '0.3.0' };
@@ -35,12 +35,10 @@ test('replaying an old run cannot downgrade npm latest', async () => {
   await assert.rejects(needsPublish('0.3.0', async () => response(200, metadata('0.4.0'))));
 });
 
-test('the original race and mismatched build bytes are rejected before publishing', () => {
-  const metadata = { sha, integrity: 'sha512-example' };
-  validateArtifact(metadata, pkg, metadata.integrity, sha, '0.3.0');
-  assert.throws(() => validateArtifact(metadata, { ...pkg, version: '0.2.1' }, metadata.integrity, sha, '0.3.0'));
-  assert.throws(() => validateArtifact(metadata, pkg, metadata.integrity, 'b'.repeat(40), '0.3.0'));
-  assert.throws(() => validateArtifact(metadata, pkg, 'sha512-other', sha, '0.3.0'));
+test('an older tarball or the wrong package cannot be published as the release', () => {
+  validatePackage(pkg, '0.3.0');
+  assert.throws(() => validatePackage({ ...pkg, version: '0.2.1' }, '0.3.0'));
+  assert.throws(() => validatePackage({ ...pkg, name: 'krm-stream' }, '0.3.0'));
 });
 
 test('registry requests never include manifest or workflow-input data', async () => {

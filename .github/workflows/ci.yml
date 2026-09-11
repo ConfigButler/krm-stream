@@ -1,9 +1,8 @@
 # The validation pipeline: everything needed to TRUST a commit, and nothing that publishes.
 #
 # It runs directly on pull requests, and release.yml calls it as a reusable workflow on every push to
-# main. That is the whole trust model in one rule: the release tail runs only after the exact same
-# jobs a PR gets, in the same run — so a write token never meets code this pipeline has not already
-# validated. (GitHub enforces the fork half of it too: a fork PR always gets a read-only token.)
+# main. Release runs select the commit before calling this workflow, and publish only after all jobs
+# pass. Validation always has read-only permissions, including on fork PRs.
 name: ci
 
 on:
@@ -14,10 +13,10 @@ on:
         description: Immutable release commit to validate; empty uses the event checkout
         type: string
         default: ""
-      artifact-name:
-        description: Separate artifacts when validating both the push and a release
+      release-version:
+        description: Verify the public Go release tag instead of a commit SHA
         type: string
-        default: npm-packages
+        default: ""
   workflow_dispatch:
 
 permissions:
@@ -27,7 +26,7 @@ permissions:
 # number, and github.run_id keeps the group unique — so a release run can never be cancelled by, or
 # cancel, anything else.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.run_id }}-${{ inputs.artifact-name || 'npm-packages' }}
+  group: ci-${{ github.event.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
 jobs:
@@ -161,9 +160,8 @@ jobs:
   # It also guards the other half of the promise: the CORE module must stay dependency-free. `go get
   # .../gateway` pulling in client-go would make the protocol cost what the adapter costs.
   #
-  # There is a sibling of this job in release.yml (`consumable-release`) that runs the same check
-  # against the PUBLISHED TAG rather than a commit sha. That one is the check that actually matters
-  # to an adopter; this one is the one that catches the mistake before it is tagged.
+  # Release runs use the public version tag here; ordinary CI uses the commit SHA.
+  # This is one consumer check, shared by both paths.
   consumable:
     name: a stranger can `go get` this
     runs-on: ubuntu-latest
@@ -214,6 +212,7 @@ jobs:
           # a cache miss here would look like a pass.
           GOPROXY: direct
           GOFLAGS: -mod=mod
+          RELEASE_VERSION: ${{ inputs.release-version }}
         run: |
           set -euo pipefail
 
@@ -221,8 +220,7 @@ jobs:
           # one that has already been released, so the resolution below is exactly what an adopter
           # gets. On a RELEASE commit it is the version being released — whose tag does not exist
           # until the release PR merges — and `go get` would fail here for a reason that is not a
-          # bug. So: if the required core version has no tag yet, skip. release.yml re-runs this same
-          # check against the real tag once it exists, which is the stronger check anyway.
+          # bug. Skip that case in ordinary CI; release CI requires the tags to exist.
           core="$(sed -n 's|^[[:space:]]*github.com/ConfigButler/krm-stream/gateway v\([^ ]*\).*|\1|p' gateway/kube/go.mod | head -1)"
           case "$core" in
             0.0.0-*) ;;  # a pseudo-version names a commit, and always resolves
@@ -230,12 +228,19 @@ jobs:
               echo "::error::gateway/kube/go.mod does not require the core module at all" && exit 1 ;;
             *)
               if ! git ls-remote --exit-code --tags origin "refs/tags/gateway/v${core}" >/dev/null 2>&1; then
-                echo "::notice::gateway/kube requires core v${core}, which is not tagged yet — this is a release commit. The published tag is verified by release.yml (consumable-release)."
+                if [ -n "$RELEASE_VERSION" ]; then
+                  echo "::error::released adapter requires missing core tag gateway/v${core}"
+                  exit 1
+                fi
+                echo "::notice::core v${core} is not tagged yet; release CI verifies the public tag after tagging."
                 exit 0
               fi ;;
           esac
 
-          sha="${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}"
+          revision="${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}"
+          if [ -n "$RELEASE_VERSION" ]; then
+            revision="v${RELEASE_VERSION}"
+          fi
           tmp="$(mktemp -d)"
           cd "$tmp"
           go mod init example.com/stranger
@@ -254,9 +259,18 @@ jobs:
 
           func main() {}
           GO
-          go get "github.com/ConfigButler/krm-stream/gateway/kube@${sha}"
+          go get "github.com/ConfigButler/krm-stream/gateway/kube@${revision}"
           go build ./...
-          echo "a stranger can go get and build the Kubernetes adapter."
+          echo "a stranger can go get and build the Kubernetes adapter at ${revision}."
+
+      - name: warm the released module versions in the Go proxy
+        if: inputs.release-version != ''
+        env:
+          GOPROXY: https://proxy.golang.org
+          VERSION: ${{ inputs.release-version }}
+        run: |
+          go list -m "github.com/ConfigButler/krm-stream/gateway@v${VERSION}" || true
+          go list -m "github.com/ConfigButler/krm-stream/gateway/kube@v${VERSION}" || true
 
   client:
     name: client (typescript)
@@ -301,26 +315,13 @@ jobs:
       - name: build, pack, and prove the tarball is complete
         run: task pack-client PACK_DIR=/tmp/npm
 
-      - name: bind the tarball to the checked-out commit
-        run: |
-          node --input-type=module <<'JS'
-          import { execFileSync } from 'node:child_process';
-          import { createHash } from 'node:crypto';
-          import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
-          const files = readdirSync('/tmp/npm').filter(name => name.endsWith('.tgz'));
-          if (files.length !== 1) throw new Error('expected exactly one tarball');
-          const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
-          const integrity = 'sha512-' + createHash('sha512')
-            .update(readFileSync('/tmp/npm/' + files[0])).digest('base64');
-          writeFileSync('/tmp/npm/source.json', JSON.stringify({ sha, integrity }));
-          JS
-
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: ${{ inputs.artifact-name || 'npm-packages' }}
-          path: /tmp/npm/*
+          name: npm-packages
+          path: /tmp/npm/*.tgz
           if-no-files-found: error
-          retention-days: 7
+          # Match GitHub's 30-day window for retrying failed jobs without rebuilding.
+          retention-days: 30
 
   vue:
     name: Vue adapter example
@@ -393,6 +394,6 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
-          name: playwright-trace-${{ inputs.artifact-name || 'npm-packages' }}
+          name: playwright-trace
           path: examples/vanilla-browser/test-results/
           retention-days: 7
