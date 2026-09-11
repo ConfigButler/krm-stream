@@ -121,7 +121,8 @@ The write path is not the library's:
    `metadata.managedFields`, the last-applied annotation, and `status` under `ProjectionSpec`. It is
    what stops a buggy or hostile browser from destroying what it was never shown. Do not skip it on
    the grounds that the store is careful, because the store runs on the caller's machine.
-8. The host writes with the captured UID and resourceVersion preconditions. The watch sees it, it returns down the stream as an ordinary update,
+8. The host writes with the captured UID and resourceVersion preconditions. The watch sees it, it
+   returns down the stream as an ordinary update,
    and the merge converges your draft with it. Your own write needs no special handling.
 
 If you know TanStack Query or SWR, this is the same server cache with local edits, with two

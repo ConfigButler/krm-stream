@@ -75,7 +75,7 @@ func newStub(t *testing.T) (*stubClient, *stubResource) {
 	return &stubClient{ns: &stubNamespaceable{stubResource: res}}, res
 }
 
-// refusal is the error a REAL aggregated API server returned when handed the §3a request
+// refusal is the error a REAL aggregated API server returned when handed the streaming-list request
 // (docs/facts/observed-v1.36.2+k3s1.md, F6). Reproducing its exact shape is the point: the fallback
 // hangs off recognising it, and a hand-waved "some error" would prove nothing.
 func refusal() error {
@@ -129,7 +129,7 @@ func drain(t *testing.T, w gateway.Watcher, n int) []gateway.WatchEvent {
 	return got
 }
 
-// §3a, the primary path: the exact request a real v1.36.2 API server accepted.
+// Streaming list, the primary path: the exact request a real v1.36.2 API server accepted.
 func TestStreamingListSendsTheOptionsTheClusterVerified(t *testing.T) {
 	client, res := newStub(t)
 	fake := watch.NewFakeWithChanSize(3, false)
@@ -201,7 +201,7 @@ func TestRoutineBookmarkIsNotTheBoundary(t *testing.T) {
 	}
 }
 
-// F6, and the bug this rung exists to have caught: an aggregated API refuses §3a outright. A gateway
+// F6, and the bug this rung exists to have caught: an aggregated API refuses streaming-list outright. A gateway
 // that implemented only the streaming list could not open a stream for a Flunder AT ALL.
 func TestAggregatedAPIRefusalFallsBackToListThenWatch(t *testing.T) {
 	client, res := newStub(t)
@@ -229,7 +229,7 @@ func TestAggregatedAPIRefusalFallsBackToListThenWatch(t *testing.T) {
 	defer w.Stop()
 
 	// The live watch must resume at EXACTLY the list's resourceVersion — that is what closes the gap
-	// between the two calls, and it is the whole reason §3b is correct rather than merely plausible.
+	// between the two calls, and it is the whole reason list-then-watch is correct rather than merely plausible.
 	live := res.watchOpts[1]
 	if live.ResourceVersion != "42" {
 		t.Errorf("the live watch opened at resourceVersion %q, want \"42\" (the list's) — that is a GAP", live.ResourceVersion)
@@ -243,7 +243,7 @@ func TestAggregatedAPIRefusalFallsBackToListThenWatch(t *testing.T) {
 
 	fake.Modify(obj("a", "uid-a", "43"))
 
-	// The stream loop must not be able to tell this from §3a: added, added, boundary, then live.
+	// The stream loop must not be able to tell this from streaming-list: added, added, boundary, then live.
 	got := drain(t, w, 4)
 	if got[0].Type != gateway.WatchAdded || got[0].Object.UID() != "uid-a" {
 		t.Errorf("event 0 = %+v, want added uid-a", got[0])

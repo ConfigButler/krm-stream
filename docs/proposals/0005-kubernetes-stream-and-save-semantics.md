@@ -26,6 +26,20 @@ There are three different facts a UI must not collapse into one “conflict” l
 The [saving guide](../saving.md#what-the-person-editing-sees) maps these distinctions to the
 editor outcomes. A refreshed base enables review; it cannot promise the next save succeeds.
 
+## Why convergence excludes resourceVersion
+
+The earlier invariant could be read as whole-object equality, including resourceVersion. That
+contradicted suppression: a final bookkeeping-only write, or status-only write under `krm-spec/v1`,
+can advance the upstream version without changing anything the browser needs to receive. The held
+version can therefore remain older indefinitely.
+
+[Spec §6](../../spec/v1.md#6-ordering-delivery--the-state-guarantee) retains equality at each
+delivered logical stream position, but compares projected content excluding resourceVersion plus the
+connection's redaction records. This narrows the stated guarantee to match existing emissions.
+Restoring whole-object equality would require a different emission policy, not just simpler wording.
+The [final-write fixtures](../../conformance/README.md#convergence-evidence) defend both version
+suppression and delivery of changed redaction records.
+
 ## Host write strategies
 
 The following is a design comparison, not a proposal to implement more save engines.
@@ -75,9 +89,8 @@ provide user-to-user optimistic locking. Conversely, one manager per tab changes
 managedFields growth; it is not a free concurrency fix. A manager name is not authentication or RBAC.
 
 Spec §3 requires the host to define its intended managed field set and omission/deletion policy for
-SSA. `ValidateMergePatch` and
-`captureSave().patch` remain merge-patch-specific. The store's local keyed-list merge does not turn
-that output into strategic merge patch or apply configuration.
+SSA. `ValidateMergePatch` and `captureSave().patch` remain merge-patch-specific. The store's local
+keyed-list merge does not turn that output into strategic merge patch or apply configuration.
 
 The [SSA design proposal](https://github.com/kubernetes/enhancements/blob/master/keps/sig-api-machinery/555-server-side-apply/README.md)
 also makes field management and schema topology central to this API.

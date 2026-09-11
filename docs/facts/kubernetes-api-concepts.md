@@ -1,10 +1,11 @@
 # Kubernetes API reference notes
 
 Source: [Kubernetes API concepts](https://kubernetes.io/docs/reference/using-api/api-concepts/),
-reviewed from upstream markdown on **2026-07-11**. These notes explain the upstream assumptions behind
-[the protocol](../../spec/v1.md). They are separate from the
-[recorded v1.36.2 cluster observations](observed-v1.36.2+k3s1.md), which establish behavior only for
-that tested environment.
+reviewed from upstream markdown on **2026-07-11**. These notes explain the upstream assumptions
+behind [the protocol](../../spec/v1.md). They are separate from the [recorded v1.36.2 cluster
+observations](observed-v1.36.2+k3s1.md), which establish behavior only for that tested environment.
+API-concepts claims are distinguished below from `client-go`/`apimachinery` details, which are
+attributed explicitly and are **not established by that page**.
 
 ## Watch events and partial objects
 

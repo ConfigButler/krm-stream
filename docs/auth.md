@@ -58,9 +58,11 @@ gateway.Handler(gateway.Options{
 - `Clients` is a `ClientFor` callback supplying the backend for that identity and target.
 - `Scopes` allowlists targets and resources. A browser cannot supply a raw API-server URL.
 
-A per-user backend can use the user's bearer token or Kubernetes impersonation. Impersonation requires
-explicit host credentials with impersonation rights. Scope and disclosure policy remain host-owned
-in either case; a projection does not grant permission to read or write a resource.
+A per-user backend can use the user's bearer token or Kubernetes impersonation. Impersonation
+requires explicit host credentials with impersonation rights. Scope and disclosure policy remain
+host-owned in either case; a projection does not grant permission to read or write a resource.
+Redaction is an additional disclosure restriction for an authorized caller, never a substitute for
+verifying that caller may read the resource.
 
 ## Long streams, short tokens
 
@@ -88,8 +90,10 @@ and API-server capacity; checks are not cached across identities.
 
 ## Shared-watch authorization
 
-`SharedBackend` opens one upstream watch per scope as one service identity. Every subscriber must
-be authorized independently before receiving the shared cache:
+[`SharedBackend`](../gateway/shared.go) opens one upstream watch per scope as one service identity.
+The host's `Authorizer` is then the only access check between a subscriber and the cached objects:
+an overly permissive authorizer exposes the service identity's data to that subscriber. This is why
+sharing is opt-in. Every subscriber must be authorized independently before receiving the cache:
 
 ```go
 shared := gateway.NewSharedBackend(serviceAccountBackend)
@@ -97,8 +101,10 @@ opts.Authorizer = kube.SubjectAccessReviewAuthorizer(clientset, subjectOf)
 opts.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 ```
 
-`subjectOf` maps the principal to the Kubernetes username and groups. The adapter checks both `list`
-and `watch`. An incomplete review is refused, and an explicit `Denied` wins over `Allowed`.
+The [`SubjectAccessReviewAuthorizer`](../gateway/kube/authz.go) adapter delegates the decision to
+Kubernetes. `subjectOf` maps the principal to the Kubernetes username and groups. The adapter checks
+both `list` and `watch`. An incomplete review is refused, and an explicit `Denied` wins over
+`Allowed`.
 
 The service account needs `create` on `subjectaccessreviews`; `system:auth-delegator` supplies that
 permission. Reviews do not require impersonation rights. These are SubjectAccessReview requests,

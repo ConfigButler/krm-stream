@@ -12,7 +12,12 @@ not.
 
 ## Supported versions
 
-Pre-1.0. Only the latest minor version receives fixes. The protocol and the API may still change.
+Pre-1.0. The protocol and API may still change.
+
+| Release line | Receives security fixes |
+|---|---|
+| Latest released minor | Yes |
+| Older minors | No |
 
 ## What counts as a vulnerability here
 

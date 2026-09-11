@@ -75,9 +75,10 @@ sequenceDiagram
 ```
 
 The displayed server content is right even though the held version is older. The local draft is the
-person's proposed change; it is not part of stream convergence. A failed version precondition does
-not by itself mean the person and server disagree about an editable field. Follow the
-[save outcomes](#what-the-person-editing-sees) to refresh, reconcile and capture a newly reviewed intent.
+person's proposed change; it is not part of stream convergence. In this conditional merge-PATCH
+flow, a 409 signals a failed version precondition, not necessarily a disagreement at an editable
+field. Follow the [save outcomes](#what-the-person-editing-sees) to refresh, reconcile and capture a
+newly reviewed intent.
 
 | Final upstream change | What the gateway delivers | What the browser holds |
 |---|---|---|
@@ -152,7 +153,8 @@ Kubernetes response: project it first and provide the correct redaction metadata
 redacted resources can return `redactedPaths` directly from `gateway.Project`. The guard retains
 known stream revisions for paths still present and removes paths absent from that list. Omitted
 redaction metadata preserves existing protections. Unknown paths reject the entire response: open a
-later authoritative upsert for that UID or a fresh stream snapshot before retrying reconciliation. Never invent revision counters for a GET.
+later authoritative upsert for that UID or a fresh stream snapshot before retrying reconciliation.
+Never invent revision counters for a GET.
 An explicit `redacted` array is still supported when the host has authoritative stream revisions.
 
 ## Creating and deleting whole objects
@@ -173,6 +175,26 @@ The host must:
   under the same name is not removed by an old request.
 - Return 204 or a receipt and let the watch reflect the result. Project any returned resource before
   sending it to the browser, and preserve meaningful Kubernetes error categories.
+
+For an authorized delete, preserve the UID captured when the user selected the object; do not
+replace it with a newer GET's UID. This fragment uses the host's caller-scoped `dynamic.Interface`,
+validated resource/namespace/name, and the request context:
+
+```go
+// metav1: k8s.io/apimachinery/pkg/apis/meta/v1
+// types:  k8s.io/apimachinery/pkg/types
+uid := types.UID(capturedUID)
+err := client.Resource(resource).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{
+    Preconditions: &metav1.Preconditions{UID: &uid},
+})
+if err != nil {
+    return err // The host maps the structured Kubernetes error to its HTTP response.
+}
+```
+
+This binds the delete to object identity. A host that also requires unchanged content can add a
+captured resourceVersion precondition. For the complete GET/PATCH save path, use the [compiled
+conditional-save handler](../gateway/kube/examples/conditionalsave/handler.go).
 
 The host also clears its own pending-create/delete entries when a write succeeds. The store does not
 own those staging lists. See the [client state model](client-state-model.md#reflecting-the-result)

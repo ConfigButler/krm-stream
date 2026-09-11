@@ -37,7 +37,8 @@ product can show live cluster state while people are editing it.
 - You want a **ready-made Kubernetes dashboard**. Use [Headlamp](https://headlamp.dev/). See
   [alternatives](docs/alternatives.md).
 - You want to **write to the cluster from the browser**. krm-stream is the read-and-edit half: it
-  captures a merge patch and version together. Your application validates and performs the write. See [saving edits safely](docs/saving.md).
+  captures a merge patch and version together. Your application validates and performs the write.
+  See [saving edits safely](docs/saving.md).
 
 ## What is KRM?
 

@@ -20,11 +20,14 @@ reconnection; a new connection receives a fresh snapshot. See the
 
 ## Optional watch sharing
 
-Without sharing, each stream uses its own backend watch. `SharedBackend` can instead keep one
-upstream watch per scope and serve each subscriber from its cache. A joining subscriber still
-receives a complete projected snapshot, so sharing saves upstream work without eliminating browser
-transfer or reconciliation costs.
+Without sharing, each stream uses its own backend watch. [`SharedBackend`](../gateway/shared.go) can
+instead keep one upstream watch per scope and serve each subscriber from its cache. A joining
+subscriber still receives a complete projected snapshot, so sharing saves upstream work without
+eliminating browser transfer or reconciliation costs.
 
-A shared watch uses one service identity. Pair it with `kube.SubjectAccessReviewAuthorizer` to check
-each subscriber's Kubernetes permissions before serving the cache, and configure timed checks when
-quiet-stream revocation must be bounded. See [authorization](auth.md) and [operations](operations.md).
+A shared watch uses one service identity, so the host's `Authorizer` becomes the only access check
+between each subscriber and cached objects; a permissive check can disclose the service identity's
+data. Sharing is opt-in for this reason. Pair it with
+[`kube.SubjectAccessReviewAuthorizer`](../gateway/kube/authz.go) to check each subscriber's
+Kubernetes permissions, and configure timed checks when quiet-stream revocation must be bounded. See
+[authorization](auth.md) and [operations](operations.md).

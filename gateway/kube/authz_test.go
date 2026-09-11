@@ -61,7 +61,7 @@ func TestSubjectAccessReviewAsksKubernetesTheRightQuestion(t *testing.T) {
 		t.Fatalf("an allowed caller was refused: %v", err)
 	}
 
-	// BOTH verbs. A snapshot cycle is a list THEN a watch — literally so on the §3b path, where the
+	// BOTH verbs. A snapshot cycle is a list THEN a watch — literally so on the list-then-watch path, where the
 	// gateway issues a real LIST — so a caller who may watch but not list can still be handed objects
 	// by the list. Checking only `watch` authorizes half of what we are about to do.
 	verbs := map[string]bool{}

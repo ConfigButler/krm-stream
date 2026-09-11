@@ -1,9 +1,8 @@
 # conformance — the shared contract, executable
 
-**One YAML file describes one scenario end to end**: what the Kubernetes watch does, what the gateway must therefore put on the wire, and what
-a client that consumed that wire (plus some local edits) must then be holding. The Go suite and the
-TypeScript suite load the *same* files. A protocol change that breaks either side fails both, in the
-same commit.
+**One YAML file describes one scenario end to end**: the Kubernetes watch input, the gateway's wire
+output, and the client's resulting state after applying events and local edits. The Go and TypeScript
+suites load the same files, so a contract change is checked on both sides in the same commit.
 
 ```
 conformance/
@@ -81,10 +80,9 @@ name does not) obvious at a glance.
 
 ## The watch ops
 
-`watch:` models conditions handled across the gateway pipeline — API-server watch behavior, browser
-disconnects, and client-go cache tombstones. Where an operation maps to Kubernetes API behavior, the reference is
-[docs/facts/kubernetes-api-concepts.md](../docs/facts/kubernetes-api-concepts.md), which is a reading
-of the [API concepts page](https://kubernetes.io/docs/reference/using-api/api-concepts/) with links to upstream documentation and separate real-cluster evidence.
+`watch:` models API-server events, browser disconnects and client-go cache tombstones.
+The [API reference notes](../docs/facts/kubernetes-api-concepts.md) distinguish claims from the
+Kubernetes API concepts page, client-go implementation details and recorded cluster observations.
 
 | op | means | the gateway must |
 |---|---|---|

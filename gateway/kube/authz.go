@@ -55,7 +55,7 @@ type SubjectFor func(gateway.Principal) (Subject, error)
 // caller may `list` and `watch` that resource.
 //
 // BOTH verbs, and that is not belt-and-braces: a snapshot cycle is a list followed by a watch — quite
-// literally so on the §3b path, where the gateway issues a real LIST — so a caller who may watch but
+// literally so on the list-then-watch path, where the gateway issues a real LIST — so a caller who may watch but
 // not list can still be served objects by the list. Checking only `watch` would authorize half of
 // what we are about to do.
 //
