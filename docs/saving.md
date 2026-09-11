@@ -59,7 +59,33 @@ actual draft conflicts separately; when none exist, explain the refreshed base a
 captured save. If reconciliation is refused, preserve the draft and recover before writing again.
 Do not remove concurrency protection or blindly retry the old patch with a newer version.
 
-## Answer 204 and let the watch echo it
+## What the person editing sees
+
+These presentations map to the copyable conditional editor's outcomes. The host owns wording,
+authentication and any receipt or Git workflow; connection state is not a save guarantee.
+
+| Situation / outcome | Suggested presentation | Host action |
+|---|---|---|
+| `version-stale`, no field conflicts | “Configuration refreshed. Your edits are intact; review and save again.” | Capture a new intent on the next deliberate Save. Do not show an empty conflict panel. |
+| `draft-conflict` | Show local and current values at each conflicting field. | Offer explicit resolution through store APIs; keep the rest of the form visible. |
+| Connection retrying or `recovering` | “Reconnecting. Your unsaved changes are still here.” | Disable writes until live; after a refused GET, the example requires a later accepted guarded read before another write. |
+| `saved`, watch confirmation pending | “Saved to Kubernetes; waiting for live confirmation.” | Preserve later typing. Track any receipt separately from draft state. |
+| Session expiry or access denial | Explain sign-in or access outcome. | Handle identity-scoped recovery; do not retry terminal auth failures indefinitely or label them field conflicts. |
+| `unavailable`, deleted/recreated UID | “This configuration was removed. A replacement must be opened separately.” | Offer copy-out from a previously retained recovery copy; never apply the old draft automatically to the replacement. |
+
+“Unsaved changes are still here” applies while the UID remains in the store. `removeResource` and
+snapshot pruning discard deleted-object drafts. If recovery after deletion matters, retain a detached
+copy as edits change, **before** removal; observing a missing UID is too late to read its old draft.
+Keep recovery copies scoped to the original identity and UID, with a host-defined lifetime and cleanup.
+They are for recovery, not a second draft to reconcile against incoming snapshots. An executed
+subscription recipe, including edit-time capture and pruning, remains
+[planned work](proposals/0006-stream-and-save-implementation-plan.md#deletion-recovery-copy).
+
+For explicit keep-local resolution, the planned tested recipe is tracked in
+[proposal 0006](proposals/0006-stream-and-save-implementation-plan.md#explicit-keep-local-resolution).
+There is currently no dedicated keep-local helper; avoid a second application conflict registry.
+
+## Answer 204 or a receipt and let the watch echo it
 
 The object a Kubernetes write returns is a *raw* object: `managedFields`, the last-applied annotation,
 `status`, and the Secret values your projection withholds. Writing it to the response hands the
@@ -70,6 +96,12 @@ You do not need to. The write reaches the API server, the watch sees it, and it 
 stream as an ordinary `modified` event: projected, redacted, and three-way merged into the draft the
 user is still holding. Dirty state is derived from `draft` versus `server`, so there is nothing to
 clear and nothing to adopt. The echo settles it.
+
+A **receipt-only HTTP 200** is also valid: define and validate a host receipt schema containing only
+intended acknowledgment fields, and keep it separate from the resource store. The copyable editor
+accepts successful HTTP status but does not parse a receipt; add parsing in the host when needed.
+For a Git-backed workflow, Kubernetes write acceptance, CommitRequest acceptance and an observed Git
+commit are separate milestones. A receipt must not imply that all three have happened.
 
 ## If you must answer with the object
 

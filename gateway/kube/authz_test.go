@@ -170,13 +170,3 @@ func TestANamedScopeAsksAboutThatName(t *testing.T) {
 		}
 	}
 }
-
-func TestDeprecatedAuthorizerAlias(t *testing.T) {
-	cs, asked := reviewer(func(*authzv1.SubjectAccessReview) (bool, bool) { return true, false })
-	if err := kube.SSARAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope); err != nil {
-		t.Fatal(err)
-	}
-	if len(*asked) != 2 {
-		t.Fatal("alias must check list and watch")
-	}
-}

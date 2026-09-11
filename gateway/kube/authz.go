@@ -131,9 +131,3 @@ func groupResource(s gateway.Scope) string {
 	}
 	return s.Group + "/" + s.Resource
 }
-
-// SSARAuthorizer is the historical name for SubjectAccessReviewAuthorizer.
-// Deprecated: use SubjectAccessReviewAuthorizer; this creates SubjectAccessReview, not SelfSubjectAccessReview.
-func SSARAuthorizer(cs kubernetes.Interface, subjectFor SubjectFor) gateway.Authorizer {
-	return SubjectAccessReviewAuthorizer(cs, subjectFor)
-}

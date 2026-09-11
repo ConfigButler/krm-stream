@@ -102,4 +102,4 @@ For shared streams, set `Options.ReauthorizationInterval` (for example, 30 secon
 `Options.ReauthorizationTimeout` (for example, 5 seconds). Each subscriber is rechecked independently,
 including during quiet periods; denial or timeout stops only that subscriber. Zero interval keeps
 cycle-only checks. See [authorization](../docs/auth.md) for callback contracts and capacity planning.
-Use `kube.SubjectAccessReviewAuthorizer`; `SSARAuthorizer` is a deprecated compatibility alias.
+Use `kube.SubjectAccessReviewAuthorizer` for Kubernetes-backed subscriber authorization.

@@ -43,7 +43,10 @@ status-only updates. This is safe rejection, but sustained churn can hinder save
 GET advances the base without requiring a snapshot. Reconcile first; never transplant an old
 patch onto the latest version. No automatic write retry is performed.
 
-Successful writes return 204. The stream echo settles the saved values while retaining later edits.
+This endpoint returns 204 for successful writes. A host may instead return a receipt-only HTTP 200
+under the [saving guide’s receipt contract](../../docs/saving.md#answer-204-or-a-receipt-and-let-the-watch-echo-it);
+the client example accepts success but leaves receipt parsing to the host. The stream echo settles
+the saved values while retaining later edits.
 If the echo is delayed, dirty state remains visible; prevent repeated saves until your host's chosen
 acknowledgment UX allows them. Save results never feed raw Kubernetes objects back into the store.
 
@@ -64,3 +67,6 @@ metadata, then the next Save performs only a guarded GET. An accepted read retur
 (or actual draft conflicts); a subsequent user action captures a fresh write intent. This conservative
 example may perform an extra read when a newer watch already won. It never guesses why the guard
 returned false, installs a background retry loop, or retries a PATCH automatically.
+
+Use the [user-facing outcome table](../../docs/saving.md#what-the-person-editing-sees) when wiring the
+editor UI. This controller is copyable host code, not a core package export.

@@ -161,7 +161,7 @@ It needs your server's service account to hold `create` on `subjectaccessreviews
 `system:auth-delegator` role). It does **not** need impersonate rights: it asks a question *about* a
 user, it does not act *as* one. And because the gateway re-authorizes every snapshot cycle, this is
 also how a revocation reaches a stream that is already open. Timed checks bound quiet-stream revocation.
-The old `SSARAuthorizer` name remains a deprecated alias; it never created SelfSubjectAccessReview.
+Use `SubjectAccessReviewAuthorizer`; it creates SubjectAccessReview requests, not SelfSubjectAccessReview.
 
 ## What this library never does
 
