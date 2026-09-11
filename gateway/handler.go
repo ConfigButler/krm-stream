@@ -69,6 +69,10 @@ type Options struct {
 	// timeout; it affects HTTP streams only.
 	HeartbeatInterval time.Duration
 
+	// WriteTimeout bounds each HTTP write-plus-flush operation. Zero installs no deadline.
+	// Positive values require a writer supporting flush and write deadlines; negative values panic.
+	WriteTimeout time.Duration
+
 	// ReauthorizationInterval rechecks each subscriber independently, even on quiet streams.
 	// Zero disables timed checks; snapshot cycles always reauthorize.
 	ReauthorizationInterval time.Duration
@@ -84,9 +88,12 @@ type Options struct {
 // the only thing that works: a browser's EventSource cannot read the body of a non-200, so a 403
 // reaches the page as an `onerror` with no detail and no reason, and the developer is left guessing.
 // A terminal error event carries a code and a message the UI can actually show, and `terminal` is
-// what stops EventSource from reconnecting forever.
+// what stops EventSource from reconnecting forever. Unsupported bounded transports instead
+// abort before streaming and report ObservationHTTPTransportRejected.
 func Handler(o Options) http.Handler {
 	switch {
+	case o.WriteTimeout < 0:
+		panic("krm-stream: WriteTimeout must not be negative")
 	case o.Principal == nil:
 		panic("krm-stream: Options.Principal is required — the library must never assume who the caller is")
 	case o.Authorizer == nil:
@@ -103,6 +110,7 @@ func Handler(o Options) http.Handler {
 		Ordering:                o.Ordering,
 		Observer:                o.Observer,
 		HeartbeatInterval:       o.HeartbeatInterval,
+		WriteTimeout:            o.WriteTimeout,
 		ReauthorizationInterval: o.ReauthorizationInterval,
 		ReauthorizationTimeout:  o.ReauthorizationTimeout,
 	}
@@ -113,7 +121,7 @@ func Handler(o Options) http.Handler {
 			// Forbidden, not the host's error verbatim: whatever went wrong identifying this caller
 			// is the host's business and possibly its internals. The caller learns that they may not
 			// have this, and nothing else.
-			refuse(w, Forbidden("not authenticated"))
+			g.refuse(w, r, Forbidden("not authenticated"))
 			return
 		}
 
@@ -122,7 +130,7 @@ func Handler(o Options) http.Handler {
 			err = o.Scopes.Validate(scope)
 		}
 		if err != nil {
-			refuse(w, asStreamError(err))
+			g.refuse(w, r, asStreamError(err))
 			return
 		}
 
@@ -131,7 +139,8 @@ func Handler(o Options) http.Handler {
 }
 
 // refuse writes a terminal error as a well-formed one-event stream, and closes.
-func refuse(w http.ResponseWriter, serr *StreamError) {
-	WriteSSEHeaders(w)
-	_ = (&sequenceSink{sink: NewSSESink(w)}).Emit(context.Background(), serr.Event())
+func (g *Gateway) refuse(w http.ResponseWriter, r *http.Request, serr *StreamError) {
+	g.serveHTTP(w, r, func(ctx context.Context, sink *SSESink) {
+		_ = (&sequenceSink{sink: sink}).Emit(ctx, serr.Event())
+	})
 }

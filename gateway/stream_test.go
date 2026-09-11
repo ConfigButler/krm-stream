@@ -227,7 +227,7 @@ func TestGatewayObserverReportsTerminalError(t *testing.T) {
 	if !errors.As(err, &streamErr) || streamErr.Code != CodeForbidden {
 		t.Fatalf("Stream() error = %v, want terminal FORBIDDEN", err)
 	}
-	if !sawObservation(observations, ObservationTerminalError, "") || observations[len(observations)-1].Code != CodeForbidden {
+	if !sawObservation(observations, ObservationTerminalError, "") || observations[len(observations)-2].Code != CodeForbidden || observations[len(observations)-1].Kind != ObservationStreamClosed {
 		t.Fatalf("terminal observation = %#v, want FORBIDDEN", observations)
 	}
 }

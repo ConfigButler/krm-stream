@@ -6,6 +6,11 @@ Follow the standing [design rules](../../CONTRIBUTING.md#design-rules) and
 [release policy](../releasing.md). [Proposal 0005](0005-kubernetes-stream-and-save-semantics.md)
 explains the unresolved tradeoffs; this document owns work order and acceptance criteria.
 
+[Proposal 0007](0007-shared-stream-host-integration.md) proposes bounded HTTP delivery, lifecycle
+observations and tested shared-host composition. That work can support the authorization bounds
+and continuation measurements below, but adds no dependency or acceptance gate to this plan.
+Hosts may demonstrate the existing requirements with their own bounded sinks and instrumentation.
+
 ## Baseline and order
 
 Use the [adoption guide](../adopting.md), [saving guide](../saving.md) and

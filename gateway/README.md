@@ -103,3 +103,13 @@ For shared streams, set `Options.ReauthorizationInterval` (for example, 30 secon
 including during quiet periods; denial or timeout stops only that subscriber. Zero interval keeps
 cycle-only checks. See [authorization](../docs/auth.md) for callback contracts and capacity planning.
 Use `kube.SubjectAccessReviewAuthorizer` for Kubernetes-backed subscriber authorization.
+
+`Options.WriteTimeout` bounds each HTTP header/frame/comment write plus flush. Zero installs no
+library deadline; the [shared-host example](kube/examples/sharedstream/README.md) chooses five seconds.
+An unsupported writer aborts with `http_transport_rejected` before a logical stream opens. Use
+`CheckHTTPStreaming` in a mounted middleware test; it clears the write deadline without writing.
+
+`stream_closed` balances logical stream opens; `shared_subscription_opened` and
+`shared_subscription_closed` describe active attachments, not upstream watch counts. The observer
+is synchronous and concurrent: update counters promptly and do not reenter the gateway.
+See [operations](../docs/operations.md) for exact counting and timeout contracts.

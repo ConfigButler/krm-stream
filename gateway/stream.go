@@ -90,6 +90,9 @@ type Gateway struct {
 	// HeartbeatInterval controls SSE heartbeats when ServeStream is used. Zero uses the package
 	// default. It has no effect on the transport-neutral Stream method.
 	HeartbeatInterval time.Duration
+	// WriteTimeout bounds each HTTP write-plus-flush operation. Zero installs no deadline.
+	// It does not bound generic Stream sinks, callbacks or time waiting for delivery locks.
+	WriteTimeout time.Duration
 
 	// ReauthorizationInterval rechecks each subscriber independently, even on quiet streams.
 	// Zero disables timed checks; snapshot cycles always reauthorize.
@@ -117,6 +120,7 @@ func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, 
 func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, scope Scope, requested Projection, sink Sink) error {
 	sink = &sequenceSink{sink: sink}
 	g.observe(Observation{Kind: ObservationStreamOpened, Scope: scope})
+	defer g.observe(Observation{Kind: ObservationStreamClosed, Scope: scope})
 	// Redaction revisions are per connection. Unlike suppression state they survive resync cycles, so
 	// the first snapshot after a gap can report a withheld value that changed while disconnected.
 	revisions := map[string]map[string]redactionState{}

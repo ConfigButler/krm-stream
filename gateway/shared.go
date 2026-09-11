@@ -57,7 +57,7 @@ type SharedOptions struct {
 	// QueueDepth is the maximum number of live events a subscriber may lag before it is resnapshotted.
 	// Zero uses 256.
 	QueueDepth int
-	// Observer receives low-cardinality overflow signals. It must not block.
+	// Observer receives subscription-lifecycle and overflow signals. It must not block.
 	Observer Observer
 }
 
@@ -239,6 +239,7 @@ func (sub *subscriber) end(reason error) {
 		return
 	}
 	sub.closed = true
+	sub.scope.backend.observe(Observation{Kind: ObservationSharedSubscriptionClosed, Scope: sub.scope.scope})
 	sub.reason = reason
 	close(sub.ch)
 }
@@ -260,6 +261,7 @@ func (s *sharedScope) subscribe() (Watcher, error) {
 		awaiting: true,
 	}
 	s.subs[sub] = struct{}{}
+	s.backend.observe(Observation{Kind: ObservationSharedSubscriptionOpened, Scope: s.scope})
 
 	// The warm cache, and the entire point of the exercise: if the upstream snapshot is already
 	// complete, this consumer gets its whole reset…synced now, from memory, and the API server never

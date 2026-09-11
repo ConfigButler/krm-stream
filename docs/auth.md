@@ -102,7 +102,7 @@ opts.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend
 ```
 
 The [`SubjectAccessReviewAuthorizer`](../gateway/kube/authz.go) adapter delegates the decision to
-Kubernetes. `subjectOf` maps the principal to the Kubernetes username and groups. The adapter checks
+Kubernetes. `subjectOf` supplies the API-server-resolved username, groups, UID and extras. The adapter checks
 both `list` and `watch`. An incomplete review is refused, and an explicit `Denied` wins over
 `Allowed`.
 
@@ -116,3 +116,18 @@ The host owns writes, CSRF protection, audit and write authorization. Before a m
 `gateway.ValidateMergePatch` with the effective projection and current object, and include the
 captured UID and resourceVersion preconditions. Project any resource returned to the browser.
 See [saving](saving.md) for the complete flow.
+
+## Tested shared-host composition
+
+The [shared ConfigMap host](../gateway/kube/examples/sharedstream/README.md) demonstrates a local
+SelfSubjectReview helper using participant credentials, service-account SARs and data access,
+fixed scope, session/token expiry and bounded HTTP delivery. Identity resolution is an example,
+not a public library authentication API. It does not re-resolve identity on every timed check.
+
+`ReauthorizationTimeout` applies to periodic callbacks after acquiring the delivery gate. Opening
+and cycle authorization need their own host callback deadlines. Do not put a short callback deadline
+on the entire healthy stream. Write bounds limit in-flight HTTP I/O, not all gate waiting, backend
+operations or callback work; declare and measure the total revocation budget under the intended load.
+For 200 allowed participants, opening can issue 400 SARs plus 200 SSRs. Timers can align, recovery
+adds checks, and client-side throttling consumes callback budgets. Neither the example's rate settings
+nor Voter's reported rehearsal results are production defaults or supported-version evidence.
