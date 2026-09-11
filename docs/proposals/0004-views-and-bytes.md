@@ -108,15 +108,6 @@ The TypeScript transport checks every sequence number. A missing, repeated, malf
 number closes the transport and reports a gap; the managed connector retries for a fresh snapshot. `seq` is not
 an SSE `id` and does not provide replay or resume semantics.
 
-## Convergence
-
-After a complete snapshot, once upstream changes quiesce and pending updates are processed and
-delivered, the authoritative UID map converges over projected content excluding RV plus redaction
-records. This does not promise equality with the API server while updates are in flight. A final
-bookkeeping-only change in any projection, or a final status-only change under `krm-spec/v1`, can be
-suppressed permanently: visible content has converged while the held RV remains older. Snapshot
-completeness, pruning only at `synced`, ordering and per-connection redaction semantics still apply.
-
 ## Consequences
 
 - `krm-spec/v1` makes a status-blind editor cheap under controller churn without weakening the

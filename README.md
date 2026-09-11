@@ -67,34 +67,35 @@ server.
 
 ```mermaid
 flowchart LR
-  person["Person\nediting a form"]
-  browser["Your browser app\n@configbutler/krm-stream"]
-  store["LiveResourceStore\nbase + local draft + live update\nthree-way merge"]
-  host["Your Go application\nidentity, authorization, scope\nprojection and redaction"]
-  api["Kubernetes API\nand resource watch"]
-  resources["KRM resources\napps, policies, databases,\nplatform and business objects"]
-  save["Your save endpoint\nvalidates and applies a patch"]
+  api["Kubernetes API"]
+  gateway["Go gateway<br/>Authorized scope, projection and redaction"]
+  store["Browser store<br/>Delivered state, local draft and conflicts"]
+  ui["Your form or live view"]
+  save["Your Go save endpoint<br/>Write authorization and patch validation"]
 
-  person --> browser --> store
-  store <-->|"snapshots and live deltas (SSE)"| host
-  host <-->|"read and watch"| api --> resources
-  store -->|"draft, conflicts, merge patch"| browser
-  browser -->|"explicit save"| save --> api
+  api -->|"Snapshot and watch updates"| gateway
+  gateway -->|"One-way SSE"| store
+  store -->|"Render draft and live status"| ui
+  ui -->|"Local edits"| store
+  ui -->|"On Save: capture patch, UID and RV from store"| save
+  save -->|"Conditional PATCH"| api
 
-  classDef person fill:#fff3cd,stroke:#d39e00,color:#3f3000;
-  classDef browser fill:#dff3ff,stroke:#1677a4,color:#062f45;
-  classDef host fill:#e4f7e8,stroke:#27834c,color:#113d23;
-  classDef api fill:#f8e0ef,stroke:#a83970,color:#4b1230;
-  classDef store fill:#ede7ff,stroke:#6750a4,color:#2d1e5c;
-  class person person;
-  class browser,store browser;
-  class host,save host;
-  class api,resources api;
+  classDef library fill:#dff3ff,stroke:#1677a4,color:#062f45;
+  classDef application fill:#e4f7e8,stroke:#27834c,color:#113d23;
+  classDef upstream fill:#f8e0ef,stroke:#a83970,color:#4b1230;
+  class gateway,store library;
+  class save,ui application;
+  class api upstream;
 ```
 
 The library owns the read stream and browser reconciliation. Your application owns identity,
 authorization policy, Kubernetes credentials, and writes. The browser never receives a Kubernetes
-credential or a raw API-server URL.
+credential or a raw API-server URL. The blue boxes are the library; the green boxes are your product.
+A successful write returns through the Kubernetes watch as another live update.
+
+Each connection starts with a complete projected snapshot, then follows visible changes. The store
+keeps that delivered state separate from local edits. A quiet stream can still hold an older write
+version: see [why a quiet stream can reject a save](docs/adopting.md#why-a-quiet-stream-can-still-reject-a-save).
 
 ## Start here
 

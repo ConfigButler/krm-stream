@@ -20,8 +20,8 @@ shipped in [0.3.0](../../packages/krm-stream/CHANGELOG.md). Use the
 | 3 | Harden real-API save composition and identity races | Exact-commit API evidence, separate from fake-client CI. |
 | 4 | Measure and implement upstream continuation | Same-workload comparison proves continuity, bounded recovery and authorization. |
 
-Review these as separate changes. Baseline measurement can run alongside priorities 1–3. Complete
-the normative amendment before the next release presenting convergence as settled. Adopter-reported
+Review the remaining priorities as separate changes. Baseline measurement can run alongside
+priorities 2–3. The normative amendment is complete; see priority 1’s evidence. Adopter-reported
 unit tests support adoption, but do not establish real-cluster composition, consumer readiness or
 200-attendee capacity.
 

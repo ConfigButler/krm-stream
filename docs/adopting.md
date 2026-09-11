@@ -138,13 +138,45 @@ const store = new LiveResourceStore(withOpenAPIKeyedLists(defaultPolicy, deploym
 `x-kubernetes-list-type: map` with `x-kubernetes-list-map-keys` are merged by key; every other list
 stays safely atomic.
 
-The [convergence contract](../spec/v1.md#6-ordering-delivery--the-state-guarantee) covers projected
-content excluding `metadata.resourceVersion`, plus redaction records, after upstream quiescence and
-delivery. It does not promise immediate equality while updates are in flight. Bookkeeping-only
-changes, and status-only changes under `krm-spec/v1`, can be suppressed even when they are the final
-write. The held RV still belongs to the delivered revision and is a valid conditional-write
-precondition; it guarantees neither freshness nor success. It is not a downstream resume token:
-each new connection starts a complete snapshot. See [saving](saving.md) for stale-version handling.
+### Why a quiet stream can still reject a save
+
+The gateway sends the fields your view needs. It suppresses updates that change only ignored fields
+or `metadata.resourceVersion`. The browser keeps the version of the revision it actually received.
+That version is still a valid conditional-write precondition, but it may already be out of date.
+
+```mermaid
+sequenceDiagram
+    participant K as Kubernetes API
+    participant G as Gateway using krm-spec/v1
+    participant S as Browser store
+    participant H as Your save endpoint
+    K->>G: Snapshot: replicas 2, status starting, RV 100
+    G->>S: reset, added (replicas 2, RV 100), synced
+    S->>S: User edits draft to replicas 3
+    K->>G: Final write: replicas 2, status ready, RV 101
+    G->>G: Status omitted, visible comparison unchanged
+    Note over G,S: No event: server view stays replicas 2, RV 100<br/>Draft stays replicas 3
+    S->>H: On Save: patch replicas 3 with captured RV 100
+    H->>K: Conditional PATCH with RV 100
+    K-->>H: 409: version precondition failed
+    H-->>S: Report stale version, follow save recovery flow
+```
+
+The displayed server content is right even though the held version is older. The local draft is the
+person's proposed change; it is not part of stream convergence. A failed version precondition does
+not by itself mean the person and server disagree about an editable field. Follow the
+[saving guide](saving.md) to refresh, reconcile and capture a newly reviewed intent.
+
+| Final upstream change | What the gateway delivers | What the browser holds |
+|---|---|---|
+| Bookkeeping metadata only | No event in any built-in projection | Same visible content, older RV |
+| Status only | No event under `krm-spec/v1`; an update under `krm-full/v1` | Spec view can keep an older RV; full view receives live status |
+| Secret token rotates | Under `krm-full/v1` or `krm-spec/v1`, an update with a higher redaction revision | The token remains withheld; its change is visible |
+
+The RV labels above are illustrative opaque strings. Neither RV nor event `seq` provides downstream
+resume: a new connection starts a complete snapshot. The
+[normative contract](../spec/v1.md#6-ordering-delivery--the-state-guarantee) defines the exact comparison
+and its guarantee at each delivered stream position; it does not promise zero transport latency.
 
 ## 4. Share watches only with Kubernetes-backed authorization
 

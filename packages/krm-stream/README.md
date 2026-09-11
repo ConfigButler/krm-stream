@@ -81,11 +81,9 @@ explicit user retry. The low-level fetch and native EventSource connectors remai
 EventSource owns network reconnects but closes on sequence gaps. Use the managed connector for
 bounded recovery and observable lifecycle state.
 
-Convergence covers projected content excluding `metadata.resourceVersion`, plus redaction records,
-once upstream changes quiesce and pending updates arrive. Suppressed final changes can leave the
-held RV older: it belongs to the delivered revision and remains a valid conditional-write
-precondition, with no freshness or downstream resume guarantee. See the
-[contract](../../spec/v1.md#6-ordering-delivery--the-state-guarantee).
+A quiet stream can still hold an older write version. See the
+[visual explanation](../../docs/adopting.md#why-a-quiet-stream-can-still-reject-a-save) and
+[normative contract](../../spec/v1.md#6-ordering-delivery--the-state-guarantee).
 
 `store.captureSave(uid)` captures a detached patch, UID and base resourceVersion together.
 `store.captureReconciliation(uid)` guards a projected asynchronous response against newer watch state.

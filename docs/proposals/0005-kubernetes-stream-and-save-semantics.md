@@ -1,6 +1,6 @@
 # Proposal 0005: Stream and conditional-save tradeoffs
 
-**Status: design rationale. Normative convergence clarification remains pending.**
+**Status: design rationale. [Normative convergence clarification](../../spec/v1.md#6-ordering-delivery--the-state-guarantee) adopted.**
 
 [Proposal 0006](0006-stream-and-save-implementation-plan.md) owns the remaining work and acceptance
 criteria. Current adoption behavior belongs in the [saving guide](../saving.md). Managed recovery,
@@ -58,33 +58,15 @@ shipped editor outcomes. A refreshed base enables review; it cannot promise the 
 
 ## Convergence needs precise equality
 
-[Spec §3](../../spec/v1.md#3-projection-and-redaction--part-of-the-wire-not-an-implementation-detail)
-explicitly permits status suppression. Proposal 0004 explicitly excludes resourceVersion from the
-digest. But §6 says the consumer map equals the projected view and promises delivery of the final
-state. Literal whole-object equality includes resourceVersion. A final suppressed metadata/status
-write can leave that field behind indefinitely.
+The former §6 invariant allowed a reader to expect whole-object equality, including resourceVersion,
+while the implemented suppression comparison already excluded it. A final suppressed metadata/status
+write could leave the held version behind indefinitely. The “corresponding logical stream position”
+wording limited when equality applied, but did not define the right comparison.
 
-This is at least an ambiguity between the declared suppression rule and the broad invariant. We
-should resolve it explicitly, not claim that current code gives exact Kubernetes-object equality at
-all times. The “corresponding logical stream position” wording limits the invariant, but does not
-clearly tell adopters which version remains meaningful after suppression.
-
-**Recommended clarification, for review:**
-
-> Convergence is over the declared visible comparison: projected object content excluding
-> metadata.resourceVersion, together with the stream's redaction records. The resourceVersion in a
-> delivered object is genuine and belongs to that delivered revision; suppressed updates do not
-> refresh it. It can be echoed as a conditional-write precondition, but is not a current-version
-> guarantee or a downstream resume checkpoint.
-
-Keep completeness within the projection, safe snapshot pruning, and within-cycle ordering as separate
-invariants. Scope redaction counters to one connection; do not equate counters from separate
-connections. Do not change opaque-version handling in the browser.
-
-This documents the implemented semantics, but it narrows how a reader might interpret the existing
-invariant. Call it out in release notes. If the project instead wants exact projected-object equality
-including version metadata, it needs a different emission policy; that cannot be presented as a
-wording-only fix.
+[Spec §6](../../spec/v1.md#6-ordering-delivery--the-state-guarantee) now keeps that positional guarantee
+and defines its comparison explicitly. [Executable evidence](../../conformance/README.md#convergence-evidence)
+covers both suppressed final writes and delivered redaction changes. Wire emissions are unchanged;
+the narrowed guarantee is recorded through the conventional-commit release process.
 
 ## Host write strategies
 

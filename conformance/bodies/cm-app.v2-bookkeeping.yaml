@@ -1,5 +1,5 @@
-# The baseline ConfigMap. Note the label key: it contains dots AND a slash, and it is ONE
-# path segment — ["metadata","labels","app.kubernetes.io/name"]. Dot-joining it is the R-ID bug.
+# A final bookkeeping-only revision of cm-app.v1: visible data stays the same.
+# Every built-in projection ignores these added managedFields and last-applied metadata.
 apiVersion: v1
 kind: ConfigMap
 metadata:

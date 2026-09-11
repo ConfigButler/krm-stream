@@ -126,6 +126,7 @@ Every fixture names the rule it defends, in `why:`. The ones that catch real bug
 | `nested-field-removed` | `added`/`modified` **replace**; a deep-merge would resurrect a field the server deleted (a ghost) |
 | `status-follow-live` | `status` is read-only under the full projection: it follows the server live, and never becomes dirty, never conflicts, never enters a patch |
 | `status-only-churn` | a final status-only write under spec projection is suppressed; visible content converges with an older held RV and an intact spec edit |
+| `final-redaction-rotation` | a final hidden-value change emits a redaction revision even when projected content excluding RV is unchanged |
 | `final-bookkeeping-only` | a final ignored bookkeeping write is suppressed; visible content converges with an older held RV |
 | `edit-vs-unrelated-change` | **R-THREEWAY** — the base is the previous *server* object |
 | `conflict-and-converge` | a conflict clears when the server's value arrives at what you typed |
@@ -166,13 +167,16 @@ reader trust a mental model that will mislead them the next time.
 ## Convergence evidence
 
 The [normative invariant](../spec/v1.md#6-ordering-delivery--the-state-guarantee) and
-[projection decision](../docs/proposals/0004-views-and-bytes.md#convergence) define convergence over
-projected content excluding RV plus redaction records after quiescence and delivery.
+[suppression decision](../docs/proposals/0004-views-and-bytes.md#suppression) share one comparison.
 [Final bookkeeping](fixtures/final-bookkeeping-only.yaml) and
 [final spec-only status churn](fixtures/status-only-churn.yaml) run through the
 [gateway conformance suite](../gateway/stream_conformance_test.go) and the client object and SSE
 suites. The [convergence test](../packages/krm-stream/test/convergence.test.ts) compares the held
 content with the final upstream body under that projection and asserts the older held RV explicitly.
+The [gateway suppression test](../gateway/stream_test.go) also checks the suppression observation
+and original delivered object under all three built-in projections.
+The symmetric [final Secret rotation](fixtures/final-redaction-rotation.yaml) must emit its changed
+redaction revision; that same client test checks the held records at each delivered upsert.
 Existing snapshot, pruning, ordering and redaction tests remain part of `task test`.
 
 This narrows the promised invariant without changing wire emissions. The conventional `fix:` commit
