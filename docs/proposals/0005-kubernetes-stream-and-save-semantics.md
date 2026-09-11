@@ -1,11 +1,9 @@
 # Proposal 0005: Stream and conditional-save tradeoffs
 
-**Status: design rationale. [Normative convergence clarification](../../spec/v1.md#6-ordering-delivery--the-state-guarantee) adopted.**
+**Status: design rationale for the remaining stream and save work.**
 
-[Proposal 0006](0006-stream-and-save-implementation-plan.md) owns the remaining work and acceptance
-criteria. Current adoption behavior belongs in the [saving guide](../saving.md). Managed recovery,
-bounded reauthorization and the conditional editor shipped in 0.3.0; their implementation phases
-are superseded by the current work plan.
+[Proposal 0006](0006-stream-and-save-implementation-plan.md) owns work order and acceptance criteria.
+Use the [saving guide](../saving.md) for current host integration.
 
 Kubernetes owns identity and conditional writes. The library supplies projected reads and one draft
 store; the host owns credentials, write policy and presentation. The sections below explain the
@@ -13,37 +11,9 @@ tradeoffs that still constrain the remaining work.
 
 ## Quiet views and write versions
 
-Consider a Deployment editor using `krm-spec/v1`. The numbers below are illustrative labels. The
-browser echoes resourceVersion strings; it must not parse them or infer ordering from them.
-
-```mermaid
-sequenceDiagram
-    participant C as Controller
-    participant K as Kubernetes
-    participant G as Gateway
-    participant E as Editor and store
-    participant H as Host endpoint
-    K->>G: Object A, resourceVersion 100
-    G->>E: Projected object A, resourceVersion 100
-    E->>E: User edits spec
-    C->>K: Update status
-    K->>G: Same spec, new status, resourceVersion 101
-    G->>G: Visible digest unchanged, suppress event
-    E->>H: Captured patch with resourceVersion 100
-    H->>K: Conditional PATCH at 100
-    K-->>H: 409: version precondition failed
-    H-->>E: HTTP 409
-    E->>H: Most-recent projected GET
-    H->>K: GET
-    K-->>H: Object A, resourceVersion 101
-    H-->>E: Same visible spec, resourceVersion 101
-    E->>E: Guard accepts GET, base advances, no draft conflict
-    Note over C,E: Another status write before the next PATCH can repeat the 409
-```
-
-The accepted GET already refreshes the base. A snapshot is not required for this example to recover.
-The problem is that another write can invalidate that base before the next PATCH. This is possible
-with any watch-fed editor; suppression makes it especially common and less visible.
+The [quiet-stream example](../saving.md#why-a-quiet-stream-can-still-reject-a-save) shows why a
+suppressed update can leave a valid but stale write precondition. A guarded GET can refresh the base
+without a snapshot, but another write can invalidate it before the next PATCH.
 
 There are three different facts a UI must not collapse into one “conflict” label:
 
@@ -54,19 +24,7 @@ There are three different facts a UI must not collapse into one “conflict” l
 - **An ownership conflict exists:** an apply operation disputes another field manager's ownership.
 
 The [saving guide](../saving.md#what-the-person-editing-sees) maps these distinctions to the
-shipped editor outcomes. A refreshed base enables review; it cannot promise the next save succeeds.
-
-## Convergence needs precise equality
-
-The former §6 invariant allowed a reader to expect whole-object equality, including resourceVersion,
-while the implemented suppression comparison already excluded it. A final suppressed metadata/status
-write could leave the held version behind indefinitely. The “corresponding logical stream position”
-wording limited when equality applied, but did not define the right comparison.
-
-[Spec §6](../../spec/v1.md#6-ordering-delivery--the-state-guarantee) now keeps that positional guarantee
-and defines its comparison explicitly. [Executable evidence](../../conformance/README.md#convergence-evidence)
-covers both suppressed final writes and delivered redaction changes. Wire emissions are unchanged;
-the narrowed guarantee is recorded through the conventional-commit release process.
+editor outcomes. A refreshed base enables review; it cannot promise the next save succeeds.
 
 ## Host write strategies
 
@@ -116,8 +74,8 @@ This example is an inference from ownership semantics: using one manager for 200
 provide user-to-user optimistic locking. Conversely, one manager per tab changes ownership and
 managedFields growth; it is not a free concurrency fix. A manager name is not authentication or RBAC.
 
-Spec §3 permits SSA but describes saves as constrained writes over edited paths. Clarify that SSA
-needs the host's intended managed field set and omission/deletion policy. `ValidateMergePatch` and
+Spec §3 requires the host to define its intended managed field set and omission/deletion policy for
+SSA. `ValidateMergePatch` and
 `captureSave().patch` remain merge-patch-specific. The store's local keyed-list merge does not turn
 that output into strategic merge patch or apply configuration.
 
@@ -180,7 +138,7 @@ Upstream continuation is a named follow-up, ahead of any downstream replay desig
 | Add a write-base/read-ticket abstraction | New host/server protocol | Could coordinate reads and intended writes | State, expiration, identity binding and replay concerns; too much core machinery now |
 | Move host to SSA or targeted JSON Patch | No SSE change | Different write tradeoffs | Host policy/validation work; not interchangeable concurrency semantics |
 
-**Recommendation:** take the first option now. Prefer complete existing event shapes over a new
+**Current choice:** retain existing emissions and explicit host save outcomes. Prefer complete existing event shapes over a new
 version-only event if measurements later justify version delivery. If changing a named projection's
 promised suppression behavior, use an explicit new contract/projection identity or a coordinated
 pre-1.0 change; do not silently repurpose `krm-spec/v1`. Pre-release naming flexibility is useful,

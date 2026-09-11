@@ -1,6 +1,6 @@
 # Proposal 0006: Remaining stream and save work
 
-**Status: active follow-up plan, reviewed 2026-09-11 against 0.3.0 and adopter feedback.**
+**Status: active follow-up plan.**
 
 Follow the standing [design rules](../../CONTRIBUTING.md#design-rules) and
 [release policy](../releasing.md). [Proposal 0005](0005-kubernetes-stream-and-save-semantics.md)
@@ -8,9 +8,7 @@ explains the unresolved tradeoffs; this document owns work order and acceptance 
 
 ## Baseline and order
 
-Managed recovery, bounded reauthorization, differentiated save outcomes and the copyable Vue adapter
-shipped in [0.3.0](../../packages/krm-stream/CHANGELOG.md). Use the
-[adoption guide](../adopting.md), [saving guide](../saving.md) and
+Use the [adoption guide](../adopting.md), [saving guide](../saving.md) and
 [conditional editor](../../examples/conditional-save/README.md) for current behavior.
 
 | Priority | Remaining work | Completion evidence |
@@ -21,9 +19,7 @@ shipped in [0.3.0](../../packages/krm-stream/CHANGELOG.md). Use the
 | 4 | Measure and implement upstream continuation | Same-workload comparison proves continuity, bounded recovery and authorization. |
 
 Review the remaining priorities as separate changes. Baseline measurement can run alongside
-priorities 2–3. The normative amendment is complete; see priority 1's evidence. Adopter-reported
-unit tests support adoption, but do not establish real-cluster composition, consumer readiness or
-200-attendee capacity.
+priorities 2–3. Unit tests do not establish real-cluster composition, consumer readiness or capacity.
 
 ## 1. Define convergence precisely
 
@@ -132,8 +128,8 @@ Documentation-only edits need link and diagram checks, not a cluster rebuild.
 
 Consumer acceptance remains separate: pin npm and both Go modules, check consumer CI/image
 toolchains, and exercise concurrent editing, later typing during saves, recovery, session expiry and
-UID replacement in the browser. Voter's 30s recheck / 5s timeout and 60s termination target require
-measurement under its actual 200-attendee workload with bounded callbacks and sinks.
+UID replacement in the browser. Reauthorization intervals, timeouts and termination targets require measurement under the host
+workload with bounded callbacks and sinks.
 
 Version-only events, independent content/delivery switches, downstream replay, write tickets,
 automatic conflict-free retry and a general SSA abstraction remain deferred until a concrete use

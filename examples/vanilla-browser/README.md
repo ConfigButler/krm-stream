@@ -16,7 +16,8 @@ Secret values. Useful fixtures include:
 
 | Fixture | Demonstrates |
 |---|---|
-| `status-only-churn` | Status updates while an editable draft remains intact. |
+| `status-follow-live` | Live status updates while an editable draft remains intact. |
+| `status-only-churn` | Spec projection suppresses status updates while retaining edits. |
 | `conflict-and-converge` | A real conflict followed by server convergence. |
 | `edit-vs-unrelated-change` | An unrelated server update preserves the local edit. |
 | `secret-redaction` | Redacted values remain unavailable and read-only. |

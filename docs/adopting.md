@@ -31,25 +31,12 @@ if errors.As(err, &serr) {
 }
 ```
 
-They return the interface rather than `*StreamError` on purpose. A fallible function returning a
-concrete pointer type is the Go typed-nil trap: assign its result into a variable already declared as
-`error` and a *successful* call comes back non-nil, because an interface holding a typed nil is not
-nil. In a scope check that is a refusal you cannot explain. In an authorization check written the
-same way, with the condition inverted, it is an admission you never see.
+### Targets with a path prefix
 
-## 1b. Targets, and hosts that carry a path
-
-A `rest.Config` whose `Host` includes a path prefix works. A kcp workspace URL
-(`https://kcp.example/clusters/root:org:ws`) is an ordinary host as far as client-go is concerned, and
-the dynamic client appends `/apis/...` to it correctly. Nothing in the gateway parses, rewrites or
-second-guesses that URL: the host resolves a target to a backend, and the backend is whatever
-`rest.Config` you built.
-
-Build that URL with `kube.NewBackendForConfig(cfg)` rather than `kube.NewBackend(dynamicClient)` when
-you can. Both work, but only the former knows the address it dialed, so an upstream failure can name
-it. That matters most exactly here: get a path-prefixed URL subtly wrong (two `/clusters/` segments,
-say) and the API server answers `the server could not find the requested resource`, which is
-indistinguishable from "that CRD is not installed" until the error says which URL it asked.
+A `rest.Config.Host` may include a path prefix, such as a kcp workspace URL
+(`https://kcp.example/clusters/root:org:ws`). The dynamic client preserves it when constructing API
+requests. Use `kube.NewBackendForConfig(cfg)` to include the endpoint in upstream error diagnostics;
+`kube.NewBackend(dynamicClient)` also works when a dynamic client already exists.
 
 ## 2. Mount the same-origin cookie endpoint
 

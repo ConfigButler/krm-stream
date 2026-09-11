@@ -32,20 +32,18 @@ product can show live cluster state while people are editing it.
 
 **Probably not, if:**
 
-- You just want a **generic three-way merge library**. This one knows what a `resourceVersion` is,
-  that `spec.containers` is keyed by `name` and not by index, and that a redacted field must never be
-  written back. That knowledge is the whole point; if you do not want it, it is weight.
+- You just want a **generic three-way merge library**. This store includes KRM identity, projection
+  and redaction rules, plus optional schema-based keyed-list merging.
 - You want a **ready-made Kubernetes dashboard**. Use [Headlamp](https://headlamp.dev/). See
   [alternatives](docs/alternatives.md).
 - You want to **write to the cluster from the browser**. krm-stream is the read-and-edit half: it
-  hands your application a validated merge patch, and your application performs the write. Though if
-  you are doing that, you probably want this library anyway, because it is the thing that tells you
-  the patch is safe to apply. See [saving edits safely](docs/saving.md).
+  captures a merge patch and version together. Your application validates and performs the write. See [saving edits safely](docs/saving.md).
 
 ## What is KRM?
 
 **KRM** is the Kubernetes Resource Model: the shape every Kubernetes object has (`apiVersion`,
-`kind`, `metadata`, a desired `spec`, an observed `status`). Custom resources use the same shape,
+`kind`, `metadata`, and kind-specific fields such as `spec`, `status` or ConfigMap `data`). Custom
+resources use the same conventions,
 which is why this works for your product's own objects, a `Database`, a `FeatureFlag`, a `Tenant`,
 and not only for cluster infrastructure.
 
@@ -55,11 +53,10 @@ Never touched a cluster? The [glossary for frontend developers](docs/glossary.md
 
 Kubernetes already has a good change feed: a watch, documented under
 [efficient detection of changes](https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes).
-A browser cannot use it directly. Watching requires a cluster credential, the API server serves no
-CORS, and a watch hands back whole objects including `Secret` data. The gateway holds the credential,
-withholds what the browser should not see, and re-frames the stream as SSE that `EventSource` reads
-natively. It also shares one upstream watch per scope, so ten tabs are not ten watches on the API
-server.
+Direct browser access requires exposing cluster credentials and arranging cross-origin access.
+A raw watch also carries whole objects, including Secret values. The embedded gateway uses host-owned
+credentials, enforces the selected disclosure policy and emits SSE. Hosts can opt into one shared
+upstream watch per scope with per-subscriber authorization.
 
 [Why a gateway](docs/why-a-gateway.md) works through this in full.
 

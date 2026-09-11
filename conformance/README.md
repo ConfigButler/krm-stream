@@ -1,9 +1,6 @@
 # conformance — the shared contract, executable
 
-This directory is the reason `krm-stream` is one repo and not three.
-
-A protocol is only as real as the tests both sides run. Here, **one YAML file describes one scenario
-end to end**: what the Kubernetes watch does, what the gateway must therefore put on the wire, and what
+**One YAML file describes one scenario end to end**: what the Kubernetes watch does, what the gateway must therefore put on the wire, and what
 a client that consumed that wire (plus some local edits) must then be holding. The Go suite and the
 TypeScript suite load the *same* files. A protocol change that breaks either side fails both, in the
 same commit.
@@ -87,8 +84,7 @@ name does not) obvious at a glance.
 `watch:` models conditions handled across the gateway pipeline — API-server watch behavior, browser
 disconnects, and client-go cache tombstones. Where an operation maps to Kubernetes API behavior, the reference is
 [docs/facts/kubernetes-api-concepts.md](../docs/facts/kubernetes-api-concepts.md), which is a reading
-of the [API concepts page](https://kubernetes.io/docs/reference/using-api/api-concepts/) rather than a
-reading of anyone's memory. That distinction has already cost us two bugs.
+of the [API concepts page](https://kubernetes.io/docs/reference/using-api/api-concepts/) with links to upstream documentation and separate real-cluster evidence.
 
 | op | means | the gateway must |
 |---|---|---|
@@ -178,7 +174,3 @@ and original delivered object under all three built-in projections.
 The symmetric [final Secret rotation](fixtures/final-redaction-rotation.yaml) must emit its changed
 redaction revision; that same client test checks the held records at each delivered upsert.
 Existing snapshot, pruning, ordering and redaction tests remain part of `task test`.
-
-This narrows the promised invariant without changing wire emissions. The conventional `fix:` commit
-records the clarification for Release Please's generated release notes; no manual changelog entry
-is maintained. Adoption recipes, real-API save hardening and watch continuation remain subsequent work.

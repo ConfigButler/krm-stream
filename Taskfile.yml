@@ -365,7 +365,7 @@ tasks:
   # The one rung a fake watch cannot reach. Everything the gateway BELIEVES about Kubernetes — that a
   # streaming list ends with an `initial-events-end` bookmark, that a 410 arrives as a watch error,
   # that resourceVersions are orderable decimals — is unverified until something asks a real API
-  # server. See docs/proposals/0002-real-cluster.md.
+  # server. See CONTRIBUTING.md#test-levels and docs/facts/observed-v1.36.2+k3s1.md.
   cluster-up:
     desc: "A real Kubernetes (k3d, {{.K3S_IMAGE}}) — with real etcd, because that is what we are verifying."
     status:
