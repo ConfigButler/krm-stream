@@ -128,8 +128,19 @@ Documentation-only edits need link and diagram checks, not a cluster rebuild.
 
 Consumer acceptance remains separate: pin npm and both Go modules, check consumer CI/image
 toolchains, and exercise concurrent editing, later typing during saves, recovery, session expiry and
-UID replacement in the browser. Reauthorization intervals, timeouts and termination targets require measurement under the host
-workload with bounded callbacks and sinks.
+UID replacement in the browser. Before lifecycle testing, record the host's reauthorization interval,
+check timeout, maximum revocation-to-stream-closure time and concurrent subscriber workload.
+Use a reference acceptance profile of 30-second rechecks, a 5-second check timeout and closure within
+60 seconds at 200 subscribers. These are measurement targets, not library defaults or guarantees;
+hosts choosing another profile must declare their limits before testing.
+
+Under the declared workload, revoke access or expire a session just after a successful check, and
+separately stall an authorization callback until its context expires. Pass only if every affected
+stream terminates within the declared closure limit, measured from revocation/session expiry or
+the start of the stalled check, respectively. Verify callbacks honor the configured check deadline
+and sinks have bounded completion times. Exercise quiet and active streams; cycle-only checks cannot
+meet a bounded quiet-stream revocation target. See [authorization lifecycle](../auth.md#long-streams-short-tokens)
+for configuration and host responsibilities.
 
 Version-only events, independent content/delivery switches, downstream replay, write tickets,
 automatic conflict-free retry and a general SSA abstraction remain deferred until a concrete use
