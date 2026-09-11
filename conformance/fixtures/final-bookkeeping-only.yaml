@@ -1,0 +1,23 @@
+id: final-bookkeeping-only
+title: A final bookkeeping-only write leaves visible content converged and the held RV older.
+why: >
+  Spec §6 excludes metadata.resourceVersion from convergence. The final upstream write changes only
+  ignored managedFields and last-applied metadata plus RV. No later visible write refreshes the RV.
+suites: [gateway, client]
+scope: { target: demo, version: v1, resource: configmaps, namespace: app }
+projection: krm-full/v1
+watch:
+  - { op: list, bodies: [cm-app.v1] }
+  - { op: modified, body: cm-app.v2-bookkeeping }
+events:
+  - { type: reset }
+  - { type: added, body: cm-app.v1 }
+  - { type: synced }
+client:
+  expect:
+    uids: [cm-app-0001]
+    dirty: []
+    conflicts: []
+    draftSubset:
+      metadata: { resourceVersion: "1001" }
+      data: { log-level: info, replicas: "3" }

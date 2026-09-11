@@ -138,6 +138,10 @@ const store = new LiveResourceStore(withOpenAPIKeyedLists(defaultPolicy, deploym
 `x-kubernetes-list-type: map` with `x-kubernetes-list-map-keys` are merged by key; every other list
 stays safely atomic.
 
+A quiet stream can still hold an older write version. See
+[why a quiet stream can reject a save](saving.md#why-a-quiet-stream-can-still-reject-a-save)
+for the illustrated flow and the host's recovery responsibilities.
+
 ## 4. Share watches only with Kubernetes-backed authorization
 
 `SharedBackend` saves upstream watches but runs as one service identity. Pair it with

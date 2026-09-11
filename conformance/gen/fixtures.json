@@ -510,6 +510,158 @@
     }
   },
   {
+    "id": "final-bookkeeping-only",
+    "title": "A final bookkeeping-only write leaves visible content converged and the held RV older.",
+    "why": "Spec §6 excludes metadata.resourceVersion from convergence. The final upstream write changes only ignored managedFields and last-applied metadata plus RV. No later visible write refreshes the RV.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "configmaps",
+      "namespace": "app"
+    },
+    "projection": "krm-full/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "cm-app.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "cm-app.v2-bookkeeping"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "cm-app.v1"
+      },
+      {
+        "type": "synced"
+      }
+    ],
+    "client": {
+      "expect": {
+        "uids": [
+          "cm-app-0001"
+        ],
+        "dirty": [],
+        "conflicts": [],
+        "draftSubset": {
+          "metadata": {
+            "resourceVersion": "1001"
+          },
+          "data": {
+            "log-level": "info",
+            "replicas": "3"
+          }
+        }
+      }
+    }
+  },
+  {
+    "id": "final-redaction-rotation",
+    "title": "A final Secret rotation must deliver its changed redaction revision.",
+    "why": "Spec §6 includes redaction records in the visible comparison. The final token rotation leaves projected content excluding RV unchanged, but its changed redaction revision MUST reach the client. No later write or snapshot can repair a missed rotation; the hidden token must remain absent.\n",
+    "suites": [
+      "gateway",
+      "client"
+    ],
+    "scope": {
+      "target": "demo",
+      "version": "v1",
+      "resource": "secrets",
+      "namespace": "app"
+    },
+    "projection": "krm-full/v1",
+    "watch": [
+      {
+        "op": "list",
+        "bodies": [
+          "secret-token.v1"
+        ]
+      },
+      {
+        "op": "modified",
+        "body": "secret-token.v2"
+      }
+    ],
+    "events": [
+      {
+        "type": "reset"
+      },
+      {
+        "type": "added",
+        "body": "secret-token.v1-wire",
+        "redacted": [
+          {
+            "path": "/data/token",
+            "rev": 1
+          },
+          {
+            "path": "/data/username",
+            "rev": 1
+          }
+        ]
+      },
+      {
+        "type": "synced"
+      },
+      {
+        "type": "modified",
+        "body": "secret-token.v2-wire",
+        "redacted": [
+          {
+            "path": "/data/token",
+            "rev": 2
+          },
+          {
+            "path": "/data/username",
+            "rev": 1
+          }
+        ]
+      }
+    ],
+    "client": {
+      "expect": {
+        "uids": [
+          "secret-token-0001"
+        ],
+        "dirty": [],
+        "conflicts": [],
+        "draftSubset": {
+          "metadata": {
+            "resourceVersion": "4002"
+          }
+        },
+        "absentPaths": [
+          [
+            "data"
+          ]
+        ],
+        "readOnlyPaths": [
+          [
+            "data",
+            "token"
+          ],
+          [
+            "data",
+            "username"
+          ]
+        ],
+        "patch": null
+      }
+    }
+  },
+  {
     "id": "key-removed-upstream",
     "title": "A map key deleted upstream disappears from the draft — while an in-flight edit survives.",
     "why": "The removal case at map level, and it is subtler than it looks. The server deleted `data.replicas` and the `note` annotation. The user is meanwhile editing `data.log-level`.\nThree things must happen at once, and each is a different rule:\n  - `data.replicas`     -> gone from the draft. The user never touched it, so it follows the\n                           server, and \"follows the server\" includes following it into deletion.\n                           (A UI must drop the row — this is the `structural` signal.)\n  - `metadata.annotations.note` -> likewise gone.\n  - `data.log-level`    -> untouched by the server, so the edit stands, dirty, unconflicted.\n\nA consumer that deep-merges leaves BOTH deleted keys on screen as ghosts the user can still type into — and then a save resurrects them in the cluster.\n",
@@ -1269,7 +1421,7 @@
   {
     "id": "status-only-churn",
     "title": "A status-only update produces no event when the selected projection ignores status.",
-    "why": "`krm-spec/v1` ignores `status`, so a controller-only update must emit no event at all. Meanwhile the user is editing `spec.replicas`; the suppressed status heartbeat must not touch that draft.\nOn a real workload this — not editing — is the dominant traffic on the stream.\n",
+    "why": "`krm-spec/v1` ignores `status`, so a controller-only update must emit no event at all. Meanwhile the user is editing `spec.replicas`; the suppressed status heartbeat must not touch that draft.\nThe status write is final: spec §6 visible content converges without refreshing the held RV 3001 to upstream RV 3002. No later event is needed to satisfy convergence.\nOn a real workload this — not editing — is the dominant traffic on the stream.\n",
     "suites": [
       "gateway",
       "client"
@@ -1328,6 +1480,9 @@
         ],
         "conflicts": [],
         "draftSubset": {
+          "metadata": {
+            "resourceVersion": "3001"
+          },
           "spec": {
             "replicas": 4
           }

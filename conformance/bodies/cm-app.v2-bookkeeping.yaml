@@ -1,0 +1,23 @@
+# A final bookkeeping-only revision of cm-app.v1: visible data stays the same.
+# Every built-in projection ignores these added managedFields and last-applied metadata.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  uid: cm-app-0001
+  name: app-config
+  namespace: app
+  resourceVersion: "1002"
+  managedFields:
+    - manager: bookkeeping
+      operation: Apply
+      apiVersion: v1
+      fieldsType: FieldsV1
+      fieldsV1: {}
+  labels:
+    app.kubernetes.io/name: shop
+  annotations:
+    note: keep
+    kubectl.kubernetes.io/last-applied-configuration: '{"apiVersion":"v1","kind":"ConfigMap"}'
+data:
+  log-level: info
+  replicas: "3"

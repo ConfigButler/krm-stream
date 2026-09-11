@@ -81,6 +81,10 @@ explicit user retry. The low-level fetch and native EventSource connectors remai
 EventSource owns network reconnects but closes on sequence gaps. Use the managed connector for
 bounded recovery and observable lifecycle state.
 
+A quiet stream can still hold an older write version. See the
+[visual explanation](../../docs/saving.md#why-a-quiet-stream-can-still-reject-a-save) and
+[normative contract](../../spec/v1.md#6-ordering-delivery--the-state-guarantee).
+
 `store.captureSave(uid)` captures a detached patch, UID and base resourceVersion together.
 `store.captureReconciliation(uid)` guards a projected asynchronous response against newer watch state.
 See the [complete conditional-save example](../../examples/conditional-save/README.md) and

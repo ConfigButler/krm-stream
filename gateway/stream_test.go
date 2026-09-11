@@ -627,3 +627,51 @@ func TestAuthorizerDeniesBeforeTheWatchIsEverOpened(t *testing.T) {
 		t.Fatal("unreachable")
 	}
 }
+
+// The shared fixture pins full-projection bytes. Here every built-in projection must actively
+// suppress the final bookkeeping write and retain the version of the delivered revision.
+func TestFinalBookkeepingSuppressionAcrossProjections(t *testing.T) {
+	c := corpus(t)
+	base, err := c.Body("cm-app.v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	final, err := c.Body("cm-app.v2-bookkeeping")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, projection := range []Projection{ProjectionRaw, ProjectionFull, ProjectionSpec} {
+		t.Run(string(projection), func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			suppressed := 0
+			gw := &Gateway{
+				Auth: AllowAll{}, Projection: projection,
+				Clients: func(context.Context, string, Principal) (Backend, error) {
+					return &stubBackend{events: []WatchEvent{
+						{Type: WatchAdded, Object: base},
+						{Type: WatchBookmark, InitialEventsEnd: true},
+						{Type: WatchModified, Object: final},
+					}}, nil
+				},
+				Observer: ObserverFunc(func(o Observation) {
+					if o.Kind == ObservationEventSuppressed && o.EventType == EventModified {
+						suppressed++
+						cancel()
+					}
+				}),
+			}
+			sink := &recordingSink{}
+			err := gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, sink)
+			if !equalTypes(types(sink.events), EventReset, EventAdded, EventSynced) {
+				t.Fatalf("final bookkeeping write emitted an event: %v", types(sink.events))
+			}
+			if !errors.Is(err, context.Canceled) || suppressed != 1 {
+				t.Fatalf("final write: error=%v, suppressed=%d; want cancellation after one suppression", err, suppressed)
+			}
+			if got := mustJSON(t, sink.events[1].Object); got != mustJSON(t, base) {
+				t.Fatalf("held object = %s; want original delivered content and RV 1001", got)
+			}
+		})
+	}
+}

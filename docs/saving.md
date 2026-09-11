@@ -50,13 +50,51 @@ It does not grant write permission, choose a projection, fetch the object, issue
 optimistic concurrency. Those stay with the host. Do not use whole-object `PUT`: projected objects are
 intentionally incomplete, and a `PUT` can delete fields the browser never saw.
 
-Every projection can hold an older `metadata.resourceVersion`: all suppress changes to stripped
-bookkeeping metadata, and `krm-spec/v1` additionally suppresses status-only changes. A version
-precondition remains safe: rejection prevents a lost update. Sustained invisible churn can prevent
-save progress, but a 409 is a failed version precondition, not necessarily a disagreement at an
-editable field. An accepted projected GET advances the base without requiring a snapshot. Render
-actual draft conflicts separately; when none exist, explain the refreshed base and offer a newly
-captured save. If reconciliation is refused, preserve the draft and recover before writing again.
+## Why a quiet stream can still reject a save
+
+The gateway sends the fields your view needs. It suppresses updates that change only ignored fields
+or `metadata.resourceVersion`. The browser keeps the version of the revision it actually received.
+That version is still a valid conditional-write precondition, but it may already be out of date.
+
+```mermaid
+sequenceDiagram
+    participant K as Kubernetes API
+    participant G as Gateway using krm-spec/v1
+    participant S as Browser store
+    participant H as Your save endpoint
+    K->>G: Snapshot: replicas 2, status starting, RV 100
+    G->>S: reset, added (replicas 2, RV 100), synced
+    S->>S: User edits draft to replicas 3
+    K->>G: Final write: replicas 2, status ready, RV 101
+    G->>G: Status omitted, visible comparison unchanged
+    Note over G,S: No event: server view stays replicas 2, RV 100<br/>Draft stays replicas 3
+    S->>H: On Save: patch replicas 3 with captured RV 100
+    H->>K: Conditional PATCH with RV 100
+    K-->>H: 409: version precondition failed
+    H-->>S: Report stale version, follow save recovery flow
+```
+
+The displayed server content is right even though the held version is older. The local draft is the
+person's proposed change; it is not part of stream convergence. A failed version precondition does
+not by itself mean the person and server disagree about an editable field. Follow the
+[save outcomes](#what-the-person-editing-sees) to refresh, reconcile and capture a newly reviewed intent.
+
+| Final upstream change | What the gateway delivers | What the browser holds |
+|---|---|---|
+| Bookkeeping metadata only | No event in any built-in projection | Same visible content, older RV |
+| Status only | No event under `krm-spec/v1`; an update under `krm-full/v1` | Spec view can keep an older RV; full view receives live status |
+| Secret token rotates | Under `krm-full/v1` or `krm-spec/v1`, an update with a higher redaction revision | The token remains withheld; its change is visible |
+
+The RV labels above are illustrative opaque strings. Neither RV nor event `seq` provides downstream
+resume: a new connection starts a complete snapshot. The
+[normative contract](../spec/v1.md#6-ordering-delivery--the-state-guarantee) defines the exact comparison
+and its guarantee at each delivered stream position; it does not promise zero transport latency.
+
+Sustained invisible churn can prevent save progress, but a 409 is a failed version precondition,
+not necessarily a disagreement at an editable field. An accepted projected GET advances the base
+without requiring a snapshot. Render actual draft conflicts separately; when none exist, explain
+the refreshed base and offer a newly captured save. If reconciliation is refused, preserve the draft
+and recover before writing again.
 Do not remove concurrency protection or blindly retry the old patch with a newer version.
 
 ## What the person editing sees
