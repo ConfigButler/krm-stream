@@ -8,6 +8,24 @@
   manually invoked independent-identity Kubernetes fixture; no new public identity helper.
 
 
+## [0.4.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.3.0...gateway/kube/v0.4.0) (2026-09-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* `WriteSSEHeaders` is removed; use `Gateway.ServeStream` or `ServeStreamProjection`, which own headers, delivery and cleanup. `SSESink.Heartbeat` now returns an error and its caller must stop the stream on failure. `NewSSESink(io.Writer)` stays generic and installs no HTTP deadline. The v1 wire protocol is unchanged.
+* **kube:** SSARAuthorizer has been removed; use SubjectAccessReviewAuthorizer. The local unscoped krm-stream forwarding package has been removed; use @configbutler/krm-stream.
+
+### Features
+
+* bound HTTP delivery and balance stream lifecycle observations ([#35](https://github.com/ConfigButler/krm-stream/issues/35)) ([6be6cbb](https://github.com/ConfigButler/krm-stream/commit/6be6cbbf63526d0182731489017cbe9c16ad078a))
+* **kube:** remove compatibility shims and sharpen stream/save plans ([#31](https://github.com/ConfigButler/krm-stream/issues/31)) ([7477c2d](https://github.com/ConfigButler/krm-stream/commit/7477c2decc719ac7d7ecd55cc79aa3f1edcefd48))
+
+
+### Documentation
+
+* trim obsolete history and align current integration guidance ([#34](https://github.com/ConfigButler/krm-stream/issues/34)) ([e450334](https://github.com/ConfigButler/krm-stream/commit/e450334ac19c3b39cd546e5a0e6947865afd5e3e))
+
 ## [0.3.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.2.1...gateway/kube/v0.3.0) (2026-09-11)
 
 

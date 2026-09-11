@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.4.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.3.0...@configbutler/krm-stream-v0.4.0) (2026-09-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **kube:** SSARAuthorizer has been removed; use SubjectAccessReviewAuthorizer. The local unscoped krm-stream forwarding package has been removed; use @configbutler/krm-stream.
+
+### Features
+
+* **kube:** remove compatibility shims and sharpen stream/save plans ([#31](https://github.com/ConfigButler/krm-stream/issues/31)) ([7477c2d](https://github.com/ConfigButler/krm-stream/commit/7477c2decc719ac7d7ecd55cc79aa3f1edcefd48))
+
+
+### Bug Fixes
+
+* define content and redaction convergence while suppressed writes retain older RVs ([#33](https://github.com/ConfigButler/krm-stream/issues/33)) ([8b37a92](https://github.com/ConfigButler/krm-stream/commit/8b37a920e95de3485ddc81f0e5a38f66600c3762))
+
 ## [0.3.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.2.1...@configbutler/krm-stream-v0.3.0) (2026-09-11)
 
 
