@@ -31,7 +31,7 @@ vars:
   # Kubernetes 1.35+ is a REQUIREMENT of this library, not a preference: from 1.35, resourceVersion
   # orderability is a Certified Kubernetes conformance requirement, and the gateway relies on it to
   # promise consumers per-object monotonicity. So the cluster we verify against must be one.
-  K3S_IMAGE: rancher/k3s:v1.36.2-k3s1
+  K3S_IMAGE: rancher/k3s:v1.36.4-k3s1
   KUBECONFIG_PATH: '{{.HOME}}/.kube/config' 
 
 tasks:

@@ -2,7 +2,7 @@
 
 ## Prerequisites
 
-The devcontainer provides Go 1.26, Node 22, Task, `kubectl`, and `k3d`.
+The devcontainer provides Go 1.27.1, Node 24, Task, `kubectl`, and `k3d`.
 
 ```bash
 task fixtures-check  # regenerate and verify shared fixture output

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.3/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.5.13/schema.json",
   // The TypeScript half of `gofmt + go vet + golangci-lint`. One binary, one devDependency, and it
   // ships NOTHING: the published bundle is still dependency-free ESM a browser imports with no
   // bundler. Formatting is not a matter of taste here for the same reason gofmt is not — a review of

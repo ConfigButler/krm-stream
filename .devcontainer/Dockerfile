@@ -8,9 +8,9 @@
 # Stage 1 (ci): everything the test suites and CI need.
 # Stage 2 (dev): editor tooling + the non-root `vscode` user.
 
-# Base pinned by digest — the SAME image gitops-api builds on, so this repo's Go behaves
+# Base pinned by digest — the SAME image gitops-reverser builds on, so this repo's Go behaves
 # identically to the one that consumes it.
-FROM golang:1.26.5-bookworm@sha256:18aedc16aa19b3fd7ded7245fc14b109e054d65d22ed53c355c899582bbb2113 AS ci
+FROM golang:1.27.1-bookworm@sha256:648f440f42a0958804efb24df176f806f9d353b41f1c0627f666428e40310f6b AS ci
 
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
@@ -41,21 +41,21 @@ RUN apt-get update \
 # YQ_VERSION            -> https://github.com/mikefarah/yq/releases  (builds conformance/gen/*.json)
 # KUBECTL_VERSION / K3D_VERSION — kept in lockstep with gitops-api, so a cluster stood up
 #   here behaves identically to the one the gateway will really run against.
-# NODE_MAJOR            -> the current Node LTS line. 22 runs `.ts` under `node --test`
+# NODE_MAJOR            -> the current Node LTS line. 24 runs `.ts` under `node --test`
 #   natively (type stripping), which is why this repo's client suite needs ZERO test deps.
 # ACTIONLINT_VERSION    -> https://github.com/rhysd/actionlint/releases
 # HADOLINT_VERSION      -> https://github.com/hadolint/hadolint/releases
 #   A workflow YAML and a Dockerfile were the only files here with no linter, which is how CI came to
 #   pack a bundle it had never built.
 ENV PATH="/go/bin:/usr/local/go/bin:${PATH}" \
-    GOLANGCI_LINT_VERSION=v2.12.2 \
-    TASK_VERSION=v3.51.1 \
-    YQ_VERSION=v4.48.1 \
-    KUBECTL_VERSION=v1.36.2 \
+    GOLANGCI_LINT_VERSION=v2.13.2 \
+    TASK_VERSION=v3.53.1 \
+    YQ_VERSION=v4.53.6 \
+    KUBECTL_VERSION=v1.37.0 \
     K3D_VERSION=v5.9.0 \
-    NODE_MAJOR=22 \
-    ACTIONLINT_VERSION=1.7.7 \
-    HADOLINT_VERSION=2.14.0
+    NODE_MAJOR=24 \
+    ACTIONLINT_VERSION=1.7.12 \
+    HADOLINT_VERSION=2.15.1
 
 RUN test "$(dpkg --print-architecture)" = "amd64" \
     || (echo "This devcontainer currently supports amd64 only." && exit 1)
@@ -104,7 +104,7 @@ RUN groupadd --gid 2000 godev \
     && chgrp -R godev /go && chmod -R 2775 /go \
     && setfacl -d -m g:godev:rwx /go && setfacl -d -m u::rwx /go && setfacl -d -m o::rx /go
 
-RUN go install golang.org/x/tools/cmd/goimports@v0.43.0
+RUN go install golang.org/x/tools/cmd/goimports@v0.50.0
 
 # hadolint ignore=SC2016
 RUN printf '%s\n' 'export PATH="/go/bin:/usr/local/go/bin:${PATH}"' \
@@ -120,10 +120,10 @@ USER root
 ENV DEBIAN_FRONTEND=noninteractive
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-ENV DLV_VERSION=v1.27.0 \
+ENV DLV_VERSION=v1.27.2 \
     GOPLS_VERSION=v0.23.0 \
-    STATICCHECK_VERSION=v0.7.0 \
-    CODEX_VERSION=0.144.3
+    STATICCHECK_VERSION=v0.8.1 \
+    CODEX_VERSION=0.154.0
 
 RUN apt-get update \
     && apt-get -y install --no-install-recommends bash-completion \

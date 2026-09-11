@@ -3,7 +3,7 @@
 [![CodeQL](https://github.com/ConfigButler/krm-stream/actions/workflows/codeql.yml/badge.svg?branch=main)](https://github.com/ConfigButler/krm-stream/actions/workflows/codeql.yml)
 [![npm](https://img.shields.io/npm/v/%40configbutler%2Fkrm-stream?logo=npm&color=cb3837)](https://www.npmjs.com/package/@configbutler/krm-stream)
 [![Runtime dependencies](https://img.shields.io/badge/runtime%20deps-0-2ea44f)](packages/krm-stream/package.json)
-[![Go](https://img.shields.io/badge/go-1.26-blue?logo=go)](gateway/go.mod)
+[![Go](https://img.shields.io/badge/go-1.27.1-blue?logo=go)](gateway/go.mod)
 [![TypeScript](https://img.shields.io/badge/typescript-ESM-3178c6?logo=typescript&logoColor=white)](packages/krm-stream)
 [![License](https://img.shields.io/github/license/ConfigButler/krm-stream)](https://www.apache.org/licenses/LICENSE-2.0)
 [![Open Issues](https://img.shields.io/github/issues/ConfigButler/krm-stream)](https://github.com/ConfigButler/krm-stream/issues)
@@ -200,8 +200,8 @@ browser. Use [`gateway.ValidateMergePatch`](gateway/patch.go) in the host save h
 
 The project is pre-1.0. Protocol and API changes may still be made before 1.0.
 
-- Go 1.26 for the gateway.
-- Node 22 for client development and tests.
+- Go 1.27.1 for the gateway.
+- Node 24 for client development and tests.
 - Kubernetes 1.35+ for strict resource-version ordering. `OrderingLenient` supports known
   non-conformant or aggregated APIs at the cost of per-object monotonic ordering.
 
