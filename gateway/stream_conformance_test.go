@@ -195,3 +195,30 @@ func (s *recordingSink) Emit(_ context.Context, ev Event) error {
 	s.events = append(s.events, ev)
 	return nil
 }
+
+// A final ignored write needs no later visible write to satisfy convergence. Exercise every
+// built-in projection with the same corpus script, waiting for exhaustion before checking silence.
+func TestFinalBookkeepingSuppressionAcrossProjections(t *testing.T) {
+	c := corpus(t)
+	for _, f := range c.Fixtures {
+		if f.ID != "final-bookkeeping-only" {
+			continue
+		}
+		for _, projection := range []Projection{ProjectionRaw, ProjectionFull, ProjectionSpec} {
+			t.Run(string(projection), func(t *testing.T) {
+				f.Projection = projection
+				got := replayFixture(t, c, f)
+				if !equalTypes(types(got), EventReset, EventAdded, EventSynced) {
+					t.Fatalf("final bookkeeping write emitted an event: %v", types(got))
+				}
+				for i, ev := range got {
+					if ev.Seq != uint64(i+1) {
+						t.Fatalf("event %d sequence = %d", i, ev.Seq)
+					}
+				}
+			})
+		}
+		return
+	}
+	t.Fatal("missing final-bookkeeping-only fixture")
+}

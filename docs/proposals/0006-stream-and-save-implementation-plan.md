@@ -15,7 +15,7 @@ shipped in [0.3.0](../../packages/krm-stream/CHANGELOG.md). Use the
 
 | Priority | Remaining work | Completion evidence |
 |---|---|---|
-| 1 | Define convergence precisely | Spec, suppression rules, conformance and release notes agree. |
+| 1 | Define convergence precisely — complete | [Evidence](../../conformance/README.md#convergence-evidence) |
 | 2 | Publish tested deletion-recovery and keep-local recipes | Executed examples preserve unsaved work and unrelated conflicts. |
 | 3 | Harden real-API save composition and identity races | Exact-commit API evidence, separate from fake-client CI. |
 | 4 | Measure and implement upstream continuation | Same-workload comparison proves continuity, bounded recovery and authorization. |
@@ -27,19 +27,7 @@ unit tests support adoption, but do not establish real-cluster composition, cons
 
 ## 1. Define convergence precisely
 
-Change [spec/v1.md](../../spec/v1.md), [proposal 0004](0004-views-and-bytes.md), conformance and release
-notes together. Define convergence over projected content excluding `metadata.resourceVersion`,
-plus redaction records, unless explicit contract review chooses a different emission policy.
-
-Delivered RVs belong to delivered revisions, remain opaque in the browser and are valid conditional
-write preconditions. Suppression does not refresh them; they promise neither freshness nor downstream
-resume. Preserve snapshot completeness, pruning, ordering and per-connection redaction semantics.
-Distinguish convergence after quiescence from equality while updates are in flight. Clarify spec §3
-that SSA needs a host-owned managed-field and omission policy; merge-patch helpers do not supply it.
-
-**Acceptance:** add final-write cases for ignored bookkeeping metadata and spec-only status churn:
-no event, converged visible content, older held RV. Invariant, suppression and save guidance agree.
-Release notes identify the narrowed invariant; unchanged emissions do not make this merely editorial.
+Completed: [contract and executable final-write evidence](../../conformance/README.md#convergence-evidence).
 
 ## 2. Tested adoption recipes
 

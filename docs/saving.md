@@ -51,9 +51,12 @@ optimistic concurrency. Those stay with the host. Do not use whole-object `PUT`:
 intentionally incomplete, and a `PUT` can delete fields the browser never saw.
 
 Every projection can hold an older `metadata.resourceVersion`: all suppress changes to stripped
-bookkeeping metadata, and `krm-spec/v1` additionally suppresses status-only changes. A version
-precondition remains safe: rejection prevents a lost update. Sustained invisible churn can prevent
-save progress, but a 409 is a failed version precondition, not necessarily a disagreement at an
+bookkeeping metadata, and `krm-spec/v1` additionally suppresses status-only changes, including a final
+write. [Convergence](../spec/v1.md#6-ordering-delivery--the-state-guarantee) covers projected content
+excluding RV plus redaction records after quiescence and delivery. Delivered versions belong to
+delivered revisions; they guarantee neither freshness nor downstream resume. A version precondition
+remains valid even when visible content has converged and the held RV is older: rejection prevents a
+lost update. Sustained invisible churn can prevent save progress, but a 409 is a failed version precondition, not necessarily a disagreement at an
 editable field. An accepted projected GET advances the base without requiring a snapshot. Render
 actual draft conflicts separately; when none exist, explain the refreshed base and offer a newly
 captured save. If reconciliation is refused, preserve the draft and recover before writing again.

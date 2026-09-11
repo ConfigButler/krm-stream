@@ -4,6 +4,9 @@ why: >
   `krm-spec/v1` ignores `status`, so a controller-only update must emit no event at all. Meanwhile the
   user is editing `spec.replicas`; the suppressed status heartbeat must not touch that draft.
 
+  The status write is final: spec §6 visible content converges without refreshing the held RV 3001
+  to upstream RV 3002. No later event is needed to satisfy convergence.
+
   On a real workload this — not editing — is the dominant traffic on the stream.
 suites: [gateway, client]
 scope: { target: demo, group: apps, version: v1, resource: deployments, namespace: app }
@@ -25,5 +28,6 @@ client:
     dirty: [[spec, replicas]]               # the ONLY dirty path — status can never be one
     conflicts: []
     draftSubset:
+      metadata: { resourceVersion: "3001" }
       spec: { replicas: 4 }                 # the edit survived suppressed status churn
     patch: { spec: { replicas: 4 } }        # status is NOT in the patch. It cannot be.

@@ -138,6 +138,14 @@ const store = new LiveResourceStore(withOpenAPIKeyedLists(defaultPolicy, deploym
 `x-kubernetes-list-type: map` with `x-kubernetes-list-map-keys` are merged by key; every other list
 stays safely atomic.
 
+The [convergence contract](../spec/v1.md#6-ordering-delivery--the-state-guarantee) covers projected
+content excluding `metadata.resourceVersion`, plus redaction records, after upstream quiescence and
+delivery. It does not promise immediate equality while updates are in flight. Bookkeeping-only
+changes, and status-only changes under `krm-spec/v1`, can be suppressed even when they are the final
+write. The held RV still belongs to the delivered revision and is a valid conditional-write
+precondition; it guarantees neither freshness nor success. It is not a downstream resume token:
+each new connection starts a complete snapshot. See [saving](saving.md) for stale-version handling.
+
 ## 4. Share watches only with Kubernetes-backed authorization
 
 `SharedBackend` saves upstream watches but runs as one service identity. Pair it with

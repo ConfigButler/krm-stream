@@ -5,8 +5,8 @@
 ## Decision
 
 The gateway sends a named, host-authorized projection of each Kubernetes object and suppresses an
-upstream update when the consumer-visible event is unchanged. The goal is not merely smaller status
-events; a consumer that does not render status receives **no event** for status-only churn.
+upstream update when projected content excluding `metadata.resourceVersion`, plus redaction records,
+is unchanged. The goal is not merely smaller status events; a consumer that does not render status receives **no event** for status-only churn.
 
 The object remains a strict subset of the API-server object. The gateway may remove values but never
 add or replace an object value. Information about removed values belongs in the event envelope, never
@@ -27,7 +27,7 @@ A projection applies one of three actions to each path.
 
 | Action | Value on wire | Path disclosed | Event on change |
 |---|---|---:|---:|
-| `send` | yes | n/a | yes |
+| `send` | yes | n/a | yes, except RV alone ([suppression](#suppression)) |
 | `redact` | no | yes, in `redacted[]` | yes |
 | `ignore` | no | no | no |
 
@@ -62,15 +62,16 @@ After projection and redaction revision calculation, the gateway builds a canoni
 
 It hashes that view and emits an `added` or `modified` event only when it differs from the last value
 emitted for that UID in the current snapshot cycle. `resourceVersion` stays in the wire object; it is
-excluded only from this internal comparison. `seq` is assigned after the suppression decision and is
-also excluded.
+excluded from both this suppression comparison and the
+[convergence invariant](../../spec/v1.md#6-ordering-delivery--the-state-guarantee). `seq` is assigned
+after the suppression decision and is also excluded.
 
 The suppression map is cleared on every `reset`. A reset marks the consumer's resources unseen, so an
 unchanged snapshot object must still be emitted or `synced` would prune it. Redaction revision state
 does not reset until the connection ends, allowing a resnapshot to report that a hidden value changed
 while upstream continuity was lost.
 
-Suppression is defined over the event envelope, not only the projected object. A Secret rotation can
+Suppression compares projected content excluding RV plus redaction records. A Secret rotation can
 leave the projected object unchanged; its redaction revision changes, so the event must be emitted.
 
 ## Redaction revisions
@@ -107,12 +108,22 @@ The TypeScript transport checks every sequence number. A missing, repeated, malf
 number closes the transport and reports a gap; the managed connector retries for a fresh snapshot. `seq` is not
 an SSE `id` and does not provide replay or resume semantics.
 
+## Convergence
+
+After a complete snapshot, once upstream changes quiesce and pending updates are processed and
+delivered, the authoritative UID map converges over projected content excluding RV plus redaction
+records. This does not promise equality with the API server while updates are in flight. A final
+bookkeeping-only change in any projection, or a final status-only change under `krm-spec/v1`, can be
+suppressed permanently: visible content has converged while the held RV remains older. Snapshot
+completeness, pruning only at `synced`, ordering and per-connection redaction semantics still apply.
+
 ## Consequences
 
 - `krm-spec/v1` makes a status-blind editor cheap under controller churn without weakening the
   complete-object invariant for the fields it receives.
 - A suppressed update may leave the consumer's `metadata.resourceVersion` stale. It remains a safe
-  save precondition: the API server rejects a stale write with 409. Capture it with the patch,
+  save precondition belonging to the delivered revision, with no freshness or downstream resume
+  guarantee: the API server rejects a stale write with 409. Capture it with the patch,
   reconcile before retrying, and never substitute a new version onto an old patch. Narrow patches
   limit write scope; they do not prevent lost updates. See [saving](../saving.md).
 - Shared upstream watches remain safe: projection, redaction revision, suppression digest, and sequence
