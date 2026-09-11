@@ -1,6 +1,9 @@
 # Proposal 0005: Kubernetes stream semantics and conditional editing
 
-**Status: discussion and implementation plan; no protocol or runtime change approved by this document.**
+**Status: design discussion; no protocol or runtime change approved by this document.**
+
+The follow-up [implementation plan](0006-stream-and-save-implementation-plan.md) incorporates the
+latest review and supersedes the phase list below for sequencing and merge gates.
 
 This follows the second review of PR #25. It distinguishes Kubernetes behavior, the contract in
 [spec/v1.md](../../spec/v1.md), the implementation, and proposed changes. The immediate recommendation
@@ -63,6 +66,18 @@ The suppression mechanism predates PR #25: it is specified in
 [proposal 0004](0004-views-and-bytes.md) and implemented by
 [`visibleDigest`](../../gateway/stream.go). What this PR adds is the conditional-save composition and
 stronger guidance, exposing the tension more directly.
+
+### Follow-up review: scope and qualifications
+
+The reviewer now agrees that accepted GETs advance the base, all projections can suppress RV
+changes, and SSA ownership is not per-user stale-read protection. Split the normative convergence
+amendment from PR #25, but keep focused save/recovery regression tests with the example correction.
+The [implementation plan](0006-stream-and-save-implementation-plan.md) defines that merge gate.
+
+Routine upstream closure fans out resnapshot work to all shared subscribers, making upstream
+continuation a named follow-up. Calling it the dominant source of resets still requires measurement.
+The five-second timeout in auth.md is an explicit override; its prose already states the ten-second
+default. Label the example rather than change the default.
 
 ## 3. Divergence map
 
@@ -340,7 +355,10 @@ snapshot fallback. A resource UID, an object RV, and a per-connection `seq` are 
 
 Illustrative scale estimate, not a benchmark: if a projected snapshot is 1 MB, reconnecting 200
 subscribers transfers roughly 200 MB before compression, regardless of how few upstream watches
-exist. Measure snapshot size and actual reconnect frequency before designing replay storage.
+exist. The same fan-out occurs when a routine shared upstream watch closure triggers fresh cycles
+for all subscribers, even with healthy browser connections: `sharedScope.die` ends each subscriber
+with a recoverable resync. Measure reset counts by cause before calling either source dominant.
+Upstream continuation is a named follow-up, ahead of any downstream replay design.
 
 ## 8. Version delivery options and the abstraction cost
 
@@ -378,6 +396,10 @@ to 409. Preserve useful structured error information without exposing a raw prot
 
 ## 10. Implementation plan and acceptance criteria
 
+The phases below explain the design work. The [implementation plan](0006-stream-and-save-implementation-plan.md)
+separates the normative amendment, defines required tests, and promotes upstream continuation to its
+own follow-up. Use that document for implementation order.
+
 ### Phase A — clarify the existing contract before adding mechanisms
 
 1. Update saving.md with projection-specific costs and the distinction between safety and progress.
@@ -403,6 +425,9 @@ whether status-only writes produce notifications, and cannot mistake “live” 
 3. Add `krm-spec/v1` plus conditional-save coverage: status update suppressed, stale save returns a
    real 409, projected GET updates RV without a draft conflict, new reviewed intent can succeed when
    the controller is quiet. A continuing status writer must not cause an unbounded write retry loop.
+   Also overlap the post-409 GET with a resnapshot: pending snapshots and changed snapshot epochs
+   reject reconciliation. Preserve that guard and drafts, show recovery, and verify later progress.
+   A refused GET does not always require another read: a newer watch may already have won.
 4. Add a contrast case for full projection and a bookkeeping-only change showing that full is not an
    always-current-version promise either.
 5. Force the UID replacement race and classify its actual response before changing error mapping.
@@ -459,7 +484,9 @@ contract. Each can be a separate proposal and PR, with its own compatibility dec
 For implementation phases, run fixture checks, Go race tests, TypeScript tests, Vue tests, browser
 and wire tests, lint and package validation. Run the projection/save and UID-race cases against a
 real API server; fake clients do not establish Kubernetes conflict behavior. Push the implementation
-changes to the existing PR or clearly separated follow-ups and verify CI on their actual final heads.
+changes according to the separate implementation plan and verify CI on their actual final heads.
+PR #25 gates on corrected guidance, save outcomes and focused regression evidence; the normative
+spec amendment and upstream continuation have separate review scopes.
 
 This document itself adds no runtime behavior, changes no named projection, and does not expand the
 write API. The reviewer reports independent probes of retry and teardown recovery; those reports
