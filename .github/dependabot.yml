@@ -1,10 +1,9 @@
 # Grouped, so a week of upstream patch releases is one PR to review and one release-note line — not
-# eleven. Every ecosystem in the repo is listed: an ecosystem that is not listed here is one where
-# nobody is watching.
+# eleven. Major updates stay separate for individual review.
 #
 # Conventional commits, because release-please reads them: `chore(deps):` keeps routine bumps out of
 # the changelog, which is what a consumer of this library wants — they do not care that our linter
-# moved. The k8s.io/* floor is DELIBERATELY excluded below; see gateway/kube/go.mod for why.
+# moved. The Kubernetes API/client floors are DELIBERATELY excluded below; see gateway/kube/go.mod.
 version: 2
 
 updates:
@@ -15,6 +14,7 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
@@ -27,13 +27,17 @@ updates:
     groups:
       gomod:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     ignore:
-      # The k8s.io/* requirement is a SUPPORTED-VERSION FLOOR, not a version to keep current: Go's
+      # These Kubernetes API/client requirements are SUPPORTED-VERSION FLOORS: Go's
       # minimal version selection means an adopter already on a newer client-go keeps it, while
       # chasing patch releases here would force every adopter up to whatever we last built against.
       # An adapter has no business dictating which Kubernetes libraries its host runs. Raising it is
       # a deliberate act (it raises the supported minor), so it is not Dependabot's to make.
-      - dependency-name: k8s.io/*
+      # Other k8s.io modules remain eligible for updates.
+      - dependency-name: k8s.io/api
+      - dependency-name: k8s.io/apimachinery
+      - dependency-name: k8s.io/client-go
     commit-message:
       prefix: "chore(deps)"
 
@@ -46,6 +50,7 @@ updates:
     groups:
       npm:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
@@ -57,6 +62,7 @@ updates:
     groups:
       npm:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
 
@@ -68,5 +74,6 @@ updates:
     groups:
       npm:
         patterns: ["*"]
+        update-types: ["minor", "patch"]
     commit-message:
       prefix: "chore(deps)"
