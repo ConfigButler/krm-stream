@@ -28,7 +28,10 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// TestSharedHostRealAPI is manual evidence, included by task test-cluster. Set
+// TestSharedHostRealAPI is manual evidence, included by task test-cluster. It needs
+// EXCLUSIVE use of the cluster: activeConfigMapWatches reads a cluster-wide gauge with
+// no namespace label, so any other client watching ConfigMaps is counted too. Run it
+// with `go test -p 1`, never concurrently with the backend e2e suite. Set
 // KRM_SHARED_SUBSCRIBERS=200 for the opening/reconnect burst profile. No login
 // system or browser credentials are synthesized; the fixture supplies trusted sessions.
 func TestSharedHostRealAPI(t *testing.T) {
