@@ -145,6 +145,57 @@ No projection makes a streamed resourceVersion into a lease. Calling a stale pre
 would reverse the safety argument: the rejection is exactly what prevents an old array replacement
 or field value from silently overwriting a newer write.
 
+### Should status updates be the client's choice?
+
+Yes, within the host's authorization policy. We should not make a new library-wide decision that
+every client must receive status, or that every client must ignore it. A dashboard may need status
+continuously; a configuration viewer may prefer silence when only status changes. An editor may want
+to omit status content while still learning about version changes that affect conditional saves.
+
+The current API already accepts a requested projection. The host's `ProjectionPolicy` selects the
+authorized projection for the principal and scope; a host can also pin a static projection. Thus
+client choice means requesting a supported view, not overriding host policy. The stream's `reset`
+declares the effective projection. Keep `krm-full/v1` as the general default.
+
+There are two distinct questions, currently bundled into named projection contracts:
+
+1. **Content:** which fields should the client receive?
+2. **Notifications:** which changes should cause the gateway to deliver an update?
+
+“I do not need to display status” does not necessarily mean “I do not want to hear that the object
+version changed.” Conversely, sending version notifications to every spec-only viewer would remove
+a useful reason to choose that projection.
+
+| Client need | Content and delivery behavior | Availability |
+|---|---|---|
+| Observe configuration and status | Include status and emit visible changes; bookkeeping-only RV changes can still be suppressed | Current `krm-full/v1` |
+| Observe configuration with less notification traffic | Omit status and suppress status-only changes | Current `krm-spec/v1` |
+| Edit configuration while learning about status-driven version changes | Omit status but deliver updates when RV changes, subject to ordinary stream coalescing | Possible future opt-in contract, not implemented |
+
+```mermaid
+flowchart TD
+    C["Client requests a supported projection"] --> H["Host policy selects an authorized projection"]
+    H --> E["Reset declares the effective projection"]
+    E --> P["Projection contract bundles two decisions today"]
+    P --> F["Content: include or omit status"]
+    P --> N["Delivery: which changes trigger updates?"]
+    F --> Q["Future question: omit status but report version changes?"]
+    N --> Q
+    Q --> M["Measure benefit and cost before adding an explicit opt-in contract"]
+```
+
+**Proposed decision:** preserve client requests and host control, document the existing coupling,
+and do not add independent configuration switches yet. If the third use case proves valuable,
+compare one additional named contract with a separate delivery option. Either design must make the
+effective behavior explicit and remain simple for clients and hosts to implement. It must not
+silently change what existing `krm-spec/v1` subscribers receive.
+
+Omitting status saves payload bytes; suppressing status-only updates also saves notifications and
+browser work. A version-only message could save bytes compared with a complete projected object,
+but still causes notifications and requires additional protocol handling. More frequent version
+delivery can reduce avoidable stale saves, but cannot prevent a write racing the next save: 409
+handling remains necessary. This is a choice about stream delivery, not a different write guarantee.
+
 ### The constraint we cannot abstract away
 
 ```mermaid
@@ -307,8 +358,10 @@ promised suppression behavior, use an explicit new contract/projection identity 
 pre-1.0 change; do not silently repurpose `krm-spec/v1`. Pre-release naming flexibility is useful,
 but it does not excuse ambiguous guarantees.
 
-Retain `krm-spec/v1` as the precise statement “status is omitted,” rather than imply that it is the
-universally best editing mode. The root adoption path should keep `krm-full/v1` as the default.
+Describe `krm-spec/v1` explicitly as “status is omitted and status-only changes are suppressed,”
+rather than imply that it is the universally best editing mode. The root adoption path should keep
+`krm-full/v1` as the default, with client requests subject to host policy. Any future version-delivery
+mode should be an explicit choice, not a global switch that restores status notifications for everyone.
 
 ## 9. UID recreation and error classification
 
@@ -328,6 +381,8 @@ to 409. Preserve useful structured error information without exposing a raw prot
 ### Phase A — clarify the existing contract before adding mechanisms
 
 1. Update saving.md with projection-specific costs and the distinction between safety and progress.
+   Explain client-requested versus host-selected projections, and distinguish content selection from
+   notification behavior. State that these are bundled today, not independently configurable.
 2. Amend spec §6 and proposal 0004 together to define the RV exception precisely, or explicitly choose
    to change emission behavior instead. Clarify §3's SSA wording and ownership/omission semantics.
 3. Explain GET/upsert recovery for redaction metadata. A new stream is an option, not a requirement
@@ -336,7 +391,8 @@ to 409. Preserve useful structured error information without exposing a raw prot
 5. Keep public naming and runtime behavior unchanged in this phase; cross-link this decision.
 
 **Done when:** README, spec, proposal and save example make compatible claims about object versions,
-projection completeness, redactions and writes. A reader cannot mistake “live” for “my save will pass.”
+projection completeness, redactions and writes. A reader can identify who chooses the projection,
+whether status-only writes produce notifications, and cannot mistake “live” for “my save will pass.”
 
 ### Phase B — test the composition at the public boundary
 
@@ -393,7 +449,10 @@ or username labels.
 
 Evaluate upstream continuation before downstream replay. Design an SSA example only for a concrete
 host ownership model. Consider a version-delivery mode only if measured write usability justifies
-its notification cost. Each can be a separate proposal and PR, with its own compatibility decision.
+its notification cost. Compare status-aware dashboards, quiet spec viewers and spec editors before
+choosing a default or adding a mode. Resolve whether a named projection or a separate delivery option
+communicates the choice most simply, how the host constrains it, and how clients learn the effective
+contract. Each can be a separate proposal and PR, with its own compatibility decision.
 
 ## 11. Verification and scope of this document
 
