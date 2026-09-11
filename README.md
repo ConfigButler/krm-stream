@@ -68,10 +68,10 @@ server.
 ```mermaid
 flowchart LR
   api["Kubernetes API"]
-  gateway["Go gateway<br/>Authorized scope, projection and redaction"]
+  gateway["Embedded Go gateway<br/>Enforces host authorization<br/>Projection and redaction"]
   store["Browser store<br/>Delivered state, local draft and conflicts"]
   ui["Your form or live view"]
-  save["Your Go save endpoint<br/>Write authorization and patch validation"]
+  save["Your Go save handler<br/>Write authorization and patch validation"]
 
   api -->|"Snapshot and watch updates"| gateway
   gateway -->|"One-way SSE"| store
@@ -91,11 +91,13 @@ flowchart LR
 The library owns the read stream and browser reconciliation. Your application owns identity,
 authorization policy, Kubernetes credentials, and writes. The browser never receives a Kubernetes
 credential or a raw API-server URL. The blue boxes are the library; the green boxes are your product.
-A successful write returns through the Kubernetes watch as another live update.
+Both Go components run inside your application: the host decides authorization policy, and the
+embedded gateway enforces it. A successful write returns through the Kubernetes watch as another
+live update.
 
 Each connection starts with a complete projected snapshot, then follows visible changes. The store
 keeps that delivered state separate from local edits. A quiet stream can still hold an older write
-version: see [why a quiet stream can reject a save](docs/adopting.md#why-a-quiet-stream-can-still-reject-a-save).
+version: see [why a quiet stream can reject a save](docs/saving.md#why-a-quiet-stream-can-still-reject-a-save).
 
 ## Start here
 

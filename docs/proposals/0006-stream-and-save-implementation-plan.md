@@ -21,7 +21,7 @@ shipped in [0.3.0](../../packages/krm-stream/CHANGELOG.md). Use the
 | 4 | Measure and implement upstream continuation | Same-workload comparison proves continuity, bounded recovery and authorization. |
 
 Review the remaining priorities as separate changes. Baseline measurement can run alongside
-priorities 2–3. The normative amendment is complete; see priority 1’s evidence. Adopter-reported
+priorities 2–3. The normative amendment is complete; see priority 1's evidence. Adopter-reported
 unit tests support adoption, but do not establish real-cluster composition, consumer readiness or
 200-attendee capacity.
 

@@ -82,7 +82,7 @@ EventSource owns network reconnects but closes on sequence gaps. Use the managed
 bounded recovery and observable lifecycle state.
 
 A quiet stream can still hold an older write version. See the
-[visual explanation](../../docs/adopting.md#why-a-quiet-stream-can-still-reject-a-save) and
+[visual explanation](../../docs/saving.md#why-a-quiet-stream-can-still-reject-a-save) and
 [normative contract](../../spec/v1.md#6-ordering-delivery--the-state-guarantee).
 
 `store.captureSave(uid)` captures a detached patch, UID and base resourceVersion together.

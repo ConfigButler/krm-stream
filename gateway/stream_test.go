@@ -642,7 +642,7 @@ func TestFinalBookkeepingSuppressionAcrossProjections(t *testing.T) {
 	}
 	for _, projection := range []Projection{ProjectionRaw, ProjectionFull, ProjectionSpec} {
 		t.Run(string(projection), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
 			defer cancel()
 			suppressed := 0
 			gw := &Gateway{
@@ -663,11 +663,11 @@ func TestFinalBookkeepingSuppressionAcrossProjections(t *testing.T) {
 			}
 			sink := &recordingSink{}
 			err := gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, sink)
-			if !errors.Is(err, context.Canceled) || suppressed != 1 {
-				t.Fatalf("final write: error=%v, suppressed=%d; want cancellation after one suppression", err, suppressed)
-			}
 			if !equalTypes(types(sink.events), EventReset, EventAdded, EventSynced) {
 				t.Fatalf("final bookkeeping write emitted an event: %v", types(sink.events))
+			}
+			if !errors.Is(err, context.Canceled) || suppressed != 1 {
+				t.Fatalf("final write: error=%v, suppressed=%d; want cancellation after one suppression", err, suppressed)
 			}
 			if got := mustJSON(t, sink.events[1].Object); got != mustJSON(t, base) {
 				t.Fatalf("held object = %s; want original delivered content and RV 1001", got)
