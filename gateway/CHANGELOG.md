@@ -1,5 +1,20 @@
 # Changelog
 
+## Unreleased
+
+- Add opt-in `Options.WriteTimeout` / `Gateway.WriteTimeout` for each HTTP write plus flush;
+  zero installs no deadline. Header, heartbeat and flush failures now terminate the HTTP stream.
+- Add `CheckHTTPStreaming` for mounted-writer tests. It clears the existing write deadline and
+  writes no response. Unsupported bounded transports abort and report `http_transport_rejected`;
+  they do not send a terminal SSE frame and clients may reconnect.
+- Add `stream_closed`, `shared_subscription_opened` and `shared_subscription_closed` observations.
+  They describe logical streams and active attachments, not physical API watches.
+- **Breaking:** remove `WriteSSEHeaders`; use `Gateway.ServeStream` or `ServeStreamProjection` to
+  own headers, delivery and cleanup. `SSESink.Heartbeat` now returns an error; callers must handle
+  failure and stop their stream. `NewSSESink(io.Writer)` remains generic and propagates available
+  flush errors without installing HTTP deadlines. The v1 wire protocol is unchanged.
+
+
 ## [0.3.0](https://github.com/ConfigButler/krm-stream/compare/gateway/v0.2.1...gateway/v0.3.0) (2026-09-11)
 
 

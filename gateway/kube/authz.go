@@ -38,9 +38,9 @@ import (
 // it is whatever your session says a user is — so translating it into a Kubernetes subject is a thing
 // only the host can do, and this is where it does it.
 type Subject struct {
-	// User is the username RBAC binds against (the OIDC `username` claim, typically).
+	// User is the API-server-resolved username, including any configured mapping.
 	User string
-	// Groups are the groups RBAC binds against (the OIDC `groups` claim, typically).
+	// Groups are the API-server-resolved groups, not guessed OIDC claim values.
 	Groups []string
 	// UID and Extra are optional, and are carried through verbatim for audit and for authorizers
 	// (webhook, OPA) that key on them.

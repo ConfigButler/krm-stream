@@ -14,3 +14,7 @@ For host integration patterns, use these small recipes:
 projected reconciliation, and a host-owned Kubernetes endpoint that preserves real 409 conflicts.
 
 [Vue adapter](vue/README.md) is a copyable, typechecked composable with reactivity and cleanup tests.
+
+[Shared ConfigMap host](../gateway/kube/examples/sharedstream/README.md) is a compiled Go example
+with participant SelfSubjectReview, service-account SARs and shared data, bounded SSE writes,
+session expiry, lifecycle counters and a manually run real-cluster fixture.

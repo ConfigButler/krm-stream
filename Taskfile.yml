@@ -434,4 +434,6 @@ tasks:
     env:
       KUBECONFIG: '{{.KUBECONFIG_PATH}}'
     cmds:
-      - go test -tags e2e -v -count=1 -timeout 10m ./...
+      # -p 1: the shared-host example measures a CLUSTER-WIDE API-server watch gauge, which the
+      # backend suite's own real watches corrupt if their packages run concurrently.
+      - go test -tags e2e -v -count=1 -p 1 -timeout 10m ./...

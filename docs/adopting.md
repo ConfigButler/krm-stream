@@ -149,3 +149,12 @@ boundary; a per-user backend keeps Kubernetes RBAC as the direct boundary by con
 
 Next: [saving.md](saving.md) for the host-owned write path and [operations.md](operations.md) for
 stream monitoring and limits.
+
+## Tested shared host and middleware
+
+Use the [compiled shared ConfigMap host](../gateway/kube/examples/sharedstream/README.md) to compose
+participant identity resolution, service-account sharing, per-subscriber authorization, session
+expiry and `WriteTimeout`. Its [middleware capability recipe](../gateway/kube/examples/sharedstream/README.md#middleware-capability-test)
+checks the actual wrapped server writer in a host test. `CheckHTTPStreaming` must run before
+streaming: it emits no response, but clears the existing write deadline. A positive timeout requires
+flush and deadline support; unsupported transports abort and can cause browser reconnects.

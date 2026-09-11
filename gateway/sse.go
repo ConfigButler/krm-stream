@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,118 +30,210 @@ import (
 // idle timeout of every proxy anyone actually deploys behind.
 const HeartbeatInterval = 20 * time.Second
 
-// SSESink writes protocol events to a connection as Server-Sent Events. It is safe for the heartbeat
-// goroutine and the stream loop to use concurrently — which they must, since the whole point of a
-// heartbeat is that it happens while nothing else is.
+// SSESink frames events for an io.Writer. Calls are serialized. Generic writers have
+// no library-installed deadline; HTTP callers should use Gateway.ServeStream.
 type SSESink struct {
-	mu    sync.Mutex
-	w     io.Writer
-	flush func()
+	mu     sync.Mutex
+	w      io.Writer
+	flush  func() error
+	before func(context.Context) error
+	after  func() error
+	cancel context.CancelFunc
+	failed error
 }
 
-// NewSSESink writes to w, flushing after every frame if w can be flushed.
+// NewSSESink writes to w, flushing after every frame when supported. A FlushError
+// method takes precedence over http.Flusher so reported failures reach the caller.
 func NewSSESink(w io.Writer) *SSESink {
-	s := &SSESink{w: w, flush: func() {}}
-	if f, ok := w.(http.Flusher); ok {
-		s.flush = f.Flush
+	s := &SSESink{w: w, flush: func() error { return nil }}
+	switch f := w.(type) {
+	case interface{ FlushError() error }:
+		s.flush = f.FlushError
+	case http.Flusher:
+		s.flush = func() error { f.Flush(); return nil }
 	}
 	return s
 }
 
-// Emit writes one event and flushes.
-func (s *SSESink) Emit(_ context.Context, ev Event) error {
+// operation serializes the entire deadline/write/flush/clear operation. Failures
+// poison the sink so a queued heartbeat or terminal event cannot revive it.
+func (s *SSESink) operation(ctx context.Context, write func() error) (err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.failed != nil {
+		return s.failed
+	}
+	defer func() {
+		if err != nil {
+			s.failed = err
+			if s.cancel != nil {
+				s.cancel()
+			}
+		}
+	}()
+	if err = ctx.Err(); err != nil {
+		return err
+	}
+	if s.before != nil {
+		if err = s.before(ctx); err != nil {
+			return err
+		}
+	}
+	if err = write(); err != nil {
+		return err
+	}
+	if err = s.flush(); err != nil {
+		return err
+	}
+	if s.after != nil {
+		return s.after()
+	}
+	return nil
+}
+
+func (s *SSESink) write(ctx context.Context, frame []byte) error {
+	return s.operation(ctx, func() error {
+		n, err := s.w.Write(frame)
+		if err == nil && n != len(frame) {
+			return io.ErrShortWrite
+		}
+		return err
+	})
+}
+
+// Emit writes and flushes one event.
+func (s *SSESink) Emit(ctx context.Context, ev Event) error {
 	frame, err := ev.MarshalSSE()
 	if err != nil {
 		return fmt.Errorf("krm-stream: marshal event: %w", err)
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := s.w.Write(frame); err != nil {
-		return err
-	}
-	s.flush()
-	return nil
+	return s.write(ctx, frame)
 }
 
-// Comment writes an SSE comment. Comments are NOT events: a conforming consumer ignores them
-// entirely, which is exactly why a heartbeat is one.
+// Comment writes an SSE comment, not a protocol event.
 func (s *SSESink) Comment(text string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if _, err := fmt.Fprintf(s.w, ": %s\n\n", text); err != nil {
-		return err
-	}
-	s.flush()
-	return nil
+	return s.write(context.Background(), []byte(": "+text+"\n\n"))
 }
 
-// Heartbeat keeps the connection alive until ctx is done. Run it in a goroutine alongside the stream.
-func (s *SSESink) Heartbeat(ctx context.Context, every time.Duration) {
+// Heartbeat runs until cancellation or an I/O failure. Its owner must handle the
+// returned error and stop the stream on failure. Nonpositive intervals use the default.
+func (s *SSESink) Heartbeat(ctx context.Context, every time.Duration) error {
+	if every <= 0 {
+		every = HeartbeatInterval
+	}
 	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-t.C:
-			if err := s.Comment("heartbeat"); err != nil {
-				return // the consumer went away; the stream loop will notice too
+			if err := s.write(ctx, []byte(": heartbeat\n\n")); err != nil {
+				return err
 			}
 		}
 	}
 }
 
-// WriteSSEHeaders sets the response headers a conforming stream must carry, and must be called
-// before the first frame.
-func WriteSSEHeaders(w http.ResponseWriter) {
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("X-KRM-Stream-Protocol", fmt.Sprint(ProtocolVersion))
-	// A stream that a proxy is allowed to cache, buffer or transform is not a stream. `no-cache`
-	// stops the browser; `no-transform` and the nginx-specific hint stop the middleboxes that
-	// otherwise sit on the response until it is "big enough" — which turns a live status watch into
-	// a batch job nobody can debug.
-	h.Set("Cache-Control", "no-cache, no-transform")
-	h.Set("Connection", "keep-alive")
-	h.Set("X-Accel-Buffering", "no")
-	w.WriteHeader(http.StatusOK)
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
+// CheckHTTPStreaming checks flush and write-deadline capabilities without writing
+// or flushing a response. It follows Unwrap methods like http.ResponseController.
+// The deadline probe clears any existing write deadline. Call before streaming,
+// with no concurrent use of w. This checks exposed capabilities, not middleware
+// correctness or proxy buffering. Unsupported operations wrap http.ErrNotSupported.
+func CheckHTTPStreaming(w http.ResponseWriter) error {
+	for current := w; ; {
+		switch v := current.(type) {
+		case interface{ FlushError() error }:
+			return checkWriteDeadline(w)
+		case http.Flusher:
+			return checkWriteDeadline(w)
+		case interface{ Unwrap() http.ResponseWriter }:
+			current = v.Unwrap()
+		default:
+			return fmt.Errorf("krm-stream: HTTP flush: %w", http.ErrNotSupported)
+		}
 	}
 }
 
-// ServeStream runs one stream over one HTTP response, heartbeats included, and returns when the
-// stream ends — at which point the caller returning from its handler closes the connection, which is
-// what a terminal error requires.
+func checkWriteDeadline(w http.ResponseWriter) error {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil {
+		return fmt.Errorf("krm-stream: HTTP write deadline: %w", err)
+	}
+	return nil
+}
+
+func writeSSEHeaders(ctx context.Context, w http.ResponseWriter, s *SSESink) error {
+	return s.operation(ctx, func() error {
+		h := w.Header()
+		h.Set("Content-Type", "text/event-stream")
+		h.Set("X-KRM-Stream-Protocol", fmt.Sprint(ProtocolVersion))
+		h.Set("Cache-Control", "no-cache, no-transform")
+		h.Set("Connection", "keep-alive")
+		h.Set("X-Accel-Buffering", "no")
+		w.WriteHeader(http.StatusOK)
+		return nil
+	})
+}
+
+// ServeStream runs one HTTP stream, including headers, heartbeats and cleanup.
 func (g *Gateway) ServeStream(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope) {
 	g.ServeStreamProjection(w, r, principal, scope, "")
 }
 
-// ServeStreamProjection writes a stream using a caller-requested projection name. Projection
-// authorization happens inside StreamProjection so direct callers and HTTP share the same rule.
+// ServeStreamProjection serves a requested projection under the gateway's policy.
+// With WriteTimeout enabled, unsupported writers abort before a stream opens.
 func (g *Gateway) ServeStreamProjection(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope, projection Projection) {
-	WriteSSEHeaders(w)
+	g.serveHTTP(w, r, func(ctx context.Context, sink *SSESink) {
+		// A terminal frame may itself fail; delivery is not guaranteed on a failed transport.
+		_ = g.StreamProjection(ctx, principal, scope, projection, sink)
+	})
+}
 
-	sink := NewSSESink(w)
-	ctx := r.Context()
-
-	hb, stopHeartbeat := context.WithCancel(ctx)
-	interval := g.HeartbeatInterval
-	if interval <= 0 {
-		interval = HeartbeatInterval
+func (g *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request, run func(context.Context, *SSESink)) {
+	if g.WriteTimeout < 0 {
+		panic("krm-stream: WriteTimeout must not be negative")
 	}
-	heartbeatDone := make(chan struct{})
+	if g.WriteTimeout > 0 {
+		if err := CheckHTTPStreaming(w); err != nil {
+			g.observe(Observation{Kind: ObservationHTTPTransportRejected, Code: CodeInternal})
+			panic(http.ErrAbortHandler)
+		}
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	sink := NewSSESink(w)
+	sink.cancel = cancel
+	controller := http.NewResponseController(w)
+	// Zero timeout retains optional flushing, including transparent HTTP wrappers.
+	sink.flush = func() error {
+		err := controller.Flush()
+		if g.WriteTimeout == 0 && errors.Is(err, http.ErrNotSupported) {
+			return nil
+		}
+		return err
+	}
+	if g.WriteTimeout > 0 {
+		sink.before = func(ctx context.Context) error {
+			deadline := time.Now().Add(g.WriteTimeout)
+			if earlier, ok := ctx.Deadline(); ok && earlier.Before(deadline) {
+				deadline = earlier
+			}
+			return controller.SetWriteDeadline(deadline)
+		}
+		sink.after = func() error { return controller.SetWriteDeadline(time.Time{}) }
+		// Runs after the heartbeat has exited. Clearing never revives a failed response.
+		defer func() { _ = controller.SetWriteDeadline(time.Time{}) }()
+	}
+	if err := writeSSEHeaders(ctx, w, sink); err != nil {
+		return
+	}
+	done := make(chan struct{})
 	go func() {
-		defer close(heartbeatDone)
-		sink.Heartbeat(hb, interval)
+		defer close(done)
+		if err := sink.Heartbeat(ctx, g.HeartbeatInterval); err != nil {
+			cancel()
+		}
 	}()
-	defer func() {
-		stopHeartbeat()
-		<-heartbeatDone
-	}()
-
-	// The error is already ON the wire by the time Stream returns — emitting it is how the consumer
-	// learns anything. There is nothing left to tell the HTTP layer: the status line went out with
-	// the very first byte, long before we could have known.
-	_ = g.StreamProjection(ctx, principal, scope, projection, sink)
+	defer func() { cancel(); <-done }()
+	run(ctx, sink)
 }
