@@ -37,7 +37,15 @@ export interface ApplyOptions {
   redacted?: (Redaction | { path: Path; rev: number })[];
 }
 
+/** Detached save intent. The host adds these identity/version preconditions to the Kubernetes patch. */
+export interface SaveRequest {
+  uid: string;
+  resourceVersion: string;
+  patch: Record<string, unknown>;
+}
+
 interface Resource {
+  revision: number;
   server: KRMObject;
   draft: KRMObject;
   redacted: { path: Path; rev: number }[];
@@ -46,6 +54,8 @@ interface Resource {
 
 export class LiveResourceStore {
   readonly #policy: EditabilityPolicy;
+  #revision = 0;
+  #snapshotRevision = 0;
   readonly #resources = new Map<string, Resource>();
   readonly #subscribers = new Set<() => void>();
 
@@ -76,7 +86,13 @@ export class LiveResourceStore {
     if (!existing) {
       // A resource we have never seen: base = draft = incoming. There is nothing to merge, and
       // nothing flashes — an arrival is not a change.
-      this.#resources.set(id, { server: incoming, draft: clone(incoming), redacted, conflicts: new Map() });
+      this.#resources.set(id, {
+        revision: ++this.#revision,
+        server: incoming,
+        draft: clone(incoming),
+        redacted,
+        conflicts: new Map(),
+      });
       this.#notify();
       return { added: true, structural: true, flashed: [], conflicts: [] };
     }
@@ -94,6 +110,7 @@ export class LiveResourceStore {
     const structural = !sameShape(existing.draft, merged);
     // The REPLACEMENT (spec §4.1) and the base shift (I-BASESHIFT), in one line. Everything above
     // reconciled against the OLD server object; from here on, `incoming` is the base.
+    existing.revision = ++this.#revision;
     existing.server = incoming;
     existing.draft = merged;
     existing.redacted = redacted;
@@ -116,6 +133,7 @@ export class LiveResourceStore {
 
   /** `reset`. Mark every known uid unseen — and prune NOTHING yet. */
   beginSnapshot(): void {
+    this.#snapshotRevision++;
     this.#seen = new Set();
   }
 
@@ -149,7 +167,8 @@ export class LiveResourceStore {
    * You probably do not need this. The recommended save is 204: the write reaches the API server, the
    * watch echoes it back down the stream already projected, and the store converges. Dirty state is
    * derived from draft-versus-server, so there is nothing to adopt. Use this only when a host cannot
-   * wait for the echo. See docs/saving.md. */
+   * wait for the echo. Unguarded adoption can overwrite newer watch state: for asynchronous
+   * responses use captureReconciliation before the request instead. See docs/saving.md. */
   adoptSaved(object: KRMObject): void {
     const existing = this.#resources.get(object.metadata.uid);
     if (!existing) {
@@ -307,6 +326,38 @@ export class LiveResourceStore {
     const out: Record<string, unknown> = {};
     for (const c of changes) setAt(out, c.path, c.new === undefined ? null : clone(c.new));
     return out;
+  }
+
+  /** Capture the patch, UID and merge-base version synchronously, before any await. A stale version
+   * is safe: Kubernetes rejects it with 409. Never replace it with a newer GET's version. */
+  captureSave(id: string): SaveRequest | null {
+    const resource = this.#must(id);
+    const patch = this.patch(id);
+    if (!patch) return null;
+    const resourceVersion = resource.server.metadata.resourceVersion;
+    if (!resourceVersion) throw new Error("krm-stream: conditional save requires resourceVersion");
+    return { uid: resource.server.metadata.uid, resourceVersion, patch };
+  }
+
+  /** Capture before starting a host GET. The returned function applies its projected response only
+   * if no server event or earlier response has advanced this resource since capture. Local edits
+   * remain valid and are three-way merged. Missing/recreated resources cannot be resurrected.
+   * Snapshot recovery also invalidates responses; a GET must never count as snapshot membership.
+   * The response must carry the same projection and redactions as the stream. */
+  captureReconciliation(id: string): (object: KRMObject, opts?: ApplyOptions) => boolean {
+    const revision = this.#must(id).revision;
+    const snapshotRevision = this.#snapshotRevision;
+    return (object, opts = {}) => {
+      if (
+        this.#seen !== null ||
+        this.#snapshotRevision !== snapshotRevision ||
+        object.metadata.uid !== id ||
+        this.#resources.get(id)?.revision !== revision
+      )
+        return false;
+      this.applyServerEvent(object, opts);
+      return true;
+    };
   }
 
   /** A coarse "something changed" signal — the host re-renders and re-queries. Returns an

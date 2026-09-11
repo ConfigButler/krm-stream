@@ -68,6 +68,13 @@ type Options struct {
 	// HeartbeatInterval defaults to HeartbeatInterval. Set a positive value to match a proxy's idle
 	// timeout; it affects HTTP streams only.
 	HeartbeatInterval time.Duration
+
+	// ReauthorizationInterval rechecks each subscriber independently, even on quiet streams.
+	// Zero disables timed checks; snapshot cycles always reauthorize.
+	ReauthorizationInterval time.Duration
+	// ReauthorizationTimeout bounds a timed check. Zero defaults to 10 seconds.
+	// Authorizers and projection policies must honor context cancellation.
+	ReauthorizationTimeout time.Duration
 }
 
 // Handler mounts the stream on one route.
@@ -89,13 +96,15 @@ func Handler(o Options) http.Handler {
 	}
 
 	g := &Gateway{
-		Auth:              o.Authorizer,
-		Clients:           o.Clients,
-		Projection:        o.Projection,
-		Projections:       o.Projections,
-		Ordering:          o.Ordering,
-		Observer:          o.Observer,
-		HeartbeatInterval: o.HeartbeatInterval,
+		Auth:                    o.Authorizer,
+		Clients:                 o.Clients,
+		Projection:              o.Projection,
+		Projections:             o.Projections,
+		Ordering:                o.Ordering,
+		Observer:                o.Observer,
+		HeartbeatInterval:       o.HeartbeatInterval,
+		ReauthorizationInterval: o.ReauthorizationInterval,
+		ReauthorizationTimeout:  o.ReauthorizationTimeout,
 	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

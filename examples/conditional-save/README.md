@@ -1,0 +1,43 @@
+# Conditional save with a live draft
+
+This example composes the existing store, managed stream and host-owned writes. It adds no merge
+algorithm or shared watch implementation.
+
+- [editor.ts](editor.ts) captures a save intent synchronously, handles HTTP 409 by reconciling a
+  projected GET, retains in-flight edits and rejects late responses superseded by the watch.
+- [handler.go](../../gateway/kube/examples/conditionalsave/handler.go) is a compilable ConfigMap
+  GET/PATCH endpoint. Mount it on a fixed namespace/name with a host-authenticated Kubernetes client
+  acting as the caller. The host owns credentials, CSRF protection, route authorization and audit.
+- [saving tests](../../packages/krm-stream/test/saving.test.ts) exercise the response races.
+- `TestConditionalSaveConflict` in the Kubernetes e2e suite exercises this handler against a real API
+  server: a competing update makes a captured save return 409 without overwriting the winner.
+
+```ts
+const store = new LiveResourceStore();
+const connection = connectManagedResourceStream(streamURL, store, {
+  onStateChange: state => renderConnection(state),
+});
+const editor = conditionalEditor(store, uid, "/editor/configmap", hostFetch);
+const unsubscribe = store.subscribe(renderEditor);
+// Enable Save only while connection.state.status === "live" and !editor.saving.
+// On Save: await editor.save(), then render errors/conflicts and the current draft.
+// On unmount:
+unsubscribe();
+connection.close();
+```
+
+Use the same scope and `krm-full/v1` projection on the stream and this example endpoint. The GET
+returns a complete projected object with redactions; it must use a most-recent Kubernetes read, with
+no HTTP or application cache. A recreated name has a different UID and must be opened as a new editor.
+Keep an external draft archive if users need to recover edits after deletion: the store intentionally
+removes drafts of deleted objects.
+
+A narrow merge patch is **not concurrency protection**. JSON merge patch replaces arrays as a whole,
+even when the client merges keyed list items intelligently. This endpoint puts the captured UID and
+resourceVersion into the Kubernetes patch. A stale version produces a safe 409, including when
+invisible status changes were suppressed by the stream. Reconcile first; never transplant an old
+patch onto the latest version. No automatic write retry is performed.
+
+Successful writes return 204. The stream echo settles the saved values while retaining later edits.
+If the echo is delayed, dirty state remains visible; prevent repeated saves until your host's chosen
+acknowledgment UX allows them. Save results never feed raw Kubernetes objects back into the store.

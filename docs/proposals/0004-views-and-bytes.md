@@ -104,16 +104,17 @@ actually emitted, including `reset`, `synced`, errors, and deletes. It does not 
 cycle. A new HTTP connection begins at one.
 
 The TypeScript transport checks every sequence number. A missing, repeated, malformed, or out-of-order
-number closes the transport and reports a gap; the host reconnects for a fresh snapshot. `seq` is not
+number closes the transport and reports a gap; the managed connector retries for a fresh snapshot. `seq` is not
 an SSE `id` and does not provide replay or resume semantics.
 
 ## Consequences
 
 - `krm-spec/v1` makes a status-blind editor cheap under controller churn without weakening the
   complete-object invariant for the fields it receives.
-- A suppressed update may leave the consumer's `metadata.resourceVersion` stale. Consumers must not
-  use that opaque value as a save precondition. Saves remain narrow merge patches built from local
-  edits, while the client-side three-way merge reports visible conflicts live.
+- A suppressed update may leave the consumer's `metadata.resourceVersion` stale. It remains a safe
+  save precondition: the API server rejects a stale write with 409. Capture it with the patch,
+  reconcile before retrying, and never substitute a new version onto an old patch. Narrow patches
+  limit write scope; they do not prevent lost updates. See [saving](../saving.md).
 - Shared upstream watches remain safe: projection, redaction revision, suppression digest, and sequence
   state are per consumer stream, after upstream fan-out.
 

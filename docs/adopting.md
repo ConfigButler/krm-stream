@@ -91,8 +91,8 @@ func mount(mux *http.ServeMux, dynamicClientFor func(*User) dynamic.Interface) {
 }
 ```
 
-The browser uses `connectWithEventSource` for this route. Its same-origin session cookie is the only
-credential EventSource can carry.
+The browser uses `connectManagedResourceStream` for this route. Fetch sends its same-origin session
+cookie and the managed connection provides bounded recovery after network failures and sequence gaps.
 
 ## 3. Browser client
 
@@ -100,7 +100,7 @@ credential EventSource can carry.
 import {
   defaultPolicy,
   LiveResourceStore,
-  connectWithEventSource,
+  connectManagedResourceStream,
   resourceStreamURL,
   withOpenAPIKeyedLists,
 } from "@configbutler/krm-stream";
@@ -114,13 +114,13 @@ const url = resourceStreamURL("/resource-stream/v1", {
   projection: "krm-full/v1",
 });
 
-connectWithEventSource(url, store, {
-  onGap: () => location.reload(), // reconnect for a new snapshot in an SPA-specific way
+const connection = connectManagedResourceStream(url, store, {
+  onStateChange: state => renderConnection(state.status), // gaps recover with a fresh snapshot
 });
 store.subscribe(() => render(store));
 ```
 
-For a bearer-token client, use `connectResourceStream(url, store, { headers: { Authorization: ... } })`.
+For a bearer-token client, use `connectManagedResourceStream(url, store, { headers: { Authorization: ... } })`.
 That is useful for a non-browser client or an intentionally token-bearing browser application; the
 same-origin cookie route is the safer browser default.
 
@@ -138,7 +138,7 @@ stays safely atomic.
 ## 4. Share watches only with Kubernetes-backed authorization
 
 `SharedBackend` saves upstream watches but runs as one service identity. Pair it with
-`kube.SSARAuthorizer` so Kubernetes still decides whether each caller may list and watch the scope.
+`kube.SubjectAccessReviewAuthorizer` so Kubernetes still decides whether each caller may list and watch the scope.
 
 ```go
 shared := gateway.NewSharedBackendWithOptions(serviceAccountBackend, gateway.SharedOptions{
@@ -146,7 +146,7 @@ shared := gateway.NewSharedBackendWithOptions(serviceAccountBackend, gateway.Sha
     Observer: metrics,
 })
 
-options.Authorizer = kube.SSARAuthorizer(clientset, subjectFromUser)
+options.Authorizer = kube.SubjectAccessReviewAuthorizer(clientset, subjectFromUser)
 options.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 ```
 

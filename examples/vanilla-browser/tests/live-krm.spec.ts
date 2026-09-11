@@ -118,11 +118,93 @@ test("a redacted Secret value is not in the page at all — the mask is drawn, n
   await expect(page.getByTestId("patch")).toHaveText("null");
 });
 
-test("a named object that does not exist renders as empty, not as a ghost and not as an error", async ({ page, visit }) => {
+test("a named object that does not exist renders as empty, not as a ghost and not as an error", async ({
+  page,
+  visit,
+}) => {
   // reset, synced — and nothing else. The fixture that kills the "named scopes may skip the snapshot"
   // optimization: skip it, and a delete-while-disconnected leaves the object on screen forever.
   await visit("fixture=named-object-absent&pace=0ms");
   await expect(page.locator("#status-line")).toHaveText(/synced/);
   await expect(page.getByTestId("editable-body")).toBeEmpty();
   await expect(page.getByTestId("patch")).toHaveText("null");
+});
+
+test("managed fetch recovers a sequence gap and preserves the browser draft", async ({ page, entry }) => {
+  let attempts = 0;
+  const object = {
+    apiVersion: "v1",
+    kind: "ConfigMap",
+    metadata: { uid: "managed", name: "cm", resourceVersion: "1" },
+    data: { value: "base" },
+  };
+  await page.route("**/managed-test", (route) => {
+    attempts++;
+    const events =
+      attempts === 1
+        ? [
+            { seq: 1, type: "reset" },
+            { seq: 3, type: "synced" },
+          ]
+        : [
+            { seq: 1, type: "reset" },
+            { seq: 2, type: "added", object },
+            { seq: 3, type: "synced" },
+          ];
+    return route.fulfill({
+      contentType: "text/event-stream",
+      body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+    });
+  });
+  await page.goto("/");
+  const result = await page.evaluate(
+    async ({ entry, object }) => {
+      const lib = await import(`/krm-stream/${entry === "bundle" ? "krm-stream" : "index"}.js`);
+      const store = new lib.LiveResourceStore();
+      store.applyServerEvent(object);
+      store.setValue("managed", ["data", "value"], "draft");
+      const states: string[] = [];
+      const handle = lib.connectManagedResourceStream("/managed-test", store, {
+        maxRetries: 1,
+        retryDelayMs: 0,
+        onStateChange: (state: { status: string }) => states.push(state.status),
+        onSynced: () => handle.close(),
+      });
+      await handle.closed;
+      return { states, draft: store.draft("managed").data.value, status: handle.state.status };
+    },
+    { entry, object },
+  );
+  expect(attempts).toBe(2);
+  expect(result.draft).toBe("draft");
+  expect(result.states).toContain("retrying");
+  expect(result.states).toContain("live");
+  expect(result.status).toBe("closed");
+});
+
+test("native EventSource resets its sequence on a browser reconnect", async ({ page, entry }) => {
+  let attempts = 0;
+  await page.route("**/native-reconnect-test", (route) => {
+    attempts++;
+    return route.fulfill({
+      contentType: "text/event-stream",
+      body: 'retry: 1\n\ndata: {"seq":1,"type":"reset"}\n\ndata: {"seq":2,"type":"synced"}\n\n',
+    });
+  });
+  await page.goto("/");
+  const result = await page.evaluate(async (entry) => {
+    const lib = await import(`/krm-stream/${entry === "bundle" ? "krm-stream" : "index"}.js`);
+    let synced = 0;
+    let gaps = 0;
+    const handle = lib.connectWithEventSource("/native-reconnect-test", new lib.LiveResourceStore(), {
+      onSynced: () => {
+        if (++synced === 2) handle.close();
+      },
+      onGap: () => gaps++,
+    });
+    await handle.closed;
+    return { synced, gaps };
+  }, entry);
+  expect(attempts).toBe(2);
+  expect(result).toEqual({ synced: 2, gaps: 0 });
 });

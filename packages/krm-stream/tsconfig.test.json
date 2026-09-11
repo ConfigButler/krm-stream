@@ -8,9 +8,9 @@
   "extends": "./tsconfig.json",
   "compilerOptions": {
     "noEmit": true,
-    "rootDir": ".",
+    "rootDir": "../..",
     // node:test / node:assert — the only reason @types/node is a devDependency. It ships nothing.
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "test/**/*.ts", "e2e/**/*.ts"]
+  "include": ["src/**/*.ts", "test/**/*.ts", "e2e/**/*.ts", "../../examples/conditional-save/**/*.ts"]
 }

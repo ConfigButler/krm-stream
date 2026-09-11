@@ -145,8 +145,11 @@ export interface StreamChange {
 }
 
 export interface StreamOptions {
-  /** Called for every `error` event. A terminal one has already closed the connection by the time
-   * this returns — there is nothing to retry, and retrying is the bug. */
+  /** Transport connected; the snapshot may still be incomplete. */
+  onOpen?: () => void;
+  /** Defaults to same-origin; use include for a cross-origin cookie gateway. */
+  credentials?: RequestCredentials;
+  /** Called for protocol and HTTP errors. A terminal error ends the connection without retry. */
   onError?: (code: ErrorCode, message: string, terminal: boolean) => void;
   /** Called at the end of every snapshot cycle. The store is now consistent: a good moment to paint. */
   onSynced?: () => void;
@@ -173,7 +176,8 @@ export function connectResourceStream(url: string, store: LiveResourceStore, opt
   if (opts.signal?.aborted) return { close: () => {}, closed: Promise.resolve() };
   const controller = new AbortController();
   const fetchImpl = opts.fetch ?? globalThis.fetch;
-  opts.signal?.addEventListener("abort", () => controller.abort(), { once: true });
+  const abort = () => controller.abort();
+  opts.signal?.addEventListener("abort", abort, { once: true });
 
   const closed = (async () => {
     const res = await fetchImpl(url, {
@@ -181,20 +185,35 @@ export function connectResourceStream(url: string, store: LiveResourceStore, opt
       headers: { Accept: "text/event-stream", ...opts.headers },
       // The stream IS the response body; a cached one is a stream that never moves.
       cache: "no-store",
+      credentials: opts.credentials ?? "same-origin",
     });
     if (!res.ok || !res.body) {
-      opts.onError?.("INTERNAL", `stream: HTTP ${res.status}`, true);
+      const code = res.status === 401 ? "UNAUTHENTICATED" : res.status === 403 ? "FORBIDDEN" : "INTERNAL";
+      const terminal = res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429;
+      await res.body?.cancel();
+      opts.onError?.(code, `stream: HTTP ${res.status}`, terminal);
       return;
     }
 
+    if (controller.signal.aborted) {
+      await res.body.cancel();
+      return;
+    }
+    opts.onOpen?.();
     const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+    const cancelReader = () => {
+      void reader.cancel().catch(() => {});
+    };
+    controller.signal.addEventListener("abort", cancelReader, { once: true });
+    if (controller.signal.aborted) cancelReader();
     const decoder = new SSEDecoder();
     const sequence = new StreamSequence();
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (done) return;
+        if (done || controller.signal.aborted) return;
         for (const ev of decoder.push(value)) {
+          if (controller.signal.aborted) return;
           if (feed(store, sequence, ev, opts)) {
             controller.abort(); // terminal: stop, and do NOT come back
             return;
@@ -204,13 +223,14 @@ export function connectResourceStream(url: string, store: LiveResourceStore, opt
     } catch (err) {
       if (!controller.signal.aborted) throw err;
     } finally {
-      reader.cancel().catch(() => {});
+      controller.signal.removeEventListener("abort", cancelReader);
+      await reader.cancel().catch(() => {});
     }
   })();
 
   return {
     close: () => controller.abort(),
-    closed: closed.catch(() => {}),
+    closed: closed.catch(() => {}).finally(() => opts.signal?.removeEventListener("abort", abort)),
   };
 }
 
@@ -220,22 +240,32 @@ export function connectResourceStream(url: string, store: LiveResourceStore, opt
 export function connectWithEventSource(
   url: string,
   store: LiveResourceStore,
-  opts: Omit<StreamOptions, "fetch" | "headers"> = {},
+  opts: Omit<StreamOptions, "fetch" | "headers" | "credentials"> = {},
 ): StreamHandle {
   if (opts.signal?.aborted) return { close: () => {}, closed: Promise.resolve() };
   const es = new EventSource(url, { withCredentials: true });
-  const sequence = new StreamSequence();
+  let sequence = new StreamSequence();
+  let stopped = false;
   let resolve: () => void;
   const closed = new Promise<void>((r) => {
     resolve = r;
   });
 
   const shut = () => {
+    stopped = true;
     es.close();
+    opts.signal?.removeEventListener("abort", shut);
     resolve();
   };
 
+  es.onopen = () => {
+    if (stopped) return;
+    sequence = new StreamSequence();
+    opts.onOpen?.();
+  };
+
   es.onmessage = (e: MessageEvent<string>) => {
+    if (stopped) return;
     let ev: StreamEvent;
     try {
       ev = JSON.parse(e.data) as StreamEvent;
@@ -246,10 +276,10 @@ export function connectWithEventSource(
   };
 
   // EventSource's `error` is also fired on a transport hiccup, where its OWN reconnect is the
-  // correct behaviour and we must not interfere. Only a terminal PROTOCOL error (which arrives as a
-  // message, above) closes the connection — and it must, or this reconnects forever.
+  // correct behaviour and we must not interfere. Terminal protocol errors and sequence gaps close
+  // this low-level handle. Use connectManagedResourceStream for managed gap recovery.
   es.onerror = () => {
-    if (es.readyState === EventSource.CLOSED) resolve();
+    if (es.readyState === EventSource.CLOSED) shut();
   };
 
   opts.signal?.addEventListener("abort", shut, { once: true });

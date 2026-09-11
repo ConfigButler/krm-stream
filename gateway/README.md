@@ -83,7 +83,7 @@ and projection decision, then call `ValidateMergePatch` before issuing a Kuberne
 ## Shared backends
 
 `SharedBackend` multiplexes one upstream watch per normalized scope. It is opt-in because the shared
-watch uses one identity. Pair it with `kube.SSARAuthorizer` when Kubernetes should continue making
+watch uses one identity. Pair it with `kube.SubjectAccessReviewAuthorizer` when Kubernetes should continue making
 per-caller access decisions.
 
 `SharedOptions.QueueDepth` bounds live events per slow subscriber. Overflow triggers a resnapshot;
@@ -97,3 +97,9 @@ Observers run on stream paths, so they must return promptly.
 
 See [`docs/operations.md`](../docs/operations.md) for suggested metrics and alerts, and
 [`docs/adopting.md`](../docs/adopting.md) for full host wiring examples.
+
+For shared streams, set `Options.ReauthorizationInterval` (for example, 30 seconds) and
+`Options.ReauthorizationTimeout` (for example, 5 seconds). Each subscriber is rechecked independently,
+including during quiet periods; denial or timeout stops only that subscriber. Zero interval keeps
+cycle-only checks. See [authorization](../docs/auth.md) for callback contracts and capacity planning.
+Use `kube.SubjectAccessReviewAuthorizer`; `SSARAuthorizer` is a deprecated compatibility alias.

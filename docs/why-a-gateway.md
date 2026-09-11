@@ -57,7 +57,7 @@ one identity: your service account. Without sharing, the client acts as the call
 enforces the boundary, so no bug in this library can hand someone an object they may not see. With
 sharing, your `Authorizer` is the only thing between a caller and the cache.
 
-You can have both. Pair `SharedBackend` with [`kube.SSARAuthorizer`](../gateway/kube/authz.go), which
+You can have both. Pair `SharedBackend` with [`kube.SubjectAccessReviewAuthorizer`](../gateway/kube/authz.go), which
 asks the API server through a SubjectAccessReview whether this user may list and watch this resource
 here, before serving them from the shared cache. Kubernetes decides again, per user, per snapshot
 cycle, at the cost of one round-trip. Read [auth.md](auth.md) before wiring it.
