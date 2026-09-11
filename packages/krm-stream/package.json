@@ -49,9 +49,9 @@
   },
   "//": "ZERO dependencies, and that one is absolute: the engine emits plain ESM a browser imports with no bundler, and gitops-api has no bundler and is not getting one. devDependencies ship NOTHING and are kept to the four that pay for themselves: typescript (the compiler), @types/node (without it `tsc` cannot see test/ at all, because the tests import node:test — and `node --test` STRIPS types rather than checking them, so the suite that IS the contract check would be the one unverified file in the repo), biome (lint + format in one binary, the TypeScript half of what gofmt/go vet/golangci-lint do for the gateway), and esbuild (flattens dist/ into the single-file ./bundle — it runs ONCE per release here, so that every no-bundler consumer does not each reinvent it, and it is the reason a host can vendor ONE file instead of eleven; it emits no polyfill and no runtime dependency, and if it ever needs to, the bundle is wrong).",
   "devDependencies": {
-    "@biomejs/biome": "^2.5.3",
-    "@types/node": "^26.1.1",
-    "esbuild": "^0.28.1",
+    "@biomejs/biome": "^2.5.13",
+    "@types/node": "^26.5.1",
+    "esbuild": "^0.28.2",
     "typescript": "^7.0.2"
   }
 }

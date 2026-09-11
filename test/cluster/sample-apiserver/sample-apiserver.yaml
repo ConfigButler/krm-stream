@@ -107,7 +107,7 @@ spec:
         # NOT optional: --etcd-servers will not take an empty value, so the sample-apiserver needs a
         # real store. Nothing here needs to outlive the pod.
         - name: etcd
-          image: registry.k8s.io/etcd:3.5.21-0
+          image: registry.k8s.io/etcd:3.5.33-0
           command: ["/usr/local/bin/etcd", "--listen-client-urls", "http://127.0.0.1:2379", "--advertise-client-urls", "http://127.0.0.1:2379"]
 ---
 apiVersion: v1

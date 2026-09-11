@@ -15,7 +15,7 @@
 //
 // The check that this stays true lives in CI (`a stranger can go get this`), and it deliberately runs
 // from a clean module OUTSIDE this workspace, because that is the only place the bug is visible.
-go 1.26.0
+go 1.27.1
 
 use (
 	./gateway
