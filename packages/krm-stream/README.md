@@ -4,7 +4,8 @@
 stream in a browser or JavaScript application. It provides:
 
 - `LiveResourceStore` for server state, local drafts, conflicts, redactions, and merge patches.
-- `connectWithEventSource` for same-origin browser streams.
+- `connectManagedResourceStream` for bounded recovery with cookies or bearer headers.
+- `connectWithEventSource` for low-level native EventSource integration.
 - `connectResourceStream` for fetch-based transports with explicit headers.
 - `resourceStreamURL` for the v1 scope query format.
 
@@ -12,10 +13,10 @@ The package is headless and does not choose a UI framework. It works with the Go
 repository or any conforming producer.
 
 ```ts
-import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "@configbutler/krm-stream";
+import { LiveResourceStore, connectManagedResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
-connectWithEventSource(
+connectManagedResourceStream(
   resourceStreamURL("/resource-stream/v1", { version: "v1", resource: "configmaps", namespace: "app" }),
   store,
 );
@@ -37,7 +38,7 @@ import { LiveResourceStore } from "@configbutler/krm-stream/bundle";
 Vendored, that is one file to copy (`dist/krm-stream.js`) and one path to serve:
 
 ```js
-import { LiveResourceStore, connectWithEventSource } from "/krm-stream/krm-stream.js";
+import { LiveResourceStore, connectManagedResourceStream } from "/krm-stream/krm-stream.js";
 ```
 
 Both entry points are built from the same source and are exercised by the same browser test suite
@@ -48,3 +49,42 @@ against a real `EventSource`. Neither has a runtime dependency.
 The unscoped `krm-stream` package is a compatibility forwarder. This project is pre-1.0: the protocol
 and the API may still change before 1.0. See the repository [README](../../README.md),
 [client state model](../../docs/client-state-model.md), and [release guide](../../docs/releasing.md).
+
+## Managed connections and conditional saves
+
+```ts
+const connection = connectManagedResourceStream(url, store, {
+  maxRetries: 8,
+  onStateChange: state => renderConnection(state.status),
+  // headers: { Authorization: `Bearer ${hostToken}` }, // optional; credentials stay host-owned
+});
+const unsubscribe = connection.subscribe(state => renderConnection(state.status));
+// On teardown:
+unsubscribe();
+connection.close();
+await connection.closed;
+```
+
+Import `connectManagedResourceStream` from the package. It uses fetch for same-origin cookies or
+bearer headers; `credentials: "include"` opts into cross-origin cookies. It requests a fresh snapshot
+on sequence gaps, network failures, HTTP 408/429/5xx and EOF. Existing drafts survive recovery.
+States are `connecting`, `syncing`, `live`, `retrying`, `closed`, `terminal`, and `exhausted`.
+A reset makes the connection `syncing` until `synced`; enable saves while `live`.
+
+Defaults: eight retries between sustained healthy periods, exponential delay from 500ms capped at 30s,
+with jitter. After 30 seconds continuously live, retries and backoff reset (`healthyResetMs` configures
+this threshold). Brief snapshots do not replenish the budget; reset, disconnect and cancellation stop
+the health timer. Terminal protocol errors and HTTP client
+errors (including 401/403, excluding 408/429) stop retries. `close()` or `signal` cancels the stream and
+pending backoff; `closed` resolves after cleanup. Create a new handle after credentials change or an
+explicit user retry. The low-level fetch and native EventSource connectors remain available; native
+EventSource owns network reconnects but closes on sequence gaps. Use the managed connector for
+bounded recovery and observable lifecycle state.
+
+`store.captureSave(uid)` captures a detached patch, UID and base resourceVersion together.
+`store.captureReconciliation(uid)` guards a projected asynchronous response against newer watch state.
+See the [complete conditional-save example](../../examples/conditional-save/README.md) and
+[save guide](../../docs/saving.md) for host preconditions, real Kubernetes 409s, and draft preservation.
+
+For Vue 3, use the [copyable composable](../../docs/vue.md) for reactive resource and connection state
+with automatic subscription cleanup. Vue stays in the host application.

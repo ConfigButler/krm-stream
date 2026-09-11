@@ -30,10 +30,10 @@ import (
 // and there is a way to opt in WITHOUT giving up the boundary, which is the wiring you want:
 //
 //	shared := gateway.NewSharedBackend(myServiceAccountBackend)    // one watch, ONE identity…
-//	opts.Authorizer = kube.SSARAuthorizer(clientset, subjectOf)    // …but Kubernetes still decides
+//	opts.Authorizer = kube.SubjectAccessReviewAuthorizer(clientset, subjectOf)    // …but Kubernetes still decides
 //	opts.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 //
-// kube.SSARAuthorizer asks the API server, with a SubjectAccessReview, whether THIS user may list and
+// kube.SubjectAccessReviewAuthorizer asks the API server, with a SubjectAccessReview, whether THIS user may list and
 // watch THIS resource here — before the subscriber is served from the shared cache. RBAC is the
 // boundary again, and the sharing costs you nothing but a round-trip per snapshot cycle. See
 // docs/auth.md.

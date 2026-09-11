@@ -5,7 +5,7 @@
   No framework. No bundler. No build step for THIS page. One <script type="module"> that imports the
   library's built ESM straight off the server:
 
-      import { LiveResourceStore, connectWithEventSource } from "/krm-stream/index.js";
+      import { LiveResourceStore, connectManagedResourceStream } from "/krm-stream/index.js";
 
   That import is the whole constraint the library is designed around, and this page is the only place
   it is really tested: the browser fetches index.js, which imports ./store.js, which imports
@@ -85,7 +85,7 @@
       // demo pages would mean the second one drifts.
       const params = new URLSearchParams(location.search);
       const entry = params.get("entry") === "bundle" ? "/krm-stream/krm-stream.js" : "/krm-stream/index.js";
-      const { LiveResourceStore, connectWithEventSource } = await import(entry);
+      const { LiveResourceStore, connectManagedResourceStream } = await import(entry);
 
       const fixture = params.get("fixture") ?? "status-follow-live";
       const pace = params.get("pace") ?? "600ms";
@@ -104,20 +104,24 @@
       // the host highlights them and forgets them.
       let pending = new Set();
 
-      connectWithEventSource(`/resource-stream/v1?fixture=${fixture}&pace=${pace}`, store, {
+      const connection = connectManagedResourceStream(`/resource-stream/v1?fixture=${fixture}&pace=${pace}`, store, {
         // `change` names the resource (change.uid) as well as the paths, which is what a UI showing
         // more than one object per stream needs — this demo shows one, so it only reads flashed.
         onChange: (change) => {
           for (const p of change.flashed) pending.add(key(p));
           render();
         },
-        onSynced: () => { statusLine.textContent = "synced — live"; },
+        onStateChange: (state) => {
+          statusLine.dataset.state = state.status;
+          statusLine.textContent = state.status === "live" ? "synced — live" : state.status;
+        },
         onError: (code, message, terminal) => {
           statusLine.textContent = `${code}${terminal ? " (terminal)" : ""}: ${message}`;
         },
       });
 
-      store.subscribe(render);
+      const unsubscribe = store.subscribe(render);
+      addEventListener("pagehide", () => { unsubscribe(); connection.close(); }, { once: true });
 
       function render() {
         const id = store.ids()[0];

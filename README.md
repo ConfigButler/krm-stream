@@ -102,14 +102,14 @@ There are two halves, and they are usually two different people.
 
 ### The browser half
 
-No bundler, no framework, no Kubernetes client. `EventSource` is native, and the store is plain ESM:
+No bundler, no framework, no Kubernetes client. The managed connector uses fetch, and the store is plain ESM:
 
 ```ts
-import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "@configbutler/krm-stream";
+import { LiveResourceStore, connectManagedResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
 
-connectWithEventSource(
+const connection = connectManagedResourceStream(
   resourceStreamURL("/resource-stream/v1", {
     target: "production",
     version: "v1",
@@ -126,6 +126,9 @@ connectWithEventSource(
 store.setValue(uid, ["spec", "replicas"], 3);
 store.conflicts(uid); // paths where the server disagreed with an edit the user actually made
 store.patch(uid); // an RFC 7386 merge patch of just their changes, or null
+
+// In your host/view teardown callback:
+connection.close(); // stop the stream and pending retries
 ```
 
 If you have no bundler at all and vendor the library by copying it, import
@@ -164,7 +167,7 @@ patch through its own save endpoint, which is the one place a write can happen.
 | Package | Purpose |
 |---|---|
 | `github.com/ConfigButler/krm-stream/gateway` | Dependency-free Go stream gateway and SSE handler. |
-| `github.com/ConfigButler/krm-stream/gateway/kube` | Optional `client-go` backend and SSAR authorizer. |
+| `github.com/ConfigButler/krm-stream/gateway/kube` | Optional `client-go` backend and SubjectAccessReview authorizer. |
 | `@configbutler/krm-stream` | Official dependency-free ESM client store and transports. |
 | `krm-stream@0.1.0` | Deprecated, frozen compatibility name claim. Use the scoped package instead. |
 | [`spec/v1.md`](spec/v1.md) | Normative protocol contract. |

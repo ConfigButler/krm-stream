@@ -24,7 +24,9 @@ test("the built ESM imports in a browser with no bundler at all", async ({ page,
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 
   await visit("fixture=snapshot-then-deltas&pace=0ms");
-  await expect(page.locator("#status-line")).toHaveText(/synced/);
+  // The finite replay closes after its last frame. Assert rendered data rather than the
+  // transient live status, which may already have advanced to retrying on a busy runner.
+  await expect(page.getByTestId(`input:${path("data", "log-level")}`)).toHaveValue("info");
 
   // If a single bare specifier or a missing extension had crept into the emitted JS, the module graph
   // would have failed to load and this page would be blank. That is the whole constraint, checked.
@@ -101,7 +103,7 @@ test("a redacted Secret value is not in the page at all — the mask is drawn, n
   // the real one. The mask is something this page DRAWS from `redacted` — it is not a value the
   // wire carried, and there is therefore nothing to save back (proposal 0003).
   await visit("fixture=secret-redaction&pace=0ms");
-  await expect(page.locator("#status-line")).toHaveText(/synced/);
+  await expect(page.locator("#status-line")).toHaveAttribute("data-state", /^(live|retrying)$/);
 
   // Keys-only disclosure: you can see THAT `token` exists…
   const token = page.getByTestId(`value:${path("data", "token")}`);
@@ -118,11 +120,133 @@ test("a redacted Secret value is not in the page at all — the mask is drawn, n
   await expect(page.getByTestId("patch")).toHaveText("null");
 });
 
-test("a named object that does not exist renders as empty, not as a ghost and not as an error", async ({ page, visit }) => {
+test("a named object that does not exist renders as empty, not as a ghost and not as an error", async ({
+  page,
+  visit,
+}) => {
   // reset, synced — and nothing else. The fixture that kills the "named scopes may skip the snapshot"
   // optimization: skip it, and a delete-while-disconnected leaves the object on screen forever.
   await visit("fixture=named-object-absent&pace=0ms");
-  await expect(page.locator("#status-line")).toHaveText(/synced/);
+  await expect(page.locator("#status-line")).toHaveAttribute("data-state", /^(live|retrying)$/);
   await expect(page.getByTestId("editable-body")).toBeEmpty();
   await expect(page.getByTestId("patch")).toHaveText("null");
+});
+
+test("managed fetch recovers a sequence gap and preserves the browser draft", async ({ page, entry }) => {
+  let attempts = 0;
+  const object = {
+    apiVersion: "v1",
+    kind: "ConfigMap",
+    metadata: { uid: "managed", name: "cm", resourceVersion: "1" },
+    data: { value: "base" },
+  };
+  await page.route("**/managed-test", (route) => {
+    attempts++;
+    const events =
+      attempts === 1
+        ? [
+            { seq: 1, type: "reset" },
+            { seq: 3, type: "synced" },
+          ]
+        : [
+            { seq: 1, type: "reset" },
+            { seq: 2, type: "added", object },
+            { seq: 3, type: "synced" },
+          ];
+    return route.fulfill({
+      contentType: "text/event-stream",
+      body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+    });
+  });
+  await page.goto("/");
+  const result = await page.evaluate(
+    async ({ entry, object }) => {
+      const lib = await import(`/krm-stream/${entry === "bundle" ? "krm-stream" : "index"}.js`);
+      const store = new lib.LiveResourceStore();
+      store.applyServerEvent(object);
+      store.setValue("managed", ["data", "value"], "draft");
+      const states: string[] = [];
+      const handle = lib.connectManagedResourceStream("/managed-test", store, {
+        maxRetries: 1,
+        retryDelayMs: 0,
+        onStateChange: (state: { status: string }) => states.push(state.status),
+        onSynced: () => handle.close(),
+      });
+      await handle.closed;
+      return { states, draft: store.draft("managed").data.value, status: handle.state.status };
+    },
+    { entry, object },
+  );
+  expect(attempts).toBe(2);
+  expect(result.draft).toBe("draft");
+  expect(result.states).toContain("retrying");
+  expect(result.states).toContain("live");
+  expect(result.status).toBe("closed");
+});
+
+test("native EventSource resets its sequence on a browser reconnect", async ({ page, entry }) => {
+  let attempts = 0;
+  await page.route("**/native-reconnect-test", (route) => {
+    attempts++;
+    return route.fulfill({
+      contentType: "text/event-stream",
+      body: 'retry: 1\n\ndata: {"seq":1,"type":"reset"}\n\ndata: {"seq":2,"type":"synced"}\n\n',
+    });
+  });
+  await page.goto("/");
+  const result = await page.evaluate(async (entry) => {
+    const lib = await import(`/krm-stream/${entry === "bundle" ? "krm-stream" : "index"}.js`);
+    let synced = 0;
+    let gaps = 0;
+    const handle = lib.connectWithEventSource("/native-reconnect-test", new lib.LiveResourceStore(), {
+      onSynced: () => {
+        if (++synced === 2) handle.close();
+      },
+      onGap: () => gaps++,
+    });
+    await handle.closed;
+    return { synced, gaps };
+  }, entry);
+  expect(attempts).toBe(2);
+  expect(result).toEqual({ synced: 2, gaps: 0 });
+});
+
+test("the visible editor recovers and retains typing during a reconnect", async ({ page, visit }) => {
+  let attempts = 0;
+  let release!: () => void;
+  const retryAllowed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const object = {
+    apiVersion: "v1",
+    kind: "ConfigMap",
+    metadata: { uid: "ui-recovery", name: "cm", resourceVersion: "1" },
+    data: { value: "base" },
+  };
+  await page.route("**/resource-stream/v1?**", async (route) => {
+    attempts++;
+    if (attempts > 1) await retryAllowed;
+    const next = {
+      ...object,
+      metadata: { ...object.metadata, resourceVersion: String(attempts) },
+      data: { value: "base", ...(attempts > 1 ? { recovered: "yes" } : {}) },
+    };
+    const events = [
+      { seq: 1, type: "reset" },
+      { seq: 2, type: "added", object: next },
+      { seq: 3, type: "synced" },
+    ];
+    await route.fulfill({
+      contentType: "text/event-stream",
+      body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+    });
+  });
+  await visit("fixture=snapshot-then-deltas&pace=0ms");
+  await expect(page.locator("#status-line")).toHaveAttribute("data-state", /^(retrying|connecting)$/);
+  const field = page.getByTestId(`input:${path("data", "value")}`);
+  await field.fill("typed while disconnected");
+  release();
+  await expect(page.getByTestId(`input:${path("data", "recovered")}`)).toHaveValue("yes");
+  await expect(field).toHaveValue("typed while disconnected");
+  expect(attempts).toBeGreaterThanOrEqual(2);
 });

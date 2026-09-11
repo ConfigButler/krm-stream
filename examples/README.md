@@ -9,3 +9,8 @@ For host integration patterns, use these small recipes:
   explicit `Authorization` header for a deliberate token-bearing client.
 - [Shared backend with SSAR](../docs/adopting.md#4-share-watches-only-with-kubernetes-backed-authorization):
   one service-account watch plus Kubernetes SubjectAccessReviews for each subscriber.
+
+[Conditional save](conditional-save/README.md) composes a managed connection with atomic save capture,
+projected reconciliation, and a host-owned Kubernetes endpoint that preserves real 409 conflicts.
+
+[Vue adapter](vue/README.md) is a copyable, typechecked composable with reactivity and cleanup tests.

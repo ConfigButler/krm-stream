@@ -90,6 +90,13 @@ type Gateway struct {
 	// HeartbeatInterval controls SSE heartbeats when ServeStream is used. Zero uses the package
 	// default. It has no effect on the transport-neutral Stream method.
 	HeartbeatInterval time.Duration
+
+	// ReauthorizationInterval rechecks each subscriber independently, even on quiet streams.
+	// Zero disables timed checks; snapshot cycles always reauthorize.
+	ReauthorizationInterval time.Duration
+	// ReauthorizationTimeout bounds a timed check. Zero defaults to 10 seconds.
+	// Authorizers and projection policies must honor context cancellation.
+	ReauthorizationTimeout time.Duration
 	// Ordering is how far the upstream's resourceVersions may be trusted. The zero value is
 	// OrderingStrict: this library targets Kubernetes 1.35+, where orderability is a conformance
 	// requirement, and it says so rather than degrading quietly on every cluster to accommodate one.
@@ -141,11 +148,6 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 		// EventSource reconnects on its own, so a non-terminal refusal would have a revoked user
 		// hammering a forbidden scope forever.
 		//
-		// What this does NOT do, and docs/auth.md says so plainly: a perfectly quiet stream may not
-		// cycle for a long time, so revocation is noticed at the next cycle rather than instantly.
-		// The credential problem is solved properly on the other side of the seam — ClientFor is
-		// re-invoked here too, so a host that returns a client backed by a refreshing token source
-		// (the Dex route) never hands us a dead token in the first place.
 		if err := g.Auth.Authorize(ctx, principal, scope); err != nil {
 			return g.emitTerminal(ctx, sink, scope, "", err)
 		}
@@ -162,7 +164,7 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 			return g.emitTerminal(ctx, sink, scope, projection, err)
 		}
 
-		err = g.cycle(ctx, backend, scope, projection, revisions, sink)
+		err = g.authorizedCycle(ctx, principal, scope, requested, policy, backend, projection, revisions, sink)
 		switch {
 		case err == nil:
 			// A cycle only ends by error or cancellation; nil would be a bug in the loop below.

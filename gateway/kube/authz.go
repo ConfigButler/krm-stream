@@ -28,7 +28,7 @@ import (
 // Kubernetes' again. That is the point:
 //
 //	shared := gateway.NewSharedBackend(serviceAccountBackend)   // one watch, one identity
-//	opts.Authorizer = kube.SSARAuthorizer(clientset, subjectOf) // …but RBAC still decides
+//	opts.Authorizer = kube.SubjectAccessReviewAuthorizer(clientset, subjectOf) // …but RBAC still decides
 //	opts.Clients    = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 //
 // Because the gateway re-authorizes on every snapshot cycle (stream.go), this is also how a
@@ -51,7 +51,7 @@ type Subject struct {
 // SubjectFor maps a Principal onto a Kubernetes subject. Return an error to refuse the caller.
 type SubjectFor func(gateway.Principal) (Subject, error)
 
-// SSARAuthorizer authorizes a scope by asking the API server, with a SubjectAccessReview, whether the
+// SubjectAccessReviewAuthorizer authorizes a scope by asking the API server, with a SubjectAccessReview, whether the
 // caller may `list` and `watch` that resource.
 //
 // BOTH verbs, and that is not belt-and-braces: a snapshot cycle is a list followed by a watch — quite
@@ -62,7 +62,7 @@ type SubjectFor func(gateway.Principal) (Subject, error)
 // It needs the SERVER's own client (a service account) to hold `create` on `subjectaccessreviews`,
 // which is the standard `system:auth-delegator` role. It does NOT need impersonate rights: this asks
 // a question about a user, it does not act as one.
-func SSARAuthorizer(cs kubernetes.Interface, subjectFor SubjectFor) gateway.Authorizer {
+func SubjectAccessReviewAuthorizer(cs kubernetes.Interface, subjectFor SubjectFor) gateway.Authorizer {
 	return gateway.AuthorizerFunc(func(ctx context.Context, p gateway.Principal, scope gateway.Scope) error {
 		subject, err := subjectFor(p)
 		if err != nil {
@@ -130,4 +130,10 @@ func groupResource(s gateway.Scope) string {
 		return s.Resource
 	}
 	return s.Group + "/" + s.Resource
+}
+
+// SSARAuthorizer is the historical name for SubjectAccessReviewAuthorizer.
+// Deprecated: use SubjectAccessReviewAuthorizer; this creates SubjectAccessReview, not SelfSubjectAccessReview.
+func SSARAuthorizer(cs kubernetes.Interface, subjectFor SubjectFor) gateway.Authorizer {
+	return SubjectAccessReviewAuthorizer(cs, subjectFor)
 }

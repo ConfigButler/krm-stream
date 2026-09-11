@@ -91,7 +91,7 @@ tasks:
   # -------------------------------------------------------------------- test --
   test:
     desc: "Run both suites against the shared conformance fixtures."
-    deps: [test-gateway, test-kube, test-client]
+    deps: [test-gateway, test-kube, test-client, test-vue]
 
   test-gateway:
     desc: "Go: the gateway + its half of the conformance suite."
@@ -118,6 +118,24 @@ tasks:
     dir: "{{.CLIENT_DIR}}"
     cmds:
       - node --test
+
+  test-vue:
+    desc: "Typecheck and test the optional Vue example."
+    deps: [_vue-deps]
+    dir: examples/vue
+    cmds:
+      - npm test
+
+  _vue-deps:
+    internal: true
+    dir: examples/vue
+    sources: ["package.json", "package-lock.json"]
+    generates: ["node_modules/.package-lock.json"]
+    status:
+      - test -x node_modules/.bin/tsc
+      - test -f node_modules/vue/package.json
+    cmds:
+      - npm ci --no-audit --no-fund
 
   # --------------------------------------------------------------------- e2e --
   replay:

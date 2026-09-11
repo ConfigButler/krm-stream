@@ -4,36 +4,39 @@ krm-stream is a read library. Your application owns its HTTP save endpoint, audi
 Kubernetes client. The client store produces a narrow RFC 7386 JSON merge patch; use
 `gateway.ValidateMergePatch` immediately before sending it to Kubernetes.
 
-```go
-func (s *server) saveConfigMap(w http.ResponseWriter, r *http.Request) {
-    user := userFromSession(r)
-    scope := authorizedScope(user, r)
-    patch := readRequestBody(r)
+Use the complete [conditional-save example](../examples/conditional-save/README.md): it includes a
+compilable host endpoint, client reconciliation, race tests, and a real-cluster 409 test.
 
-    // Read the current object using the same identity and effective projection decision as the stream.
-    object := s.currentObject(r.Context(), user, scope)
-    if err := gateway.ValidateMergePatch(gateway.ProjectionFull, object, patch); err != nil {
-        var violation *gateway.PatchViolation
-        if errors.As(err, &violation) {
-            http.Error(w, violation.Error(), http.StatusBadRequest)
-            return
-        }
-        http.Error(w, "invalid merge patch", http.StatusBadRequest)
-        return
-    }
-
-    // Your app performs this ordinary Kubernetes PATCH as the signed-in user.
-    _, err := s.dynamicFor(user).Resource(configMaps).Namespace(scope.Namespace).
-        Patch(r.Context(), scope.Name, types.MergePatchType, patch, metav1.PatchOptions{})
-    if err != nil {
-        http.Error(w, "save failed", http.StatusBadGateway)
-        return
-    }
-
-    // 204, and NOT the object Kubernetes just handed back. See below.
-    w.WriteHeader(http.StatusNoContent)
-}
+```ts
+const intent = store.captureSave(uid);
+// intent = { uid, resourceVersion, patch }, detached and captured together before any await.
+if (intent) await hostSave(intent);
 ```
+
+The host validates the patch and adds `metadata.uid` and `metadata.resourceVersion` from that intent
+before sending a Kubernetes merge PATCH. It must not substitute the version from a newer GET.
+Kubernetes performs the version check atomically with the write. Propagate a real Kubernetes 409
+as HTTP 409; do not turn all upstream errors into 502.
+
+A narrow patch limits which fields are written; it does **not** protect against concurrent edits.
+JSON merge patch replaces arrays in full, including arrays the client reconciles by keyed items.
+See Kubernetes' [conditional update guidance](https://kubernetes.io/docs/reference/using-api/api-concepts/#updates-to-existing-resources).
+
+On 409, keep the draft and reconcile a fresh, complete **projected** GET. Capture the response guard
+before starting that GET:
+
+```ts
+const reconcile = store.captureReconciliation(uid);
+const { object, redactedPaths } = await hostRead();
+reconcile(object, { redactedPaths });
+// false can also mean snapshot recovery or unknown redaction paths. Do not force it.
+```
+
+Local edits made during the request survive reconciliation. Render the current draft and conflicts;
+let the user review before capturing another save intent. Serialize saves per editor. A host GET must
+be a most-recent Kubernetes read with no intermediary cache and the same projection as the stream.
+Do not apply a response for a replacement UID to the old editor. Deleted-object drafts are removed by
+the store; archive them outside the store if the application needs recovery after deletion.
 
 ## What the guard rejects
 
@@ -47,9 +50,14 @@ It does not grant write permission, choose a projection, fetch the object, issue
 optimistic concurrency. Those stay with the host. Do not use whole-object `PUT`: projected objects are
 intentionally incomplete, and a `PUT` can delete fields the browser never saw.
 
-`metadata.resourceVersion` may be stale when `krm-spec/v1` suppresses invisible status churn. Do not
-use the streamed value as a write precondition. The client-side three-way merge surfaces conflicts in
-the fields the user can see; send only the user's explicit merge-patch changes.
+Every projection can hold an older `metadata.resourceVersion`: all suppress changes to stripped
+bookkeeping metadata, and `krm-spec/v1` additionally suppresses status-only changes. A version
+precondition remains safe: rejection prevents a lost update. Sustained invisible churn can prevent
+save progress, but a 409 is a failed version precondition, not necessarily a disagreement at an
+editable field. An accepted projected GET advances the base without requiring a snapshot. Render
+actual draft conflicts separately; when none exist, explain the refreshed base and offer a newly
+captured save. If reconciliation is refused, preserve the draft and recover before writing again.
+Do not remove concurrency protection or blindly retry the old patch with a newer version.
 
 ## Answer 204 and let the watch echo it
 
@@ -65,17 +73,18 @@ clear and nothing to adopt. The echo settles it.
 
 ## If you must answer with the object
 
-`store.adoptSaved(object)` is for a host that already holds a **projected** object, such as one doing
-its own optimistic update. Project it first:
+Prefer 204. If a host returns an object, capture `store.captureReconciliation(uid)` **before** the
+save request and apply its projected response through that guard. This prevents a delayed response
+from overwriting a newer watch event, and preserves local edits made while saving.
 
-```go
-projected, redacted := gateway.Project(gateway.ProjectionFull, result)
-_ = redacted // the paths withheld; the client keeps the redactions it already has
-writeJSON(w, projected)
-```
-
-`gateway.Project` applies the same projection the stream applies. Never hand `adoptSaved` an object
-straight from the Kubernetes client.
+`store.adoptSaved(object)` remains available for synchronous adoption and newly created objects. It
+is unguarded and must not receive delayed responses that can race the watch. Never adopt a raw
+Kubernetes response: project it first and provide the correct redaction metadata. Hosts exposing
+redacted resources can return `redactedPaths` directly from `gateway.Project`. The guard retains
+known stream revisions for paths still present and removes paths absent from that list. Omitted
+redaction metadata preserves existing protections. Unknown paths reject the entire response: open a
+later authoritative upsert for that UID or a fresh stream snapshot before retrying reconciliation. Never invent revision counters for a GET.
+An explicit `redacted` array is still supported when the host has authoritative stream revisions.
 
 ## Creating and deleting whole objects
 

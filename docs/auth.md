@@ -103,10 +103,25 @@ too:
 - **`ClientFor` is your refresh point.** It is called again each cycle, so you can hand back a client
   bearing a *fresh* token.
 
-**The gap:** a perfectly quiet stream may not cycle for a long time, so revocation is
-noticed at the *next cycle*, not instantly. The credential half of that is solved properly on your
-side of the seam — give the client a **refreshing token source** (Dex issues a refresh token; the
-standard `oauth2.TokenSource` wraps it), and it never hands us a dead token in the first place.
+Set `ReauthorizationInterval` to bound how long a quiet stream runs without checking entitlement:
+
+```go
+options.ReauthorizationInterval = 30 * time.Second
+options.ReauthorizationTimeout = 5 * time.Second
+```
+
+Timed checks are per subscriber and recheck both `Authorizer` and the projection policy. During a
+check that subscriber's object delivery pauses. Denial, timeout or policy failure terminates only
+that stream; other subscribers and the shared upstream continue. A changed projection terminates
+the old stream so it cannot keep disclosing its previous view. Zero interval preserves cycle-only
+checks; zero timeout uses 10 seconds. The bound assumes host callbacks honor context cancellation
+and sinks do not block indefinitely. The check uses the principal captured at stream open: resolve
+current session/account validity inside the host authorizer if those can change independently of RBAC.
+
+For 200 subscribers, a 30-second interval adds roughly 13 SubjectAccessReviews/second (list and watch
+per subscriber), plus opening/cycle checks. Choose an interval and timeout for your revocation budget
+and API-server capacity; checks are not cached across identities. `ClientFor` still runs per snapshot
+cycle so the host can return a client backed by refreshing credentials.
 
 ## Two things that are easy to confuse
 
@@ -120,11 +135,11 @@ scope, so it opens it **once**, so it opens it as **one identity** — your serv
 moment your `Authorizer` stops being defence in depth and becomes *the only thing* between a caller
 and the objects. That is why it is opt-in, and why it is not the default.
 
-If you turn it on, use **`kube.SSARAuthorizer`**, and Kubernetes is the boundary again:
+If you turn it on, use **`kube.SubjectAccessReviewAuthorizer`**, and Kubernetes is the boundary again:
 
 ```go
 shared := gateway.NewSharedBackend(serviceAccountBackend)     // one watch, one identity…
-opts.Authorizer = kube.SSARAuthorizer(clientset, subjectOf)   // …but RBAC still decides
+opts.Authorizer = kube.SubjectAccessReviewAuthorizer(clientset, subjectOf)   // …but RBAC still decides
 opts.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 ```
 
@@ -145,7 +160,8 @@ Three things it does that are easy to get accidentally permissive, all tested:
 It needs your server's service account to hold `create` on `subjectaccessreviews` (the standard
 `system:auth-delegator` role). It does **not** need impersonate rights: it asks a question *about* a
 user, it does not act *as* one. And because the gateway re-authorizes every snapshot cycle, this is
-also how a revocation reaches a stream that is already open.
+also how a revocation reaches a stream that is already open. Timed checks bound quiet-stream revocation.
+The old `SSARAuthorizer` name remains a deprecated alias; it never created SelfSubjectAccessReview.
 
 ## What this library never does
 

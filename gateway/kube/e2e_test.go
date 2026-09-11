@@ -12,8 +12,12 @@
 package kube_test
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 
@@ -29,6 +33,7 @@ import (
 
 	"github.com/ConfigButler/krm-stream/gateway"
 	"github.com/ConfigButler/krm-stream/gateway/kube"
+	"github.com/ConfigButler/krm-stream/gateway/kube/examples/conditionalsave"
 )
 
 var flunders = schema.GroupVersionResource{Group: "wardle.example.com", Version: "v1alpha1", Resource: "flunders"}
@@ -257,5 +262,43 @@ func TestRealClusterAggregatedAPIFallsBack(t *testing.T) {
 	deleted := await(t, ch, "live deleted fl-a", ofType(gateway.EventDeleted))
 	if deleted.Identity == nil || deleted.Identity.UID == "" {
 		t.Fatalf("deleted carried no trustworthy uid: %+v", deleted.Identity)
+	}
+}
+
+// This uses the real API server's optimistic concurrency implementation, not fake client reactors.
+func TestConditionalSaveConflict(t *testing.T) {
+	cs, _ := clients(t)
+	ns := scratchNamespace(t, cs)
+	ctx := t.Context()
+	cm, err := cs.CoreV1().ConfigMaps(ns).Create(ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: "editor"}, Data: map[string]string{"value": "base"}}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := conditionalsave.Handler(func(*http.Request) (kubernetes.Interface, error) { return cs, nil }, ns, cm.Name)
+	captured := map[string]any{"uid": string(cm.UID), "resourceVersion": cm.ResourceVersion, "patch": map[string]any{"data": map[string]any{"value": "mine"}}}
+	cm.Data["value"] = "winner"
+	latest, err := cs.CoreV1().ConfigMaps(ns).Update(ctx, cm, metav1.UpdateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func() int {
+		body, err := json.Marshal(captured)
+		if err != nil {
+			t.Fatal(err)
+		}
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPatch, "/editor", bytes.NewReader(body)))
+		return response.Code
+	}
+	if code := send(); code != http.StatusConflict {
+		t.Fatalf("stale save: HTTP %d, want real Kubernetes 409", code)
+	}
+	got, err := cs.CoreV1().ConfigMaps(ns).Get(ctx, cm.Name, metav1.GetOptions{})
+	if err != nil || got.Data["value"] != "winner" {
+		t.Fatalf("winner overwritten: %v, %v", got, err)
+	}
+	captured["resourceVersion"] = latest.ResourceVersion // Represents a newly reviewed/captured intent.
+	if code := send(); code != http.StatusNoContent {
+		t.Fatalf("fresh save: HTTP %d", code)
 	}
 }
