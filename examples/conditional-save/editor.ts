@@ -1,4 +1,4 @@
-import type { KRMObject, LiveResourceStore, Redaction } from "../../packages/krm-stream/src/index.ts";
+import type { KRMObject, LiveResourceStore } from "../../packages/krm-stream/src/index.ts";
 
 /** Copy into the host. request is the host's fetch wrapper (session/CSRF/error policy).
  * Call save only while the managed connection is live. Keep the editor mounted during requests. */
@@ -10,6 +10,7 @@ export function conditionalEditor(store: LiveResourceStore, uid: string, url: st
     },
     async save(): Promise<"unchanged" | "busy" | "saved" | "conflict"> {
       if (saving) return "busy";
+      if (!store.ids().includes(uid)) return "conflict";
       if (store.conflicts(uid).length) return "conflict";
       const intent = store.captureSave(uid); // No await between patch and merge-base capture.
       if (!intent) return "unchanged";
@@ -28,8 +29,8 @@ export function conditionalEditor(store: LiveResourceStore, uid: string, url: st
           const latest = await request(url, { cache: "no-store" });
           if (latest.status === 404) return "conflict"; // Let the stream remove the old UID.
           if (!latest.ok) throw new Error(`Reconciliation failed: HTTP ${latest.status}`);
-          const body = (await latest.json()) as { object: KRMObject; redacted: Redaction[] | null };
-          reconcile(body.object, { redacted: body.redacted ?? [] });
+          const body = (await latest.json()) as { object: KRMObject; redactedPaths: string[] };
+          reconcile(body.object, { redactedPaths: body.redactedPaths });
           // A newer watch/GET wins if reconcile returns false. Render the current store either way.
           // Ask the user to review conflicts and save again; capture a fresh intent on that click.
           return "conflict";

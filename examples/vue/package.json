@@ -1,0 +1,13 @@
+{
+  "name": "krm-stream-example-vue",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tsc --noEmit && node --test"
+  },
+  "devDependencies": {
+    "@types/node": "^26.5.1",
+    "typescript": "^7.0.2",
+    "vue": "^3.5.42"
+  }
+}

@@ -12,3 +12,5 @@ For host integration patterns, use these small recipes:
 
 [Conditional save](conditional-save/README.md) composes a managed connection with atomic save capture,
 projected reconciliation, and a host-owned Kubernetes endpoint that preserves real 409 conflicts.
+
+[Vue adapter](vue/README.md) is a copyable, typechecked composable with reactivity and cleanup tests.

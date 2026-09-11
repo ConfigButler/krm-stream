@@ -4,29 +4,12 @@ A copyable Vue 3 composable covers the adapter: reactive snapshots for drafts, c
 redactions and connection state, plus automatic subscription cleanup. Vue remains a host dependency;
 the core package and its browser bundle have no framework dependencies.
 
-```ts
-import { shallowRef, onScopeDispose } from "vue";
-import type { LiveResourceStore, ManagedStreamHandle } from "@configbutler/krm-stream";
+The [composable source](../examples/vue/useLiveResource.ts) and
+[tests](../examples/vue/useLiveResource.test.ts) are typechecked and executed by `task test-vue` and CI.
+Copy the source into your host and change its library import to `@configbutler/krm-stream`.
 
-// Call in setup() or an active effect scope. One fixed UID per instance.
-export function useLiveResource(
-  store: LiveResourceStore,
-  uid: string,
-  connection: ManagedStreamHandle,
-) {
-  const read = () => store.ids().includes(uid) ? {
-    draft: store.draft(uid),
-    changes: store.changes(uid),
-    conflicts: store.conflicts(uid),
-    redactions: store.redactions(uid),
-  } : null;
-  const resource = shallowRef(read());
-  const state = shallowRef(connection.state);
-  const stopStore = store.subscribe(() => { resource.value = read(); });
-  const stopConnection = connection.subscribe(next => { state.value = next; });
-  onScopeDispose(() => { stopStore(); stopConnection(); });
-  return { resource, state };
-}
+```ts
+const { resource, state } = useLiveResource(store, uid, connection);
 ```
 
 Use `resource.value?.draft` in script and `resource?.draft` in a template. A missing/deleted UID gives

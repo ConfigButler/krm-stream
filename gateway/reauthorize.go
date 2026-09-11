@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"time"
 )
@@ -56,7 +57,15 @@ func (g *Gateway) authorizedCycle(ctx context.Context, principal Principal, scop
 				if err == nil {
 					err = checkCtx.Err()
 				}
+				// Inspect cancellation before finish cancels the check itself. Teardown of a
+				// recoverable cycle must not replace its original error with a terminal refusal.
+				teardown := cycleCtx.Err() != nil && errors.Is(err, context.Canceled)
 				finish()
+				if teardown {
+					gate.mu.Unlock()
+					done <- nil
+					return
+				}
 				if err != nil {
 					// Fail closed even if a host returns a normally recoverable StreamError.
 					se := *asStreamError(err)

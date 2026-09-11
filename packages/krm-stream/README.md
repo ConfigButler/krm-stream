@@ -71,8 +71,10 @@ on sequence gaps, network failures, HTTP 408/429/5xx and EOF. Existing drafts su
 States are `connecting`, `syncing`, `live`, `retrying`, `closed`, `terminal`, and `exhausted`.
 A reset makes the connection `syncing` until `synced`; enable saves while `live`.
 
-Defaults: eight retries **total per handle**, exponential delay from 500ms capped at 30s, with jitter.
-Short successful connections do not replenish the budget. Terminal protocol errors and HTTP client
+Defaults: eight retries between sustained healthy periods, exponential delay from 500ms capped at 30s,
+with jitter. After 30 seconds continuously live, retries and backoff reset (`healthyResetMs` configures
+this threshold). Brief snapshots do not replenish the budget; reset, disconnect and cancellation stop
+the health timer. Terminal protocol errors and HTTP client
 errors (including 401/403, excluding 408/429) stop retries. `close()` or `signal` cancels the stream and
 pending backoff; `closed` resolves after cleanup. Create a new handle after credentials change or an
 explicit user retry. The low-level fetch and native EventSource connectors remain available; native

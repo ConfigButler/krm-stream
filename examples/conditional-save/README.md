@@ -27,7 +27,7 @@ connection.close();
 ```
 
 Use the same scope and `krm-full/v1` projection on the stream and this example endpoint. The GET
-returns a complete projected object with redactions; it must use a most-recent Kubernetes read, with
+returns a complete projected object with redacted paths; it must use a most-recent Kubernetes read, with
 no HTTP or application cache. A recreated name has a different UID and must be opened as a new editor.
 Keep an external draft archive if users need to recover edits after deletion: the store intentionally
 removes drafts of deleted objects.
@@ -41,3 +41,8 @@ patch onto the latest version. No automatic write retry is performed.
 Successful writes return 204. The stream echo settles the saved values while retaining later edits.
 If the echo is delayed, dirty state remains visible; prevent repeated saves until your host's chosen
 acknowledgment UX allows them. Save results never feed raw Kubernetes objects back into the store.
+
+The GET returns `redactedPaths` from `gateway.Project`, without stream revision counters. The client
+preserves revisions for known paths. Unknown redaction paths reject reconciliation; open a fresh
+managed stream on the same store to obtain its snapshot before retrying. The editor returns
+`conflict` without automatically retrying writes. Omitted redaction metadata never clears protection.

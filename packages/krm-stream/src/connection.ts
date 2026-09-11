@@ -5,14 +5,16 @@ export type ConnectionStatus = "connecting" | "syncing" | "live" | "retrying" | 
 
 export interface ConnectionState {
   status: ConnectionStatus;
-  /** Retries used during this connection's lifetime (never reset by a short-lived success). */
+  /** Retries since the last sustained healthy period. */
   retries: number;
   retryInMs?: number;
 }
 
 export interface ManagedStreamOptions extends StreamOptions {
-  /** Total retry budget. Defaults to 8. Start a new connection to retry after exhaustion. */
+  /** Retry budget between sustained healthy periods. Defaults to 8. */
   maxRetries?: number;
+  /** Continuous live time required to reset retries and backoff. Defaults to 30 seconds. */
+  healthyResetMs?: number;
   /** Exponential backoff starts at 500ms, capped at 30s, with 50–100% jitter. */
   retryDelayMs?: number;
   maxRetryDelayMs?: number;
@@ -33,9 +35,13 @@ export function connectManagedResourceStream(
   opts: ManagedStreamOptions = {},
 ): ManagedStreamHandle {
   const maxRetries = opts.maxRetries ?? 8;
+  const healthyResetMs = opts.healthyResetMs ?? 30_000;
   const delay = opts.retryDelayMs ?? 500;
   const cap = opts.maxRetryDelayMs ?? 30_000;
   if (
+    !Number.isFinite(healthyResetMs) ||
+    healthyResetMs <= 0 ||
+    healthyResetMs > 2_147_483_647 ||
     !Number.isSafeInteger(maxRetries) ||
     maxRetries < 0 ||
     !Number.isFinite(delay) ||
@@ -50,12 +56,20 @@ export function connectManagedResourceStream(
   const subscribers = new Set<(state: Readonly<ConnectionState>) => void>();
   let state: Readonly<ConnectionState> = Object.freeze({ status: "connecting", retries: 0 });
   let terminal = false;
+  let healthTimer: ReturnType<typeof setTimeout> | undefined;
+  const clearHealthTimer = () => {
+    clearTimeout(healthTimer);
+    healthTimer = undefined;
+  };
   const publish = (status: ConnectionStatus, retryInMs?: number) => {
     state = Object.freeze({ status, retries: state.retries, ...(retryInMs === undefined ? {} : { retryInMs }) });
     opts.onStateChange?.(state);
     for (const callback of subscribers) callback(state);
   };
-  const close = () => controller.abort();
+  const close = () => {
+    clearHealthTimer();
+    controller.abort();
+  };
   opts.signal?.addEventListener("abort", close, { once: true });
   if (opts.signal?.aborted) close();
 
@@ -68,24 +82,42 @@ export function connectManagedResourceStream(
         const stream = connectResourceStream(url, store, {
           ...opts,
           signal: controller.signal,
+          onGap: (expected, received) => {
+            clearHealthTimer();
+            opts.onGap?.(expected, received);
+          },
           onOpen: () => {
             publish("syncing");
             opts.onOpen?.();
           },
           onChange: (change) => {
-            if (change.type === "reset") publish("syncing");
+            if (change.type === "reset") {
+              clearHealthTimer();
+              publish("syncing");
+            }
             opts.onChange?.(change);
           },
           onSynced: () => {
+            if (state.status !== "live") {
+              healthTimer = setTimeout(() => {
+                healthTimer = undefined;
+                if (!controller.signal.aborted && state.status === "live") {
+                  state = { ...state, retries: 0 };
+                  publish("live");
+                }
+              }, healthyResetMs);
+            }
             publish("live");
             opts.onSynced?.();
           },
           onError: (code, message, isTerminal) => {
+            if (isTerminal) clearHealthTimer();
             terminal ||= isTerminal;
             opts.onError?.(code, message, isTerminal);
           },
         });
         await stream.closed;
+        clearHealthTimer();
         if (controller.signal.aborted) break;
         if (terminal) {
           publish("terminal");
@@ -112,6 +144,7 @@ export function connectManagedResourceStream(
       }
       publish("closed");
     } finally {
+      clearHealthTimer();
       opts.signal?.removeEventListener("abort", close);
       subscribers.clear();
     }

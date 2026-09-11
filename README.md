@@ -105,11 +105,11 @@ There are two halves, and they are usually two different people.
 No bundler, no framework, no Kubernetes client. `EventSource` is native, and the store is plain ESM:
 
 ```ts
-import { LiveResourceStore, connectWithEventSource, resourceStreamURL } from "@configbutler/krm-stream";
+import { LiveResourceStore, connectManagedResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
 
-connectWithEventSource(
+connectManagedResourceStream(
   resourceStreamURL("/resource-stream/v1", {
     target: "production",
     version: "v1",

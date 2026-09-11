@@ -50,12 +50,12 @@ func Handler(clientFor func(*http.Request) (kubernetes.Interface, error), namesp
 			return
 		}
 		if r.Method == http.MethodGet {
-			projected, _ := gateway.Project(gateway.ProjectionFull, object)
+			projected, paths := gateway.Project(gateway.ProjectionFull, object)
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(struct {
-				Object   gateway.KRMObject   `json:"object"`
-				Redacted []gateway.Redaction `json:"redacted"`
-			}{projected, []gateway.Redaction{}})
+				Object        gateway.KRMObject `json:"object"`
+				RedactedPaths []string          `json:"redactedPaths"`
+			}{projected, paths})
 			return
 		}
 		var request saveRequest

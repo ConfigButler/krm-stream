@@ -83,7 +83,7 @@ test("the complete editor reconciles an HTTP 409 and never retries the write bli
       return new Response(null, { status: 409 });
     }
     store.setValue("u", ["data", "value"], "typed while saving");
-    return Response.json({ object: object("2", "theirs"), redacted: [] });
+    return Response.json({ object: object("2", "theirs"), redactedPaths: [] });
   });
   assert.equal(await editor.save(), "conflict");
   assert.deepEqual(methods, ["PATCH", "GET"]);
@@ -100,7 +100,7 @@ test("the editor ignores a reconciliation GET overtaken by the watch", async () 
   const editor = conditionalEditor(store, "u", "/save", async (_url, init) => {
     if (init?.method === "PATCH") return new Response(null, { status: 409 });
     store.applyServerEvent(object("3", "watch"));
-    return Response.json({ object: object("2", "stale GET"), redacted: [] });
+    return Response.json({ object: object("2", "stale GET"), redactedPaths: [] });
   });
   assert.equal(await editor.save(), "conflict");
   assert.deepEqual(store.server("u").data, { value: "watch" });
@@ -117,4 +117,34 @@ test("a late GET cannot mark an object present in a recovery snapshot", () => {
   store.endSnapshot();
   assert.deepEqual(store.ids(), []);
   assert.equal(beforeReset(object("2")), false);
+});
+
+test("stateless reconciliation preserves redaction protection without inventing revisions", () => {
+  const store = new LiveResourceStore();
+  const secret = { ...object("1"), kind: "Secret", data: {} };
+  store.applyServerEvent(secret, { redacted: [{ path: "/data/token", rev: 7 }] });
+  assert.equal(
+    store.captureReconciliation("u")({ ...secret, metadata: { ...secret.metadata, resourceVersion: "2" } }),
+    true,
+  );
+  assert.deepEqual(store.redactions("u"), [{ path: ["data", "token"], rev: 7 }]);
+  assert.equal(store.isEditable("u", ["data", "token"]), false);
+  const reconcile = store.captureReconciliation("u");
+  assert.equal(reconcile(secret, { redactedPaths: ["/data/token", "/data/new"] }), false);
+  assert.equal(store.server("u").metadata.resourceVersion, "2");
+  assert.equal(reconcile(secret, { redactedPaths: ["/data/token"] }), true);
+  assert.deepEqual(store.redactions("u"), [{ path: ["data", "token"], rev: 7 }]);
+  assert.equal(store.captureReconciliation("u")(secret, { redactedPaths: [] }), true);
+  assert.deepEqual(store.redactions("u"), []);
+});
+
+test("save after deletion returns conflict without making a request", async () => {
+  const { conditionalEditor } = await import("../../../examples/conditional-save/editor.ts");
+  const store = new LiveResourceStore();
+  store.applyServerEvent(object("1"));
+  const editor = conditionalEditor(store, "u", "/save", async () => {
+    assert.fail("request after deletion");
+  });
+  store.removeResource("u");
+  assert.equal(await editor.save(), "conflict");
 });

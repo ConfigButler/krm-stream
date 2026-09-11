@@ -165,3 +165,58 @@ func TestTimedCheckPausesDisclosureAndCancellationStopsCheck(t *testing.T) {
 		t.Fatal("check outlived stream")
 	}
 }
+
+// A cycle ending while its recheck is blocked must retain its original recovery outcome.
+func TestCycleTeardownDoesNotBecomeAuthorizationFailure(t *testing.T) {
+	for _, cycleErr := range []error{ErrWatchClosed, ResyncRequired("queue overflow"), &StreamError{Code: CodeSlowConsumer, Terminal: false, Message: "slow"}} {
+		t.Run(cycleErr.Error(), func(t *testing.T) {
+			checking := make(chan struct{})
+			backend := &reauthClosingBackend{checking: checking, err: cycleErr}
+			g := &Gateway{ReauthorizationInterval: time.Millisecond, Auth: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
+				close(checking)
+				<-ctx.Done()
+				return ctx.Err()
+			})}
+			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			defer cancel()
+			err := g.authorizedCycle(ctx, "alice", sharedScopeUnderTest, "", StaticProjection(ProjectionFull), backend, ProjectionFull, map[string]map[string]redactionState{}, make(reauthEvents, 8))
+			if err != cycleErr {
+				t.Fatalf("cycle outcome replaced: got %v, want %v", err, cycleErr)
+			}
+		})
+	}
+}
+
+type reauthClosingBackend struct {
+	checking <-chan struct{}
+	err      error
+}
+
+func (b *reauthClosingBackend) Watch(context.Context, Scope) (Watcher, error) { return b, nil }
+func (b *reauthClosingBackend) Next(ctx context.Context) (WatchEvent, error) {
+	select {
+	case <-b.checking:
+		return WatchEvent{}, b.err
+	case <-ctx.Done():
+		return WatchEvent{}, ctx.Err()
+	}
+}
+func (*reauthClosingBackend) Stop() {}
+
+func TestExplicitDenialSurvivesConcurrentCycleTeardown(t *testing.T) {
+	checking := make(chan struct{})
+	backend := &reauthClosingBackend{checking: checking, err: ErrWatchClosed}
+	denial := Forbidden("revoked")
+	g := &Gateway{ReauthorizationInterval: time.Millisecond, Auth: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
+		close(checking)
+		<-ctx.Done()
+		return denial
+	})}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	err := g.authorizedCycle(ctx, "alice", sharedScopeUnderTest, "", StaticProjection(ProjectionFull), backend, ProjectionFull, map[string]map[string]redactionState{}, make(reauthEvents, 8))
+	se, ok := err.(*StreamError)
+	if !ok || !se.Terminal || se.Code != CodeForbidden {
+		t.Fatalf("lost explicit denial: %v", err)
+	}
+}

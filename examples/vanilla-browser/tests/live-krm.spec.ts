@@ -208,3 +208,43 @@ test("native EventSource resets its sequence on a browser reconnect", async ({ p
   expect(attempts).toBe(2);
   expect(result).toEqual({ synced: 2, gaps: 0 });
 });
+
+test("the visible editor recovers and retains typing during a reconnect", async ({ page, visit }) => {
+  let attempts = 0;
+  let release!: () => void;
+  const retryAllowed = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const object = {
+    apiVersion: "v1",
+    kind: "ConfigMap",
+    metadata: { uid: "ui-recovery", name: "cm", resourceVersion: "1" },
+    data: { value: "base" },
+  };
+  await page.route("**/resource-stream/v1?**", async (route) => {
+    attempts++;
+    if (attempts > 1) await retryAllowed;
+    const next = {
+      ...object,
+      metadata: { ...object.metadata, resourceVersion: String(attempts) },
+      data: { value: "base", ...(attempts > 1 ? { recovered: "yes" } : {}) },
+    };
+    const events = [
+      { seq: 1, type: "reset" },
+      { seq: 2, type: "added", object: next },
+      { seq: 3, type: "synced" },
+    ];
+    await route.fulfill({
+      contentType: "text/event-stream",
+      body: events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""),
+    });
+  });
+  await visit("fixture=snapshot-then-deltas&pace=0ms");
+  await expect(page.locator("#status-line")).toHaveAttribute("data-state", "retrying");
+  const field = page.getByTestId(`input:${path("data", "value")}`);
+  await field.fill("typed while disconnected");
+  release();
+  await expect(page.getByTestId(`input:${path("data", "recovered")}`)).toHaveValue("yes");
+  await expect(field).toHaveValue("typed while disconnected");
+  expect(attempts).toBeGreaterThanOrEqual(2);
+});

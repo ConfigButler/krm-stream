@@ -163,3 +163,111 @@ test("abort cancels a quiet response reader", async () => {
   assert.equal(canceled, true);
   assert.equal(handle.state.status, "closed");
 });
+
+test("sustained live periods replenish retries and backoff across an all-day connection", async () => {
+  let attempts = 0;
+  let body: ReadableStreamDefaultController<Uint8Array>;
+  const waits: number[] = [];
+  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    maxRetries: 1,
+    healthyResetMs: 10,
+    retryDelayMs: 2,
+    fetch: async () => {
+      attempts++;
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            body = controller;
+            controller.enqueue(
+              new TextEncoder().encode('data: {"seq":1,"type":"reset"}\n\ndata: {"seq":2,"type":"synced"}\n\n'),
+            );
+          },
+        }),
+      );
+    },
+    onStateChange: (state) => {
+      if (state.status === "retrying") waits.push(state.retryInMs!);
+      // Health reset republishes live with zero retries. End each healthy attempt there.
+      if (state.status === "live" && state.retries === 0 && attempts > 1) {
+        if (attempts === 4) handle.close();
+        else body.close();
+      }
+    },
+  });
+  // First attempt starts at zero retries; wait until its initial health period has elapsed.
+  await new Promise<void>((resolve) => {
+    let lives = 0;
+    const stop = handle.subscribe((state) => {
+      if (state.status === "live" && ++lives === 2) {
+        stop();
+        body.close();
+        resolve();
+      }
+    });
+  });
+  await handle.closed;
+  assert.equal(attempts, 4);
+  assert.equal(waits.length, 3);
+  assert.ok(waits.every((delay) => delay <= 2));
+  assert.equal(handle.state.status, "closed");
+});
+
+test("brief synced connections still exhaust their retry budget", async () => {
+  let attempts = 0;
+  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    maxRetries: 2,
+    retryDelayMs: 0,
+    healthyResetMs: 1000,
+    fetch: async () => {
+      attempts++;
+      return response([
+        { seq: 1, type: "reset" },
+        { seq: 2, type: "synced" },
+      ]);
+    },
+  });
+  await handle.closed;
+  assert.equal(attempts, 3);
+  assert.equal(handle.state.status, "exhausted");
+});
+
+test("snapshot resets restart the health interval and close removes the timer", async (t) => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let attempts = 0;
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  const frame = (seq: number, type: string) => new TextEncoder().encode(`data: ${JSON.stringify({ seq, type })}\n\n`);
+  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    retryDelayMs: 0,
+    healthyResetMs: 30,
+    fetch: async () => {
+      if (++attempts === 1) throw new Error("offline");
+      return new Response(
+        new ReadableStream({
+          start(controller) {
+            body = controller;
+            controller.enqueue(frame(1, "reset"));
+            controller.enqueue(frame(2, "synced"));
+          },
+        }),
+      );
+    },
+  });
+  const flush = () => new Promise<void>((resolve) => setImmediate(resolve));
+  await flush();
+  t.mock.timers.tick(0);
+  await flush();
+  assert.equal(handle.state.retries, 1);
+  assert.equal(handle.state.status, "live");
+  t.mock.timers.tick(20);
+  body.enqueue(frame(3, "reset"));
+  body.enqueue(frame(4, "synced"));
+  await flush();
+  t.mock.timers.tick(20);
+  assert.equal(handle.state.retries, 1);
+  t.mock.timers.tick(10);
+  assert.equal(handle.state.retries, 0);
+  handle.close();
+  await handle.closed;
+  t.mock.timers.tick(100);
+  assert.equal(handle.state.status, "closed");
+});

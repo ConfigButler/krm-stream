@@ -59,3 +59,14 @@ updates:
         patterns: ["*"]
     commit-message:
       prefix: "chore(deps)"
+
+  # Vue and its test tools remain confined to the private adapter example.
+  - package-ecosystem: npm
+    directory: /examples/vue
+    schedule:
+      interval: weekly
+    groups:
+      npm:
+        patterns: ["*"]
+    commit-message:
+      prefix: "chore(deps)"

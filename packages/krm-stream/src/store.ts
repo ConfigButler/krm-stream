@@ -44,6 +44,11 @@ export interface SaveRequest {
   patch: Record<string, unknown>;
 }
 
+/** A stateless projected read can report paths, without inventing stream revision counters. */
+export type ReconciliationOptions =
+  | (ApplyOptions & { redactedPaths?: never })
+  | { redactedPaths: string[]; redacted?: never };
+
 interface Resource {
   revision: number;
   server: KRMObject;
@@ -154,9 +159,6 @@ export class LiveResourceStore {
     if (pruned) this.#notify();
   }
 
-  /** The save succeeded and this is the object it produced. The watch will echo it too — and that
-   * echo is a harmless no-op (I-IDEMPOTENT) — but a UI should not have to wait for it to stop
-   * showing the field as dirty. */
   /** Adopt the object a save returned.
    *
    * `object` MUST be projected — the same projection the stream uses. An object straight from a
@@ -343,8 +345,10 @@ export class LiveResourceStore {
    * if no server event or earlier response has advanced this resource since capture. Local edits
    * remain valid and are three-way merged. Missing/recreated resources cannot be resurrected.
    * Snapshot recovery also invalidates responses; a GET must never count as snapshot membership.
-   * The response must carry the same projection and redactions as the stream. */
-  captureReconciliation(id: string): (object: KRMObject, opts?: ApplyOptions) => boolean {
+   * Use the same projection as the stream. Omitted metadata preserves existing redactions.
+   * redactedPaths preserves known revisions and removes absent paths; an unknown path rejects the
+   * response. Recover with a fresh stream snapshot to obtain authoritative revision counters. */
+  captureReconciliation(id: string): (object: KRMObject, opts?: ReconciliationOptions) => boolean {
     const revision = this.#must(id).revision;
     const snapshotRevision = this.#snapshotRevision;
     return (object, opts = {}) => {
@@ -355,7 +359,15 @@ export class LiveResourceStore {
         this.#resources.get(id)?.revision !== revision
       )
         return false;
-      this.applyServerEvent(object, opts);
+      const existing = this.#must(id).redacted;
+      let redacted = opts.redacted ?? existing;
+      if (opts.redactedPaths !== undefined) {
+        const known = new Map(existing.map((entry) => [pathKey(entry.path), entry]));
+        const paths = opts.redactedPaths.map(parsePointer);
+        if (paths.some((path) => !known.has(pathKey(path)))) return false;
+        redacted = paths.map((path) => known.get(pathKey(path))!);
+      }
+      this.applyServerEvent(object, { redacted });
       return true;
     };
   }

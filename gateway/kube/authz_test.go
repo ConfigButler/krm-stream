@@ -53,10 +53,10 @@ func reviewer(decide func(*authzv1.SubjectAccessReview) (allowed bool, denied bo
 	return cs, &asked
 }
 
-func TestSSARAsksKubernetesTheRightQuestion(t *testing.T) {
+func TestSubjectAccessReviewAsksKubernetesTheRightQuestion(t *testing.T) {
 	cs, asked := reviewer(func(*authzv1.SubjectAccessReview) (bool, bool) { return true, false })
 
-	err := kube.SSARAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope)
+	err := kube.SubjectAccessReviewAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope)
 	if err != nil {
 		t.Fatalf("an allowed caller was refused: %v", err)
 	}
@@ -82,10 +82,10 @@ func TestSSARAsksKubernetesTheRightQuestion(t *testing.T) {
 }
 
 // The whole point: Kubernetes says no, so we say no.
-func TestSSARRefusalIsTerminalForbidden(t *testing.T) {
+func TestSubjectAccessReviewRefusalIsTerminalForbidden(t *testing.T) {
 	cs, _ := reviewer(func(*authzv1.SubjectAccessReview) (bool, bool) { return false, false })
 
-	err := kube.SSARAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope)
+	err := kube.SubjectAccessReviewAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope)
 
 	var se *gateway.StreamError
 	if !errors.As(err, &se) {
@@ -107,7 +107,7 @@ func TestWatchWithoutListIsRefused(t *testing.T) {
 		return sar.Spec.ResourceAttributes.Verb == "watch", false // list: denied
 	})
 
-	if err := kube.SSARAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope); err == nil {
+	if err := kube.SubjectAccessReviewAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope); err == nil {
 		t.Fatal("a caller who may watch but NOT list was authorized — the snapshot would enumerate " +
 			"objects RBAC just refused to let them enumerate")
 	}
@@ -118,7 +118,7 @@ func TestWatchWithoutListIsRefused(t *testing.T) {
 func TestAnExplicitDenyWins(t *testing.T) {
 	cs, _ := reviewer(func(*authzv1.SubjectAccessReview) (bool, bool) { return true, true })
 
-	if err := kube.SSARAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope); err == nil {
+	if err := kube.SubjectAccessReviewAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope); err == nil {
 		t.Fatal("Status.Denied was ignored: an authorizer that explicitly DENIED this caller was overruled")
 	}
 }
@@ -131,7 +131,7 @@ func TestAFailedReviewIsNotAnAllow(t *testing.T) {
 			return true, nil, errors.New("the API server is unreachable")
 		})
 
-	err := kube.SSARAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope)
+	err := kube.SubjectAccessReviewAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope)
 	if err == nil {
 		t.Fatal("a SubjectAccessReview that FAILED was treated as an allow — if the API server cannot " +
 			"tell us whether this caller may look, the answer is no")
@@ -143,7 +143,7 @@ func TestAFailedReviewIsNotAnAllow(t *testing.T) {
 func TestAnUnmappablePrincipalIsRefused(t *testing.T) {
 	cs, asked := reviewer(func(*authzv1.SubjectAccessReview) (bool, bool) { return true, false })
 
-	err := kube.SSARAuthorizer(cs, subjectOf).Authorize(context.Background(), "not-a-user", configmapScope)
+	err := kube.SubjectAccessReviewAuthorizer(cs, subjectOf).Authorize(context.Background(), "not-a-user", configmapScope)
 	if err == nil {
 		t.Fatal("a principal with no Kubernetes subject was authorized")
 	}
@@ -160,7 +160,7 @@ func TestANamedScopeAsksAboutThatName(t *testing.T) {
 
 	scope := configmapScope
 	scope.Name = "app-config"
-	if err := kube.SSARAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, scope); err != nil {
+	if err := kube.SubjectAccessReviewAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, scope); err != nil {
 		t.Fatalf("Authorize: %v", err)
 	}
 
@@ -168,5 +168,15 @@ func TestANamedScopeAsksAboutThatName(t *testing.T) {
 		if got := sar.Spec.ResourceAttributes.Name; got != "app-config" {
 			t.Errorf("%s asked about name %q, want app-config", sar.Spec.ResourceAttributes.Verb, got)
 		}
+	}
+}
+
+func TestDeprecatedAuthorizerAlias(t *testing.T) {
+	cs, asked := reviewer(func(*authzv1.SubjectAccessReview) (bool, bool) { return true, false })
+	if err := kube.SSARAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope); err != nil {
+		t.Fatal(err)
+	}
+	if len(*asked) != 2 {
+		t.Fatal("alias must check list and watch")
 	}
 }

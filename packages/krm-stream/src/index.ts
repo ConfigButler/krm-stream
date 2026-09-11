@@ -24,7 +24,7 @@ export type { KubernetesStructuralSchema } from "./schema.ts";
 export { withOpenAPIKeyedLists } from "./schema.ts";
 export type { StreamChange, StreamHandle, StreamOptions } from "./sse.ts";
 export { applyStreamEvent, connectResourceStream, connectWithEventSource, SSEDecoder, StreamSequence } from "./sse.ts";
-export type { ApplyOptions, ApplyResult, SaveRequest } from "./store.ts";
+export type { ApplyOptions, ApplyResult, ReconciliationOptions, SaveRequest } from "./store.ts";
 export { LiveResourceStore } from "./store.ts";
 export type {
   Change,

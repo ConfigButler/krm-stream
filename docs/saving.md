@@ -27,8 +27,8 @@ before starting that GET:
 
 ```ts
 const reconcile = store.captureReconciliation(uid);
-const { object, redacted } = await hostRead();
-reconcile(object, { redacted });
+const { object, redactedPaths } = await hostRead();
+reconcile(object, { redactedPaths });
 // false means a newer server event/response won, or the UID disappeared/changed. Do not force it.
 ```
 
@@ -76,8 +76,11 @@ from overwriting a newer watch event, and preserves local edits made while savin
 `store.adoptSaved(object)` remains available for synchronous adoption and newly created objects. It
 is unguarded and must not receive delayed responses that can race the watch. Never adopt a raw
 Kubernetes response: project it first and provide the correct redaction metadata. Hosts exposing
-redacted resources must keep read and stream redaction revisions consistent; the ConfigMap example
-has no withheld values.
+redacted resources can return `redactedPaths` directly from `gateway.Project`. The guard retains
+known stream revisions for paths still present and removes paths absent from that list. Omitted
+redaction metadata preserves existing protections. Unknown paths reject the entire response: open a
+fresh stream snapshot before retrying reconciliation. Never invent revision counters for a GET.
+An explicit `redacted` array is still supported when the host has authoritative stream revisions.
 
 ## Creating and deleting whole objects
 
