@@ -1,12 +1,5 @@
 # Changelog
 
-## Unreleased
-
-### Breaking changes
-
-- Remove `SSARAuthorizer`. Replace calls with `SubjectAccessReviewAuthorizer`; authorization behavior
-  is unchanged. Pre-1.0 renames no longer retain compatibility aliases.
-
 ## [0.3.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.2.1...gateway/kube/v0.3.0) (2026-09-11)
 
 

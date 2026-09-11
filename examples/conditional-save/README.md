@@ -45,7 +45,8 @@ patch onto the latest version. No automatic write retry is performed.
 
 This endpoint returns 204 for successful writes. A host may instead return a receipt-only HTTP 200
 under the [saving guide’s receipt contract](../../docs/saving.md#answer-204-or-a-receipt-and-let-the-watch-echo-it);
-the client example accepts success but leaves receipt parsing to the host. The stream echo settles the saved values while retaining later edits.
+the client example accepts success but leaves receipt parsing to the host. The stream echo settles
+the saved values while retaining later edits.
 If the echo is delayed, dirty state remains visible; prevent repeated saves until your host's chosen
 acknowledgment UX allows them. Save results never feed raw Kubernetes objects back into the store.
 

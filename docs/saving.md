@@ -77,10 +77,12 @@ authentication and any receipt or Git workflow; connection state is not a save g
 snapshot pruning discard deleted-object drafts. If recovery after deletion matters, retain a detached
 copy as edits change, **before** removal; observing a missing UID is too late to read its old draft.
 Keep recovery copies scoped to the original identity and UID, with a host-defined lifetime and cleanup.
-They are for recovery, not a second draft to reconcile against incoming snapshots.
+They are for recovery, not a second draft to reconcile against incoming snapshots. An executed
+subscription recipe, including edit-time capture and pruning, remains
+[planned work](proposals/0006-stream-and-save-implementation-plan.md#deletion-recovery-copy).
 
 For explicit keep-local resolution, the planned tested recipe is tracked in
-[proposal 0006](proposals/0006-stream-and-save-implementation-plan.md#remaining-adoption-guidance-and-acceptance).
+[proposal 0006](proposals/0006-stream-and-save-implementation-plan.md#explicit-keep-local-resolution).
 There is currently no dedicated keep-local helper; avoid a second application conflict registry.
 
 ## Answer 204 or a receipt and let the watch echo it

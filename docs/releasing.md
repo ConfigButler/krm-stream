@@ -45,7 +45,7 @@ run can therefore leave GitHub/Go tags present without an npm package. Fix sourc
 new release rather than moving public tags.
 
 Configure npm trusted publishing for `ConfigButler/krm-stream`, workflow `release.yml`. No
-long-lived `NPM_TOKEN` is required. `krm-stream` is frozen and needs no publisher configuration.
+long-lived `NPM_TOKEN` is required. Configure only the maintained scoped package.
 
 ## Before merging a release PR
 

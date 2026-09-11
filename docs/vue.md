@@ -13,10 +13,14 @@ const { resource, state } = useLiveResource(store, uid, connection);
 ```
 
 Use `resource.value?.draft` in script and `resource?.draft` in a template. A missing/deleted UID gives
-`null`. If users need copy-out after deletion, retain a detached recovery copy as edits change,
-before removal or snapshot pruning; the null notification is too late to read the removed draft.
-Follow the [deletion guidance](saving.md#what-the-person-editing-sees) and never automatically apply
-that copy to a replacement UID. For a changing selection, remount a keyed editor or create a new effect scope. Use store
+`null`. For deletion recovery, capture the initial draft and subscribe to store notifications, retaining
+`store.draft(uid)` while the fixed UID exists and keeping the last copy once it is absent. Capturing
+only when Save is clicked loses subsequent edits. The null notification is too late to read the
+removed draft. A [tested subscription recipe](proposals/0006-stream-and-save-implementation-plan.md#deletion-recovery-copy)
+is pending; follow the [retention guidance](saving.md#what-the-person-editing-sees) and never apply a
+recovery copy automatically to a replacement UID.
+
+For a changing selection, remount a keyed editor or create a new effect scope. Use store
 methods such as `setValue`, `removeKey` and conflict resolution methods for edits: do not bind
 `v-model` directly to the draft snapshot. Store reads are detached copies, and editing them bypasses
 policy checks and change notifications.
