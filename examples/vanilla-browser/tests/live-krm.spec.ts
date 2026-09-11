@@ -24,7 +24,9 @@ test("the built ESM imports in a browser with no bundler at all", async ({ page,
   page.on("console", (m) => m.type() === "error" && errors.push(m.text()));
 
   await visit("fixture=snapshot-then-deltas&pace=0ms");
-  await expect(page.locator("#status-line")).toHaveText(/synced/);
+  // The finite replay closes after its last frame. Assert rendered data rather than the
+  // transient live status, which may already have advanced to retrying on a busy runner.
+  await expect(page.getByTestId(`input:${path("data", "log-level")}`)).toHaveValue("info");
 
   // If a single bare specifier or a missing extension had crept into the emitted JS, the module graph
   // would have failed to load and this page would be blank. That is the whole constraint, checked.
@@ -101,7 +103,7 @@ test("a redacted Secret value is not in the page at all — the mask is drawn, n
   // the real one. The mask is something this page DRAWS from `redacted` — it is not a value the
   // wire carried, and there is therefore nothing to save back (proposal 0003).
   await visit("fixture=secret-redaction&pace=0ms");
-  await expect(page.locator("#status-line")).toHaveText(/synced/);
+  await expect(page.locator("#status-line")).toHaveAttribute("data-state", /^(live|retrying)$/);
 
   // Keys-only disclosure: you can see THAT `token` exists…
   const token = page.getByTestId(`value:${path("data", "token")}`);
@@ -125,7 +127,7 @@ test("a named object that does not exist renders as empty, not as a ghost and no
   // reset, synced — and nothing else. The fixture that kills the "named scopes may skip the snapshot"
   // optimization: skip it, and a delete-while-disconnected leaves the object on screen forever.
   await visit("fixture=named-object-absent&pace=0ms");
-  await expect(page.locator("#status-line")).toHaveText(/synced/);
+  await expect(page.locator("#status-line")).toHaveAttribute("data-state", /^(live|retrying)$/);
   await expect(page.getByTestId("editable-body")).toBeEmpty();
   await expect(page.getByTestId("patch")).toHaveText("null");
 });
