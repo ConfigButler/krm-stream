@@ -9,6 +9,15 @@ name: ci
 on:
   pull_request:
   workflow_call:
+    inputs:
+      ref:
+        description: Immutable release commit to validate; empty uses the event checkout
+        type: string
+        default: ""
+      artifact-name:
+        description: Separate artifacts when validating both the push and a release
+        type: string
+        default: npm-packages
   workflow_dispatch:
 
 permissions:
@@ -18,7 +27,7 @@ permissions:
 # number, and github.run_id keeps the group unique — so a release run can never be cancelled by, or
 # cancel, anything else.
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.run_id }}
+  group: ci-${{ github.event.pull_request.number || github.run_id }}-${{ inputs.artifact-name || 'npm-packages' }}
   cancel-in-progress: true
 
 jobs:
@@ -32,6 +41,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
 
       # Versions come from the devcontainer's ENV block, so CI and a developer's shell cannot lint
       # with different rules and disagree about whether the tree is clean.
@@ -54,6 +64,13 @@ jobs:
 
       - run: hadolint .devcontainer/Dockerfile
 
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: release safety regression tests
+        if: hashFiles('.github/scripts/release.test.mjs') != ''
+        run: node --test .github/scripts/release.test.mjs
+
   # The point of the monorepo: one contract, and a change to it must be seen by BOTH
   # implementations in the same commit. Both jobs read conformance/gen/, which is built
   # from conformance/{bodies,fixtures}/*.yaml — so a protocol change that breaks either
@@ -65,6 +82,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
       - name: install yq
         run: sudo curl -fsSL -o /usr/local/bin/yq https://github.com/mikefarah/yq/releases/download/v4.48.1/yq_linux_amd64 && sudo chmod +x /usr/local/bin/yq
       - name: regenerate
@@ -80,6 +98,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.1"
@@ -114,6 +133,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.1"
@@ -151,6 +171,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.1"
@@ -214,7 +235,7 @@ jobs:
               fi ;;
           esac
 
-          sha="${{ github.event.pull_request.head.sha || github.sha }}"
+          sha="${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}"
           tmp="$(mktemp -d)"
           cd "$tmp"
           go mod init example.com/stranger
@@ -245,6 +266,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
@@ -279,10 +301,24 @@ jobs:
       - name: build, pack, and prove the tarball is complete
         run: task pack-client PACK_DIR=/tmp/npm
 
+      - name: bind the tarball to the checked-out commit
+        run: |
+          node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { createHash } from 'node:crypto';
+          import { readFileSync, readdirSync, writeFileSync } from 'node:fs';
+          const files = readdirSync('/tmp/npm').filter(name => name.endsWith('.tgz'));
+          if (files.length !== 1) throw new Error('expected exactly one tarball');
+          const sha = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+          const integrity = 'sha512-' + createHash('sha512')
+            .update(readFileSync('/tmp/npm/' + files[0])).digest('base64');
+          writeFileSync('/tmp/npm/source.json', JSON.stringify({ sha, integrity }));
+          JS
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: npm-packages
-          path: /tmp/npm/*.tgz
+          name: ${{ inputs.artifact-name || 'npm-packages' }}
+          path: /tmp/npm/*
           if-no-files-found: error
           retention-days: 7
 
@@ -293,6 +329,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
@@ -316,6 +353,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.1"
@@ -340,6 +378,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ inputs.ref }}
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.27.1"
@@ -354,6 +393,6 @@ jobs:
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: failure()
         with:
-          name: playwright-trace
+          name: playwright-trace-${{ inputs.artifact-name || 'npm-packages' }}
           path: examples/vanilla-browser/test-results/
           retention-days: 7
