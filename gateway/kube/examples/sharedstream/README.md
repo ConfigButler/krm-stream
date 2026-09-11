@@ -72,9 +72,14 @@ proof. Run the real-cluster test separately against a disposable cluster:
 
 ```bash
 # From gateway/kube, with the disposable cluster's KUBECONFIG selected:
-go test -tags e2e -run '^TestSharedHostRealAPI$' -v -count=1 -timeout 4m ./examples/sharedstream
-KRM_SHARED_SUBSCRIBERS=200 go test -tags e2e -run '^TestSharedHostRealAPI$' -v -count=1 -timeout 4m ./examples/sharedstream
+go test -tags e2e -p 1 -run '^TestSharedHostRealAPI$' -v -count=1 -timeout 4m ./examples/sharedstream
+KRM_SHARED_SUBSCRIBERS=200 go test -tags e2e -p 1 -run '^TestSharedHostRealAPI$' -v -count=1 -timeout 4m ./examples/sharedstream
 ```
+
+The scenario needs exclusive use of the cluster. `apiserver_longrunning_requests` is cluster-wide and
+has no namespace label, so any other ConfigMap watcher lands in the same number; run it with `-p 1`
+and never alongside the backend e2e suite. One recorded run at 200 identities is in
+[docs/facts/shared-host-rehearsal.md](../../../../docs/facts/shared-host-rehearsal.md).
 
 `task test-cluster` also includes the two-identity case. No new cluster CI workflow is required.
 The fixture creates isolated RBAC and independent service-account participant tokens, verifies

@@ -1,8 +1,10 @@
 # Proposal 0007: Shared-stream transport correctness
 
-**Status: implemented in the working tree; unreleased.** The transport, observation and example
-increments below have landed. The real-cluster scenario in increment 3 is manual and has not been
-run here, so no `docs/facts/` record exists yet.
+**Status: implemented; unreleased.** The transport, observation and example increments below have
+landed. The manual real-cluster scenario has been run at 2 and 200 identities and recorded in
+[docs/facts/shared-host-rehearsal.md](../facts/shared-host-rehearsal.md); 200 subscribers cost
+exactly one additional API-server watch. That is one run on one disposable cluster, without a proxy,
+browsers or resource limits, and is not a capacity guarantee.
 
 ## Recommendation
 
