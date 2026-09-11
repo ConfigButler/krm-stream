@@ -3,7 +3,8 @@
 ## Unreleased
 
 - Add a tested, copyable shared ConfigMap host example with local full-subject resolution,
-  session expiry, service-account SARs, bounded SSE delivery and lifecycle counters. Includes a
+  session expiry, service-account SARs, bounded SSE delivery and lifecycle counters. It requires a
+  verified-HTTPS cluster configuration, since it carries service and participant tokens. Includes a
   manually invoked independent-identity Kubernetes fixture; no new public identity helper.
 
 

@@ -3,6 +3,7 @@ package sharedstream
 import (
 	"context"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
@@ -97,7 +98,9 @@ func TestHostBoundaryUsesResolvedSubjectAndFixedScope(t *testing.T) {
 	var subjects []authorizationv1.SubjectAccessReviewSpec
 	var tokens []string
 	var watches int
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// A TLS server with verification left ON: the example refuses cleartext or unverified
+	// transports, and both tokens below would otherwise be readable on the wire.
+	api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case strings.HasSuffix(r.URL.Path, "selfsubjectreviews"):
@@ -134,9 +137,29 @@ func TestHostBoundaryUsesResolvedSubjectAndFixedScope(t *testing.T) {
 	}))
 	defer api.Close()
 	counters := &Counters{}
-	h, err := Handler(&rest.Config{Host: api.URL, BearerToken: "service", ContentConfig: rest.ContentConfig{ContentType: "application/json"}}, "app", "coffee", func(*http.Request) (Session, error) {
+	verified := func() *rest.Config {
+		return &rest.Config{
+			Host:          api.URL,
+			BearerToken:   "service",
+			ContentConfig: rest.ContentConfig{ContentType: "application/json"},
+			TLSClientConfig: rest.TLSClientConfig{
+				CAData: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: api.Certificate().Raw}),
+			},
+		}
+	}
+	session := func(*http.Request) (Session, error) {
 		return Session{Token: "participant", SessionExpiry: time.Now().Add(150 * time.Millisecond), TokenExpiry: time.Now().Add(time.Hour)}, nil
-	}, counters)
+	}
+	// Tokens must never reach a cleartext or unverified API server.
+	for _, refused := range []*rest.Config{
+		{Host: strings.Replace(api.URL, "https://", "http://", 1), BearerToken: "service"},
+		func() *rest.Config { c := verified(); c.Insecure, c.CAData = true, nil; return c }(),
+	} {
+		if _, err := Handler(refused, "app", "coffee", session, counters); err == nil {
+			t.Fatalf("accepted unverified transport: %s insecure=%t", refused.Host, refused.Insecure)
+		}
+	}
+	h, err := Handler(verified(), "app", "coffee", session, counters)
 	if err != nil {
 		t.Fatal(err)
 	}

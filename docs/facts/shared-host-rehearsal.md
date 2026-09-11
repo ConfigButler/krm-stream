@@ -11,7 +11,7 @@
 |---|---|
 | Commit | `ed5c4d0` (branch `feat/shared-stream-transport`, unreleased) |
 | Scenario | `TestSharedHostRealAPI` in [`gateway/kube/examples/sharedstream`](../../gateway/kube/examples/sharedstream/) |
-| Command | `KRM_SHARED_SUBSCRIBERS=200 go test -tags e2e -count=1 -p 1 -run TestSharedHostRealAPI ./examples/sharedstream/` |
+| Command | from `gateway/kube`: `KRM_SHARED_SUBSCRIBERS=200 go test -tags e2e -count=1 -p 1 -run TestSharedHostRealAPI ./examples/sharedstream/` |
 | Cluster | k3s `v1.36.2+k3s1` via `task cluster-up`, Go `1.27.1` |
 | Host config | `WriteTimeout=5s`, `ReauthorizationInterval=30s`, `ReauthorizationTimeout=5s` |
 | Fixture client | `QPS=100`, `Burst=400` — declared fixture capacity, not a library default |

@@ -17,6 +17,10 @@ session expiry and token expiry. It must honor the request context. Browser-supp
 API-server headers are never used by the example. Keep the route behind the host's existing session
 protection; do not copy the integration test's fixture-session query routing into production.
 
+`Handler` refuses a cluster configuration that is not HTTPS, and one with `Insecure` set: the
+service token and every participant token cross that transport, and `rest.IsConfigTransportTLS`
+alone would accept an unverified one. Supply a CA, not a skipped check.
+
 The handler uses the server/TLS settings from the configured cluster for all three operations:
 
 - Participant SelfSubjectReview resolves username, groups, UID and extras at opening. Using the
@@ -67,8 +71,8 @@ server writers. The gateway's socket tests separately verify stalled-peer behavi
 
 Normal `go test ./...` in `gateway/kube` compiles this example, checks subject ownership/API failures
 and cancellation, and proves that forged browser identity headers cannot change its identity or
-scope. The tests use a real HTTP fake API for the credential boundary; they are not Kubernetes RBAC
-proof. Run the real-cluster test separately against a disposable cluster:
+scope. The tests use a verified-TLS fake API for the credential boundary, and assert that cleartext
+and `Insecure` configurations are refused; they are not Kubernetes RBAC proof. Run the real-cluster test separately against a disposable cluster:
 
 ```bash
 # From gateway/kube, with the disposable cluster's KUBECONFIG selected:

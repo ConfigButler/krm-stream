@@ -30,12 +30,20 @@ type resolvedSession struct {
 
 // Handler constructs one shared backend for one fixed ConfigMap on one cluster.
 // Call once at process startup. cluster supplies service credentials and server/TLS
-// settings. Participant clients use only those server/TLS settings plus the trusted
-// session token. The session callback must honor r.Context and own authentication.
+// settings, and must use HTTPS with certificate verification: it carries both the
+// service token and every participant token. Participant clients use only those
+// server/TLS settings plus the trusted session token. The session callback must
+// honor r.Context and own authentication.
 // Direct GET/PATCH routes must independently use participant credentials.
 func Handler(cluster *rest.Config, namespace, name string, sessionFor func(*http.Request) (Session, error), observer gateway.Observer) (http.Handler, error) {
 	if cluster == nil || namespace == "" || name == "" || sessionFor == nil {
 		return nil, fmt.Errorf("sharedstream: cluster, fixed scope and session resolver required")
+	}
+	// Both the service token and every participant token cross this transport. IsConfigTransportTLS
+	// only proves the scheme is https; it ignores Insecure, which turns verification off and leaves
+	// the tokens readable to anything that can answer for the API server.
+	if !rest.IsConfigTransportTLS(*cluster) || cluster.Insecure {
+		return nil, fmt.Errorf("sharedstream: cluster must use HTTPS with certificate verification")
 	}
 	service, err := kubernetes.NewForConfig(cluster)
 	if err != nil {
