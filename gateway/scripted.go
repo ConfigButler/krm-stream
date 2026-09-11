@@ -11,7 +11,7 @@ import (
 // serves fixtures over real SSE with exactly this backend, so a browser can be pointed at a scripted
 // cluster that behaves identically every time.
 //
-// It models a MODERN streaming list (gateway spec §3a), because that is what the gateway is written
+// It models a streaming list (see spec/v1.md, Snapshot cycles), because that is what the gateway is written
 // against: the objects in scope arrive as synthetic ADDEDs, terminated by a bookmark whose
 // InitialEventsEnd is set. That bookmark IS `synced`. A `relist` op ends the watch with a
 // continuity-losing error, which is what a 410 Gone looks like from in here — and the gateway must

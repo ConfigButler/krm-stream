@@ -75,9 +75,10 @@ sequenceDiagram
 ```
 
 The displayed server content is right even though the held version is older. The local draft is the
-person's proposed change; it is not part of stream convergence. A failed version precondition does
-not by itself mean the person and server disagree about an editable field. Follow the
-[save outcomes](#what-the-person-editing-sees) to refresh, reconcile and capture a newly reviewed intent.
+person's proposed change; it is not part of stream convergence. In this conditional merge-PATCH
+flow, a 409 signals a failed version precondition, not necessarily a disagreement at an editable
+field. Follow the [save outcomes](#what-the-person-editing-sees) to refresh, reconcile and capture a
+newly reviewed intent.
 
 | Final upstream change | What the gateway delivers | What the browser holds |
 |---|---|---|
@@ -90,8 +91,7 @@ resume: a new connection starts a complete snapshot. The
 [normative contract](../spec/v1.md#6-ordering-delivery--the-state-guarantee) defines the exact comparison
 and its guarantee at each delivered stream position; it does not promise zero transport latency.
 
-Sustained invisible churn can prevent save progress, but a 409 is a failed version precondition,
-not necessarily a disagreement at an editable field. An accepted projected GET advances the base
+Sustained invisible churn can prevent save progress. An accepted projected GET advances the base
 without requiring a snapshot. Render actual draft conflicts separately; when none exist, explain
 the refreshed base and offer a newly captured save. If reconciliation is refused, preserve the draft
 and recover before writing again.
@@ -153,7 +153,8 @@ Kubernetes response: project it first and provide the correct redaction metadata
 redacted resources can return `redactedPaths` directly from `gateway.Project`. The guard retains
 known stream revisions for paths still present and removes paths absent from that list. Omitted
 redaction metadata preserves existing protections. Unknown paths reject the entire response: open a
-later authoritative upsert for that UID or a fresh stream snapshot before retrying reconciliation. Never invent revision counters for a GET.
+later authoritative upsert for that UID or a fresh stream snapshot before retrying reconciliation.
+Never invent revision counters for a GET.
 An explicit `redacted` array is still supported when the host has authoritative stream revisions.
 
 ## Creating and deleting whole objects
@@ -165,50 +166,36 @@ stages the *intent*; your endpoint performs the *write*. See
 the store keys on uid and has no merge for these, so the consumer aggregates staged create/delete with
 `changes()` into one review list.
 
+The host must:
+
+- Authorize the operation and pin the target, resource kind, namespace and name.
+- Validate create bodies against the allowed fields and schema before calling Kubernetes. A create
+  has no existing object for `ValidateMergePatch` to compare; that helper validates merge patches.
+- Bind a delete to the intended UID with a Kubernetes delete precondition so a replacement object
+  under the same name is not removed by an old request.
+- Return 204 or a receipt and let the watch reflect the result. Project any returned resource before
+  sending it to the browser, and preserve meaningful Kubernetes error categories.
+
+For an authorized delete, preserve the UID captured when the user selected the object; do not
+replace it with a newer GET's UID. This fragment uses the host's caller-scoped `dynamic.Interface`,
+validated resource/namespace/name, and the request context:
+
 ```go
-// POST /console/configmaps — create
-func (s *server) createConfigMap(w http.ResponseWriter, r *http.Request) {
-    user := userFromSession(r)
-    scope := authorizedScope(user, r)
-    object := readObject(r) // the new object the browser assembled
-
-    // Validate on the host, before the write — pin the GVK, the authorized scope and name, and an
-    // allowlist of the fields a browser may set. Never trust the assembled object as-is.
-    if err := validateCreate(object, scope); err != nil {
-        http.Error(w, err.Error(), http.StatusBadRequest)
-        return
-    }
-
-    created, err := s.dynamicFor(user).Resource(configMaps).Namespace(scope.Namespace).
-        Create(r.Context(), object, metav1.CreateOptions{})
-    if err != nil {
-        http.Error(w, "create failed", http.StatusBadGateway)
-        return
-    }
-
-    // 204 and let the watch echo it — the same recommendation as save. To reflect it now instead,
-    // project it first and return it; the browser calls store.adoptSaved(projected).
-    _ = created
-    w.WriteHeader(http.StatusNoContent)
-}
-
-// DELETE /console/configmaps/{name} — delete
-func (s *server) deleteConfigMap(w http.ResponseWriter, r *http.Request) {
-    user := userFromSession(r)
-    scope := authorizedScope(user, r)
-    if err := s.dynamicFor(user).Resource(configMaps).Namespace(scope.Namespace).
-        Delete(r.Context(), scope.Name, metav1.DeleteOptions{}); err != nil {
-        http.Error(w, "delete failed", http.StatusBadGateway)
-        return
-    }
-    // 204; the `deleted` event prunes it from every open stream. To reflect it now instead, the
-    // browser calls store.removeResource(uid) with the uid it already tracks.
-    w.WriteHeader(http.StatusNoContent)
+// metav1: k8s.io/apimachinery/pkg/apis/meta/v1
+// types:  k8s.io/apimachinery/pkg/types
+uid := types.UID(capturedUID)
+err := client.Resource(resource).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{
+    Preconditions: &metav1.Preconditions{UID: &uid},
+})
+if err != nil {
+    return err // The host maps the structured Kubernetes error to its HTTP response.
 }
 ```
 
-`ValidateMergePatch` guards a *patch*. A create sends a whole object, so validate it yourself before
-the call — the `validateCreate` above stands in for a schema check or a field allowlist — and pass only
-the sanitized object to `Create`. A projected or redacted field must no more ride in on a create body
-than in a patch. API-server admission sits behind this as defense in depth, not as a substitute for the
-host-side check. A delete carries no body to guard.
+This binds the delete to object identity. A host that also requires unchanged content can add a
+captured resourceVersion precondition. For the complete GET/PATCH save path, use the [compiled
+conditional-save handler](../gateway/kube/examples/conditionalsave/handler.go).
+
+The host also clears its own pending-create/delete entries when a write succeeds. The store does not
+own those staging lists. See the [client state model](client-state-model.md#reflecting-the-result)
+for synchronous adoption and optimistic-delete caveats.

@@ -50,8 +50,8 @@ snapshot never prunes state.
 text events. `EventSource` is built into every browser. It is one-directional, which is all a read
 stream needs.
 
-**Gateway** is the server-side piece you mount in your own Go application. It holds the Kubernetes
-credentials, decides who may see what, and turns a watch into a scoped SSE stream. The browser never
+**Gateway** is the server-side piece you mount in your own Go application. It uses host-owned Kubernetes
+clients, enforces host authorization and turns a watch into a scoped SSE stream. The browser never
 receives a cluster credential or an API-server URL.
 
 **Projection** is the subset of a resource the gateway sends. What the browser receives may be less
@@ -84,13 +84,13 @@ change this field?
 Only the last row needs a human. Without this, a controller updating one annotation would discard
 the text you were typing in an unrelated field.
 
-**Conflict** is the fourth row above. It is not an error and it does not block a save. The draft
-still wins, and `conflicts(id)` gives the UI what it needs to show the server value alongside it,
-with `takeTheirs` or `revert` as the ways out.
+**Conflict** is the fourth row above. The draft is retained, and `conflicts(id)` exposes the server
+value for review. `takeTheirs` and `revert` restore server values. The store leaves save policy to the
+host; the conditional editor requires conflicts to be resolved before saving.
 
 **Associative list** is a Kubernetes array that behaves as a map. `spec.containers` is keyed by
-`name`, not by index. A merge that treats it as an array corrupts it when two people change
-different containers. The store merges these by key.
+`name`, not by index. The store merges these by key only when configured with
+`withOpenAPIKeyedLists` and the host-supplied structural schema. Arrays are atomic by default.
 
 **RFC 7386 merge patch** is the save format: a JSON document containing only what changed, where
 `null` means delete. The store builds it by diffing draft against server over editable paths only.
@@ -113,14 +113,16 @@ The read path, in the order the words appear:
 
 The write path is not the library's:
 
-5. On save, `patch(id)` returns an **RFC 7386 merge patch**, or `null` when nothing changed.
-6. You send that to your own save endpoint. The store never writes to Kubernetes.
+5. On save, `captureSave(id)` captures an **RFC 7386 merge patch**, UID and base resourceVersion
+   together, or returns `null` when nothing changed.
+6. You send that intent to your own save endpoint. The store never writes to Kubernetes.
 7. Your handler calls [`gateway.ValidateMergePatch`](../gateway/patch.go), which rejects a patch
    touching anything the effective projection withheld or stripped: a redacted path,
    `metadata.managedFields`, the last-applied annotation, and `status` under `ProjectionSpec`. It is
    what stops a buggy or hostile browser from destroying what it was never shown. Do not skip it on
    the grounds that the store is careful, because the store runs on the caller's machine.
-8. The write goes to the API. The watch sees it, it returns down the stream as an ordinary update,
+8. The host writes with the captured UID and resourceVersion preconditions. The watch sees it, it
+   returns down the stream as an ordinary update,
    and the merge converges your draft with it. Your own write needs no special handling.
 
 If you know TanStack Query or SWR, this is the same server cache with local edits, with two

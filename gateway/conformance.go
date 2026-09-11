@@ -47,8 +47,8 @@ type Fixture struct {
 //	           even though the SSE connection is perfectly healthy
 //	disconnect the consumer's connection dropped; the next list is a fresh cycle
 //
-// And three that say what Kubernetes really does, added by docs/proposals/0001-watch-ops.md because
-// the corpus could not otherwise express three of the gateway's own MUST NOTs:
+// Additional operations cover the projection and recovery rules described in
+// conformance/README.md:
 //
 //	bookmark   a routine BOOKMARK. Its object carries ONLY metadata.resourceVersion — that is not an
 //	           edge case, it is what the API server sends, on every stream that asked for bookmarks.

@@ -12,12 +12,12 @@ not.
 
 ## Supported versions
 
-Pre-1.0. Only the latest minor version receives fixes. The protocol and the API may still change.
+Pre-1.0. The protocol and API may still change.
 
-| Version | Supported |
+| Release line | Receives security fixes |
 |---|---|
-| 0.1.x | yes |
-| < 0.1 | no |
+| Latest released minor | Yes |
+| Older minors | No |
 
 ## What counts as a vulnerability here
 
@@ -34,8 +34,8 @@ almost all *disclosure* failures. The things we would treat as security bugs:
   not a bug, it is a disclosure.
 - **A merge patch writing a field the browser was never shown.** `ValidateMergePatch` exists to make
   this impossible; a way around it is a vulnerability, not a feature request.
-- **A scope, target or credential accepted from the caller.** The gateway must never let a browser
-  choose which API server it talks to.
+- **An unvalidated scope or raw API-server address or credential accepted from the caller.** A
+  browser may select only host-allowlisted target identifiers and authorized scopes.
 
 ## What does not
 

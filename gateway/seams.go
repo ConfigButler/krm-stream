@@ -20,7 +20,7 @@ import (
 
 // Principal is whoever the host says is calling. The library never inspects it, never persists it,
 // and never logs it — it carries it back to the host on ClientFor, so the host can reach the API
-// server AS that caller (gateway spec §6). `any` is not laziness here: the moment this library has
+// server AS that caller (see docs/auth.md). `any` is not laziness here: the moment this library has
 // an opinion about what an identity looks like, it has an opinion about someone's auth system.
 type Principal any
 
@@ -61,9 +61,9 @@ type ClientFor func(ctx context.Context, target string, principal Principal) (Ba
 // Backend is the upstream: one Kubernetes API server (or anything that behaves like one).
 //
 // Watch opens a snapshot-then-live stream for a scope. The gateway expects it to behave like a
-// modern streaming list (gateway spec §3a): the objects currently in scope arrive as WatchAdded,
+// streaming list (see spec/v1.md, Snapshot cycles): the objects currently in scope arrive as WatchAdded,
 // terminated by a WatchBookmark whose InitialEventsEnd is true, and everything after that bookmark
-// is live. A list-then-watch backend synthesizes exactly the same shape (§3b) — which is the point
+// is live. A list-then-watch backend synthesizes exactly the same shape — which is the point
 // of naming the boundary rather than the mechanism.
 type Backend interface {
 	Watch(ctx context.Context, scope Scope) (Watcher, error)
@@ -74,7 +74,7 @@ type Backend interface {
 // Pull, not a channel, and this is a considered choice: Next returning is the gateway's proof that
 // it finished with the previous event, which makes both the conformance replay and the coalescing
 // logic deterministic instead of racy. A channel-based client-go watch adapts to this in ten lines
-// (see KubeBackend); the reverse — recovering a synchronisation point from a channel — is not
+// (see gateway/kube.Backend); the reverse — recovering a synchronisation point from a channel — is not
 // possible at all.
 type Watcher interface {
 	// Next blocks until the next upstream event, ctx is done, or the watch ends.

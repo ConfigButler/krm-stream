@@ -8,7 +8,7 @@ silently overwrites an edit.
 
 | Value | Meaning |
 |---|---|
-| `server(id)` | The latest complete projected object. Every stream update replaces it. |
+| `server(id)` | The latest delivered complete projected object. Every upsert replaces it. |
 | `draft(id)` | The object rendered and edited by the UI. Editable regions are reconciled with server changes. |
 | `conflicts(id)` | Server values that changed concurrently with a different local edit. |
 | `redactions(id)` | Paths known to exist upstream but intentionally withheld by the selected projection. |
@@ -37,12 +37,12 @@ The default editable regions are `spec`, `metadata.labels`, `metadata.annotation
 
 When a new server object arrives, the store compares three values at each editable path:
 
-| Base | Draft | Incoming server | Result |
-|---|---|---|---|
-| unchanged | any | changed | follow the server |
-| changed | local edit | unchanged | keep the draft |
-| changed | same value | same value | converge and clear conflict |
-| changed | different value | different value | keep the draft and record a conflict |
+| Draft differs from base | Incoming server differs from base | Result |
+|---|---|---|
+| no | yes | follow the server |
+| yes | no | keep the draft |
+| yes | yes, matching the draft | converge and clear conflict |
+| yes | yes, differing from the draft | keep the draft and record a conflict |
 
 `isDirty` and `changes` are derived from `draft` versus `server`; neither is a cache that can drift
 after a stream update. `revert` or `takeTheirs` restores the current server value.
@@ -133,10 +133,11 @@ The store has no rendering dependency. Subscribe once, then query `draft`, `stat
 const unsubscribe = store.subscribe(() => render(store));
 store.setValue(uid, ["spec", "replicas"], 3);
 
-const patch = store.patch(uid);
-if (patch) await save(patch);
+// Save from an explicit user action while the connection is live.
+const intent = store.captureSave(uid);
+if (intent) await hostSave(intent);
 ```
 
-Use `adoptSaved` with the object returned by a successful host save to clear local dirtiness before
-the watch echo arrives. See [`packages/krm-stream/`](../packages/krm-stream/) for the public API and
-[`conformance/`](../conformance/) for executable behavior examples.
+Use the [conditional editor](../examples/conditional-save/README.md) for conflict checks, serialized
+saves and guarded asynchronous responses. `adoptSaved` is for synchronous adoption or newly created
+objects; a delayed response must use a reconciliation guard. See [saving](saving.md).

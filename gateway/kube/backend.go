@@ -9,35 +9,18 @@
 //
 // # Two paths, and both are required
 //
-// The obvious reading of the Kubernetes docs is that a modern cluster gives you a streaming list
-// (§3a) and that list-then-watch (§3b) is a compatibility shim for old ones. A real cluster says
-// otherwise. `task cluster-facts` (F6) pointed a §3a request at Kubernetes' own sample-apiserver —
-// an ordinary aggregated API on a current cluster — and it was refused outright:
+// The backend supports streaming lists and list-then-watch. An aggregated API has its own feature
+// gates and can reject sendInitialEvents even when the cluster API server accepts it. The backend
+// detects that rejection and selects the fallback. See docs/facts/observed-v1.36.2+k3s1.md, F6.
 //
-//	ListOptions.meta.k8s.io "" is invalid: sendInitialEvents: Forbidden:
-//	  sendInitialEvents is forbidden for watch unless the WatchList feature gate is enabled
+// Both paths deliver WatchAdded snapshot objects, a WatchBookmark with InitialEventsEnd set, then
+// live updates. Streaming lists receive the boundary from the API server; list-then-watch
+// synthesizes it from the completed list. See spec/v1.md, Snapshot cycles.
 //
-// An aggregated API server is a separate binary with its own feature gates; WatchList being on in
-// kube-apiserver says nothing about it. So a backend that implements only §3a cannot open a stream
-// for an aggregated resource AT ALL — and it would have failed in a user's cluster, not in our
-// tests. Both paths ship, and the choice between them is DETECTED rather than configured: nobody
-// should have to know which of their APIs is aggregated in order to watch it.
-//
-// What the two paths have in common is the only thing the gateway cares about: the snapshot arrives
-// as WatchAdded events terminated by a bookmark whose InitialEventsEnd is set, and everything after
-// that bookmark is live. On the §3a path the API server hands us that boundary. On the §3b path we
-// synthesize it. That is precisely why the protocol names the BOUNDARY and not the mechanism.
-//
-// # The failure mode this does NOT defend against, and why
-//
-// A server could ACCEPT `sendInitialEvents` and then quietly ignore it — no synthetic ADDEDs, no
-// terminating bookmark, so `synced` never fires and a browser never paints. We do not guard against
-// that, and the omission is deliberate: the only possible guard is a timeout ("no bookmark in N
-// seconds ⇒ assume §3b"), and N would be a guess that turns a slow cluster into a corrupt one. What
-// we have instead is a stated environment: this gateway requires Kubernetes 1.35+ (README §3), where
-// the option is not silently droppable. A server that accepts an option and ignores it is broken in
-// a way that is not ours to paper over — and the honest response to a broken upstream is to be
-// diagnosable, not to guess.
+// A server that accepts sendInitialEvents but silently ignores it can leave a stream waiting for
+// its snapshot boundary. The backend does not guess a fallback timeout: a slow snapshot must not
+// be mistaken for an unsupported feature. See README.md, Requirements and maturity, for the
+// supported Kubernetes environment.
 package kube
 
 import (
@@ -166,14 +149,13 @@ func (b *Backend) Watch(ctx context.Context, scope gateway.Scope) (gateway.Watch
 		return nil, fmt.Errorf("krm-stream/kube: streaming list for %s: %w", b.upstream(scope), err)
 	}
 
-	// F6, in production. This API is aggregated (or otherwise has WatchList off); §3b is not a
+	// F6, in production. This API is aggregated (or otherwise has WatchList off); list-then-watch is not a
 	// fallback here, it is the only way in.
 	b.rememberListThenWatch(gv)
 	return b.listThenWatchStream(ctx, ri, scope)
 }
 
-// streamingListOptions is §3a, and it is exactly the request the fact-finder verified against a real
-// API server. ResourceVersion: "" means "the freshest state" — a consistent read — and is what makes
+// streamingListOptions builds the request verified against the real API server. ResourceVersion: "" means "the freshest state" — a consistent read — and is what makes
 // the snapshot a snapshot rather than a replay from a stale point.
 func streamingListOptions(scope gateway.Scope) metav1.ListOptions {
 	o := selectors(scope)
@@ -221,7 +203,7 @@ func (b *Backend) rememberListThenWatch(gv schema.GroupVersion) {
 	b.listThenWatch[gv] = true
 }
 
-// listThenWatchStream is §3b: list at a resourceVersion, then watch from exactly there.
+// listThenWatchStream lists at a resourceVersion, then watches from exactly there.
 //
 // The gap that everyone worries about does not exist, and the reason is worth stating: the watch is
 // opened at the LIST's resourceVersion, so the API server replays anything that happened in
@@ -242,7 +224,7 @@ func (b *Backend) listThenWatchStream(ctx context.Context, ri dynamic.ResourceIn
 			b.upstream(scope), list.GetResourceVersion(), err)
 	}
 
-	// The snapshot, in the shape §3a would have delivered it — including the boundary bookmark,
+	// The snapshot, in the shape a streaming list would deliver — including the boundary bookmark,
 	// which here is OURS to synthesize because the API server would not. The gateway cannot tell the
 	// difference, and that is the entire point of the seam.
 	snapshot := make([]gateway.WatchEvent, 0, len(list.Items)+1)
@@ -260,7 +242,7 @@ func (b *Backend) listThenWatchStream(ctx context.Context, ri dynamic.ResourceIn
 	return &prologueWatcher{queue: snapshot, live: &channelWatcher{w: w}}, nil
 }
 
-// isSendInitialEventsRefused recognises the one refusal that means "this server cannot do §3a".
+// isSendInitialEventsRefused recognises the one refusal that means "this server cannot serve a streaming list".
 //
 // Observed on a real aggregated API (F6) as a 422 Invalid naming the `sendInitialEvents` field. We
 // are liberal about the status code — a different server may say 400 or 403, and the docs promise
@@ -318,7 +300,7 @@ func (c *channelWatcher) Next(ctx context.Context) (gateway.WatchEvent, error) {
 func (c *channelWatcher) Stop() { c.w.Stop() }
 
 // prologueWatcher plays a queue of events (the synthesized snapshot) and then delegates to the live
-// watch. It exists so that §3b's caller — the stream loop — sees exactly the §3a event sequence.
+// watch. The stream loop sees the same event sequence as it would from a streaming list.
 type prologueWatcher struct {
 	queue []gateway.WatchEvent
 	live  gateway.Watcher

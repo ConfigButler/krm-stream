@@ -89,7 +89,7 @@ func scratchNamespace(t *testing.T, cs kubernetes.Interface) string {
 	return ns
 }
 
-// stream runs a real Gateway over the real KubeBackend and hands back its events.
+// stream runs a real Gateway over the real kube.Backend and hands back its events.
 func stream(t *testing.T, dyn dynamic.Interface, scope gateway.Scope) <-chan gateway.Event {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
@@ -144,7 +144,7 @@ func named(want gateway.EventType, name string) func(gateway.Event) bool {
 	}
 }
 
-// §3a against kube-apiserver: the streaming list, the path F1 verified.
+// Streaming list against kube-apiserver, the path F1 verified.
 func TestRealClusterStreamingList(t *testing.T) {
 	cs, dyn := clients(t)
 	namespace := scratchNamespace(t, cs)
@@ -205,7 +205,7 @@ func TestRealClusterStreamingList(t *testing.T) {
 	}
 }
 
-// §3b against an AGGREGATED API: the path that is not optional.
+// List-then-watch against an AGGREGATED API: the path that is not optional.
 //
 // This is F6 as an executable claim. The test first proves the API server REFUSES the streaming list
 // — so that a future cluster quietly gaining WatchList cannot make this test pass for the wrong
@@ -229,7 +229,7 @@ func TestRealClusterAggregatedAPIFallsBack(t *testing.T) {
 		t.Fatalf("create fl-a: %v", err)
 	}
 
-	// The premise, asserted rather than assumed: this API server does NOT do §3a.
+	// The premise, asserted rather than assumed: this API server refuses streaming lists.
 	_, err := dyn.Resource(flunders).Namespace(namespace).Watch(ctx, metav1.ListOptions{
 		SendInitialEvents:    ptr.To(true),
 		AllowWatchBookmarks:  true,
@@ -237,9 +237,9 @@ func TestRealClusterAggregatedAPIFallsBack(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("the aggregated API ACCEPTED sendInitialEvents — this cluster no longer reproduces F6, " +
-			"and this test is now proving nothing. Re-run `task cluster-facts` and re-read §3b.")
+			"and this test is now proving nothing. Re-run `task cluster-facts` and review docs/facts/observed-v1.36.2+k3s1.md.")
 	}
-	t.Logf("as expected, the aggregated API refused §3a: %v", err)
+	t.Logf("as expected, the aggregated API refused the streaming list: %v", err)
 
 	// And yet the gateway serves it: reset … added … synced, with a boundary WE synthesized.
 	ch := stream(t, dyn, gateway.Scope{

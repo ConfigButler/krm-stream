@@ -6,20 +6,11 @@
 
 The gateway sends a named, host-authorized projection of each Kubernetes object and suppresses an
 upstream update when projected content excluding `metadata.resourceVersion`, plus redaction records,
-is unchanged. The goal is not merely smaller status events; a consumer that does not render status receives **no event** for status-only churn.
+is unchanged. A consumer using `krm-spec/v1` receives **no event** for status-only churn.
 
 The object remains a strict subset of the API-server object. The gateway may remove values but never
 add or replace an object value. Information about removed values belongs in the event envelope, never
 in the Kubernetes object.
-
-This decision made the following pre-release protocol changes:
-
-- `krm-editor/v1` is renamed to `krm-full/v1`.
-- `redactedPaths: string[]` is replaced with `redacted: [{ path, rev }]`.
-- Every event carries `seq`.
-
-The Go gateway, TypeScript client, schema, fixtures, and documentation move together. There are no
-external users to support yet, so retaining two wire shapes would add ambiguity without benefit.
 
 ## Projection model
 
