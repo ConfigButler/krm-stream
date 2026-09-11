@@ -22,8 +22,14 @@ produces these tags and packages:
 | Go Kubernetes adapter | `gateway/kube/vX.Y.Z` tag |
 | Official browser client | `@configbutler/krm-stream` on npm |
 
-`krm-stream@0.1.0` is a deprecated, frozen name claim that points to the official package. It is not
-part of CI or future releases; new consumers should install `@configbutler/krm-stream`.
+The historical `krm-stream@0.1.0` publication is outside the maintained release surface. Its local
+forwarding package has been removed; install `@configbutler/krm-stream`. Removing local source does
+not change an already published npm artifact.
+
+Before 1.0, remove superseded API names and forwarding packages instead of maintaining compatibility
+shims. Record each removal and its replacement in release notes, and update repository callers,
+examples and documentation together. Changes to wire semantics still require explicit spec and
+conformance review.
 
 ## Publishing setup
 

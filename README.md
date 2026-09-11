@@ -169,7 +169,6 @@ patch through its own save endpoint, which is the one place a write can happen.
 | `github.com/ConfigButler/krm-stream/gateway` | Dependency-free Go stream gateway and SSE handler. |
 | `github.com/ConfigButler/krm-stream/gateway/kube` | Optional `client-go` backend and SubjectAccessReview authorizer. |
 | `@configbutler/krm-stream` | Official dependency-free ESM client store and transports. |
-| `krm-stream@0.1.0` | Deprecated, frozen compatibility name claim. Use the scoped package instead. |
 | [`spec/v1.md`](spec/v1.md) | Normative protocol contract. |
 | [`conformance/`](conformance/) | Shared fixtures exercised by the Go gateway and TypeScript client. |
 

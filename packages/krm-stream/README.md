@@ -46,8 +46,8 @@ against a real `EventSource`. Neither has a runtime dependency.
 
 ## Status
 
-The unscoped `krm-stream` package is a compatibility forwarder. This project is pre-1.0: the protocol
-and the API may still change before 1.0. See the repository [README](../../README.md),
+Install `@configbutler/krm-stream`. This project is pre-1.0: the protocol and API may still change
+before 1.0. Renamed APIs are removed rather than retained as compatibility aliases. See the repository [README](../../README.md),
 [client state model](../../docs/client-state-model.md), and [release guide](../../docs/releasing.md).
 
 ## Managed connections and conditional saves

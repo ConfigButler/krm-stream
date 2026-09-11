@@ -3,7 +3,13 @@
 **Status: design discussion; no protocol or runtime change approved by this document.**
 
 The follow-up [implementation plan](0006-stream-and-save-implementation-plan.md) incorporates the
-latest review and supersedes the phase list below for sequencing and merge gates.
+0.3.0 adopter review and supersedes the phase list below for status, sequencing and acceptance gates.
+
+**2026-09-11 status:** managed recovery, bounded reauthorization, differentiated save outcomes and
+focused recovery tests have shipped in 0.3.0. The phases below retain design rationale, not an open
+release checklist. The normative convergence amendment, real-API status/save and UID-race hardening,
+and measured upstream continuation remain pending. See proposal 0006 for the current work breakdown
+and the [saving guide](../saving.md#what-the-person-editing-sees) for user-facing outcomes.
 
 This follows the second review of PR #25. It distinguishes Kubernetes behavior, the contract in
 [spec/v1.md](../../spec/v1.md), the implementation, and proposed changes. The immediate recommendation
@@ -14,6 +20,9 @@ bundled into that correction.
 The original priorities remain managed recovery, bounded authorization rechecks for shared streams,
 and a complete conditional-save integration. Existing watch sharing and draft reconciliation remain
 in place. Credentials, writes, application policy, and field ownership stay with the host.
+
+The implementation plan also records the pre-1.0 API policy: keep one current name, remove obsolete
+compatibility wrappers, and require a concrete guarantee and acceptance evidence for new surface.
 
 ## 1. The boundary we should preserve
 
@@ -485,14 +494,14 @@ For implementation phases, run fixture checks, Go race tests, TypeScript tests, 
 and wire tests, lint and package validation. Run the projection/save and UID-race cases against a
 real API server; fake clients do not establish Kubernetes conflict behavior. Push the implementation
 changes according to the separate implementation plan and verify CI on their actual final heads.
-PR #25 gates on corrected guidance, save outcomes and focused regression evidence; the normative
-spec amendment and upstream continuation have separate review scopes.
+PR #25 shipped corrected guidance, save outcomes and focused regression coverage in 0.3.0; the
+normative spec amendment, remaining API hardening and upstream continuation have separate review scopes.
 
 This document itself adds no runtime behavior, changes no named projection, and does not expand the
 write API. The reviewer reports independent probes of retry and teardown recovery; those reports
 are useful supporting feedback, not a substitute for the planned reproducible tests in this repo.
 The UID-race status and any throughput estimates remain unverified here.
 
-The decision proposed for the current PR is deliberately small: make our guarantees precise, explain
+The original feature decision was deliberately small: make our guarantees precise, explain
 the projection/write interaction, and strengthen the boundary tests. Do not remove Kubernetes write
 preconditions or add an ownership/replay abstraction to conceal the tradeoff.

@@ -18,6 +18,10 @@ Run `task fixtures-check`, `task test`, and `task lint` before opening a pull re
 - Keep the core gateway free of `client-go`; Kubernetes integration belongs in `gateway/kube`.
 - Keep the browser client framework-free and free of runtime dependencies.
 - Keep credentials, application identity, authorization policy, and writes in the host application.
+- Keep one current name for each API. Before 1.0, remove superseded names and forwarding packages;
+  update callers and document the replacement instead of adding compatibility shims.
+- Add public surface only for a demonstrated use case within the library’s scope. Prefer composing
+  existing primitives, and test the observable guarantee each addition promises.
 - Treat `spec/v1.md` and `conformance/` as the shared contract between gateway and client.
 
 ## Changing behavior

@@ -1,59 +1,86 @@
 # Proposal 0006: Implementation plan for stream and save semantics
 
-**Status: proposed work breakdown. This document does not implement or approve runtime changes.**
+**Status: active follow-up plan, reviewed 2026-09-11 against 0.3.0 and the first adopter’s feedback.**
+
+This document records shipped work separately from pending work. It does not approve runtime or
+protocol changes. The adopter report supports migration; it does not establish application readiness
+or 200-attendee capacity.
 
 [Proposal 0005](0005-kubernetes-stream-and-save-semantics.md) explains the tradeoffs. This document
 supersedes its phase list for sequencing, merge gates and acceptance criteria. Keep Kubernetes in
 charge of identity and conditional writes, keep credentials and writes host-owned, and compose the
-existing stream, shared backend and draft store. The original priorities remain managed recovery,
-bounded subscriber reauthorization and a complete conditional-save example.
+existing stream, shared backend and draft store. Managed recovery, bounded subscriber
+reauthorization and the conditional-save example shipped in 0.3.0. Adopt those primitives now; the
+remaining priorities are the convergence contract, adoption guidance, real-API composition hardening
+and measured upstream continuation.
 
-## 1. Review decisions
+## Design rule: a small library with explicit guarantees
 
-| Feedback | Decision |
-|---|---|
-| Separate the normative spec amendment from the feature PR | Agree. Review the convergence invariant in a dedicated PR, with release-note visibility. |
-| Gate PR #25 on guidance and save outcomes | Agree, with focused regression tests included in the gate. Tests proving the corrected composition should not be deferred wholesale. |
-| Copy the existing fake-timer pattern | Agree. `connection.test.ts` already demonstrates it; no public clock injection is needed. |
-| Routine upstream closure resnapshots every shared subscriber | Confirmed in `sharedScope.pump` and `sharedScope.die`. Make continuation a named follow-up. |
-| Upstream closure is the dominant source of resnapshots | Not established. It is a fan-out multiplier; dominance depends on closure frequency, browser reconnects and slow-consumer overflow. Measure before claiming it. |
-| A snapshot can reject the post-409 GET | Confirmed. The guard also rejects responses spanning a snapshot epoch, even if that snapshot has finished. Preserve the guard and explain recovery. |
-| A refused GET means the user must click again | Qualify. A newer watch may already have supplied the base. Re-read current state; wait when recovery is incomplete. Never infer the rejection reason from the boolean alone. |
-| The five-second auth example disagrees with the default | No behavioral mismatch: the example explicitly overrides the timeout and the adjacent prose says zero uses ten seconds. Label the override more clearly. |
+Make the library do its stated job well: projected streams, bounded recovery and authorization,
+and one draft store with safe conditional-save primitives. Keep host policy and writes in the host.
+Judge follow-ups by whether they close a documented guarantee or a demonstrated adoption gap.
+
+Before 1.0, keep one current API name and remove superseded aliases and forwarding packages. This
+follow-up removes `SSARAuthorizer` in favor of `SubjectAccessReviewAuthorizer` and deletes the local
+unscoped npm forwarder in favor of `@configbutler/krm-stream`. Update callers, examples and release
+notes together. This is an intentional source API break, not a change to downstream v1 semantics.
+
+For each planned addition, identify the promised behavior, the smallest implementation that delivers
+it, and observable acceptance evidence. Prefer documentation and composition of existing APIs when
+sufficient. Retain mechanisms needed for supported behavior, including aggregated-API list/watch
+fallback and guarded reconciliation. Do not add speculative options, parallel controllers or new
+abstractions merely to preserve old names or hide unresolved guarantees.
+
+## 1. Shipped baseline and remaining priorities
+
+The local [0.3.0 changelog](../../packages/krm-stream/CHANGELOG.md) records the integration feature.
+Release commit `209537c46a98bf896f162df36c09b927864119aa` is the adopter's runtime baseline; its
+reviewed main was `2154f9d`. These are source/release references, not new validation runs.
+
+| Work | Status and evidence | Remaining action |
+|---|---|---|
+| Managed recovery | Shipped: [connection.ts](../../packages/krm-stream/src/connection.ts), [tests](../../packages/krm-stream/test/connection.test.ts) | Hosts wire cookie transport, terminal auth UI, exhaustion and owned connection cleanup. Test simplification remains optional hardening. |
+| Bounded shared authorization | Shipped: [auth guide](../auth.md), [reauthorization tests](../../gateway/reauthorize_test.go), including stream teardown/recovery | Hosts enforce session expiry and bounded callbacks/sinks; measure revocation under load. |
+| Conditional save and guarded recovery | Shipped: [editor.ts](../../examples/conditional-save/editor.ts), directly executed [saving tests](../../packages/krm-stream/test/saving.test.ts) | Complete real-status-subresource composition and preflight/PATCH UID-race evidence (§4). |
+| Vue adapter and authorizer naming | Shipped: copyable [Vue adapter](../vue.md), `SubjectAccessReviewAuthorizer` (0.3.0 also included the old alias) | Alias removed in this follow-up; use the current name. No Vue package needed. |
+| Precise convergence contract | Pending: spec §6 still has broad equality wording | Dedicated normative amendment, conformance cases and release note (§5). |
+| Deletion and keep-local guidance | Deletion behavior exists; complete resolution recipe still pending | Document recovery before pruning; add a tested resolve-and-reapply recipe (§3). |
+| Upstream continuation | Pending | Baseline measurements, backend implementation and same-workload comparison (§6). |
+
+The adopter reports 30 connection/save tests, gateway race tests, kube tests and two Vue tests passing
+on its reviewed main. It did not run the real-cluster suite, consumer migration, browser acceptance or
+200-user load test. Do not mark those gates complete from that report or from fake-client CI.
 
 The review's example of an identical SSA reapply advancing resourceVersion is not a guaranteed
 fixture: a server may treat an operation as a no-op. Tests must demonstrate an actual persisted
 change and a changed RV before asserting suppression. Neither SSA nor more frequent version
 notifications replaces the conditional-save behavior we need to demonstrate.
 
-## 2. Work boundaries and merge gate
+## 2. Work boundaries and order
 
-**PR #25 is ready to merge when save outcomes and guidance are corrected, the focused recovery/save
-regressions below pass, and CI passes on its final commit; normative spec changes and upstream
-continuation belong to separately reviewed PRs.**
+PR #25's feature and bounded correction shipped in 0.3.0; its former merge gate is historical.
+Sections 3–4 retain the implemented contract and identify remaining guidance and hardening work.
+Do not commission a replacement recovery manager, draft store or save controller.
 
-This is the proposed gate, not a report that these checks have already run. If #25 has merged by
-implementation time, put this same bounded correction in a follow-up PR.
+1. Finish the dedicated convergence amendment (§5), including conformance and release notes, before
+   the next release presenting the contract as settled.
+2. Keep the [adoption guide](../adopting.md) → [saving guide](../saving.md) →
+   [conditional-save example](../../examples/conditional-save/README.md) route current. Complete the
+   deletion/keep-local guidance and tests below. Hosts can migrate to 0.3.0 now.
+3. Complete real-API save/status and identity-race hardening (§4), with exact-commit evidence (§7).
+4. Measure upstream recycling, implement continuation (§6), then compare the same workload.
+   Baseline collection can begin alongside the contract and hardening work.
+5. Consider downstream replay or different version delivery only if those measurements justify it.
 
-```mermaid
-flowchart TD
-    A["PR 25 correction: guidance, save outcomes, regression tests"] --> G["Focused validation and final-commit CI"]
-    G --> M["Feature merge"]
-    S["Separate spec PR: convergence invariant and release note"] --> R["Explicit contract review"]
-    M --> U["Named follow-up: upstream watch continuation"]
-    U --> T["Continuity, cancellation, auth and fan-out tests"]
-    T --> V["Measure resnapshot and save behavior"]
-    V --> O["Optional later proposals only with a concrete need"]
-```
+The spec amendment, API hardening and continuation have separate review scopes. No downstream v1
+change or generalized write framework is required for this adoption.
 
-The spec PR can be prepared alongside the correction. PR #25 should link the known invariant issue
-and describe actual delivery behavior without silently rewriting the normative text. Resolve the
-spec PR before the next release that presents this contract as settled. Separating review is not a
-reason to leave contradictory guarantees indefinitely.
+## 3. Adoption contract: shipped behavior and remaining guidance
 
-## 3. PR #25 correction: guidance and a small host example
+The save outcomes and core guidance shipped in 0.3.0. The table records documentation requirements
+to retain and complete during follow-ups; deletion/keep-local acceptance work remains pending.
 
-### Documentation changes
+### Documentation requirements
 
 | Files | Concrete change |
 |---|---|
@@ -65,13 +92,14 @@ reason to leave contradictory guarantees indefinitely.
 Name SSA and deliberate JSON Patch as host-owned alternatives, with links to proposal 0005's
 tradeoffs. Do not add another save engine. Explain that client-requested projections remain subject
 to host policy and currently bundle content and notification behavior. Keep current projection
-names and the full default in this correction.
+names and the full default during these follow-ups.
 
 ### Save outcomes
 
-Change [editor.ts](../../examples/conditional-save/editor.ts), with tests that exercise this exported
-example directly. Keep a local result type in the example, not a new core API or wire event family.
-The exact spelling may change during implementation; the following distinctions must survive:
+The copyable [editor.ts](../../examples/conditional-save/editor.ts) has tests that exercise it
+directly. It is not a core package export. Keep a local result type in the example, not a new core API
+or wire event family.
+Preserve these existing distinctions:
 
 | Outcome | Meaning and host presentation |
 |---|---|
@@ -86,8 +114,8 @@ Transport and validation failures should remain explicit host errors with useful
 they must not become `draft-conflict`. A successful PATCH response must never overwrite newer watch
 state or clear edits typed while the request was in flight.
 
-The example already requires a live connection. Make that requirement executable through a small
-host-supplied readiness callback using the existing managed connection state. Recheck it after awaits;
+The example enforces a live connection through a small host-supplied readiness callback using the
+existing managed connection state. Keep checking it after reconciliation;
 being live at the first click does not imply being live when the GET returns. Do not create a second
 connection controller in the example.
 
@@ -120,12 +148,44 @@ No automatic write retry. No replacement of an old patch's RV with the GET's RV.
 snapshot membership. These constraints keep the example useful without turning it into a writer
 framework.
 
+### Remaining adoption guidance and acceptance
+
+Use one store as the editable source of truth. The host may keep a recovery copy of unsaved work,
+but must not reconcile server snapshots into a second active draft or maintain a second conflict
+registry. `captureSave`, `captureReconciliation` and `connectManagedResourceStream` are core APIs;
+the conditional editor and Vue composable are copyable examples. Keep `krm-full/v1` as the adoption
+default, without promising fresh RVs for suppressed bookkeeping changes.
+
+- **User outcomes:** keep the [saving guide's presentation table](../saving.md#what-the-person-editing-sees)
+  aligned with example outcomes. Separate Kubernetes acceptance, watch confirmation and any host Git
+  workflow. A receipt-only HTTP 200 is a valid host alternative to 204; parse its explicit receipt
+  schema in the host without adopting a raw write object. Add a host-example test when implementing
+  receipt parsing; the current example accepts successful status and does not parse receipts.
+- **Deletion:** retain a detached recovery copy while the UID exists, before `removeResource` or
+  snapshot pruning can discard its draft. Explain storage lifetime and identity-scoped cleanup; offer
+  copy-out, never automatic application to a replacement UID. Vue's null state is too late to read
+  the removed draft. Test deletion and snapshot pruning with unsaved work and fixed-UID remounting.
+- **Explicit keep-local:** add a tested recipe that captures the chosen local value (including
+  absence), resolves that path with `takeTheirs`, then synchronously reapplies the choice through
+  `setValue` or `removeKey`. Verify nested paths, deletion, whole-array replacement and policy/redaction
+  refusal against current store behavior before publishing executable guidance. Preserve unrelated
+  edits/conflicts and capture a fresh save intent only after review. Consider a small helper only if
+  repeated consumer code warrants it; do not add another merge algorithm or conflict registry.
+- **Consumer acceptance:** separately pin npm and both Go modules, verify their declared toolchains
+  in the consumer's CI/image, and test concurrent edits, later typing during save, session expiry,
+  deletion/recreation and recovery in its browser. For Voter, 30s recheck / 5s timeout and a 60s
+  termination target are host acceptance settings, not a library load guarantee. Test at the actual
+  200-attendee workload with bounded sinks/callbacks before claiming capacity.
+
+**Done when:** the primary adoption route explains these boundaries, the new recipes execute in
+existing tests, and consumer-specific acceptance evidence remains distinct from library CI.
+
 ## 4. Regression coverage and follow-ups
 
-The final review narrows the immediate gate to adopter guidance, example outcomes with direct tests,
-and the `Gateway.Stream` teardown/recovery regression. Connection-test simplification, real-API
-status/save composition, and UID-race classification are follow-up hardening, not merge blockers.
-The table below retains that broader backlog; it does not assert that every row shipped in PR #25.
+The example outcomes, guarded-read cases and `Gateway.Stream` teardown/recovery regression shipped.
+The table below is the regression contract to preserve, not a wholly open backlog. Real-API
+status/save composition and UID-race classification remain required follow-up hardening; the ordinary
+real-API stale-RV test exists but does not establish either composition case.
 
 | Test location | Scenario and assertion |
 |---|---|
@@ -139,8 +199,8 @@ The table below retains that broader backlog; it does not assert that every row 
 For the status/save composition, use a resource with a real status subresource and an existing host
 validation pattern. Do not pretend a ConfigMap's arbitrary `status` field establishes that behavior,
 and do not generalize the ConfigMap example into an unrestricted write endpoint just for testing.
-Require: status update advances RV, spec update is suppressed, stale PATCH returns 409, guarded GET
-advances the base without a draft conflict, and a fresh intent succeeds once churn stops.
+Require: status update advances RV, its spec-projected notification is suppressed, stale PATCH
+returns 409, guarded GET advances the base without a draft conflict, and a fresh intent succeeds once churn stops.
 
 Add one schedule combining churn and resnapshot: save starts while live, controller advances RV,
 upstream closure starts a snapshot, and the post-409 GET arrives before synced. Assert recovery
@@ -227,8 +287,11 @@ forbidden response, repeated transient failure, cancellation and subscriber depa
 initialization paths against the real API server where supported.
 
 Measure baseline and changed runs with the same workload: upstream reopen count, downstream reset
-count by cause, serialized bytes, recovery duration and save 409 rate. Use existing observations where
-possible. A 1 MB snapshot delivered to 200 subscribers costs roughly 200 MB before compression whether
+count by cause, snapshot bytes and duration, browser deserialization/reconciliation cost, recovery
+latency, access-review rate/latency and save 409 rate. Also record the fraction of 409s with no field
+conflicts and whether the next deliberately captured save succeeds once churn stops. Include routine
+recycling, browser reconnects, slow subscribers and access revocation. Keep metric labels bounded;
+do not label by UID, username or opaque RV. Use existing observations where possible. A 1 MB snapshot delivered to 200 subscribers costs roughly 200 MB before compression whether
 triggered by browser reconnects or a shared upstream recycle; this is an illustration, not a measured
 production rate. Successful continuation avoids that particular reset, not every possible resnapshot.
 
@@ -238,10 +301,11 @@ explicit. No new SSE events or downstream replay protocol.
 
 ## 7. Verification and completion
 
-For the correction, use the existing task definitions for client/example tests, Go tests with race
+For runtime follow-ups, use the existing task definitions for client/example tests, Go tests with race
 detection, wire/browser integration, lint, fixture checks and package validation. Verify any added
 example test is actually discovered, not merely typechecked. Run the real API cases via
-`task test-cluster`; attach the server version and results to the implementation PR.
+`task test-cluster`; attach the exact tested commit, server version, command, scenario and results
+to the implementation PR. Record skips and unrun cases explicitly, separately from fake-client CI.
 
 Current CI does not execute the real-cluster suite on every PR. In the follow-up hardening PR, add
 a focused real-API job for the new save/identity cases using the existing cluster tooling, or wire them into an explicitly invoked
@@ -262,5 +326,5 @@ must not silently change spec-only subscribers' current quiet behavior.
 
 Keep the optional Vue adapter thin and outside core dependencies. Keep the clearer authorizer naming
 already introduced; no further naming sweep is needed to solve these problems. The next useful work
-is a precise contract and an example people can copy safely, followed by upstream continuation through
-Kubernetes' existing watch mechanisms.
+is a precise contract, remaining adoption guidance and real-API hardening, followed by measured
+upstream continuation through Kubernetes' existing watch mechanisms.
