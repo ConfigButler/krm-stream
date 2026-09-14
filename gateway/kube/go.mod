@@ -21,7 +21,7 @@ go 1.27.1
 //
 // Raise these only to raise the SUPPORTED MINOR, and say why in the commit.
 require (
-	github.com/ConfigButler/krm-stream/gateway v0.2.1
+	github.com/ConfigButler/krm-stream/gateway v0.4.0
 	k8s.io/api v0.36.0
 	k8s.io/apimachinery v0.36.0
 	k8s.io/client-go v0.36.0
