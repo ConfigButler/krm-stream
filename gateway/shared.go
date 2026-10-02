@@ -5,6 +5,7 @@ import (
 	"errors"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Fan-out: one upstream watch per SCOPE, not per browser tab.
@@ -52,6 +53,15 @@ import (
 // leak and never into a lie.
 const sharedQueueDepth = 256
 
+// The backoff after a shared upstream watch fails to open with UPSTREAM_UNAVAILABLE. Its subscribers
+// each reconnect on their own budget, so without it the API server would see one attempt per
+// subscriber per retry. With it, a scope sees at most one attempt per backoff period however many
+// subscribers are waiting, and the rest are told when to come back.
+const (
+	sharedRetryMin = time.Second
+	sharedRetryMax = 30 * time.Second
+)
+
 // SharedOptions configures an opt-in SharedBackend. Zero values preserve the bounded, safe defaults.
 type SharedOptions struct {
 	// QueueDepth is the maximum number of live events a subscriber may lag before it is resnapshotted.
@@ -71,8 +81,16 @@ type SharedBackend struct {
 	queueDepth int
 	observer   Observer
 
-	mu     sync.Mutex
-	scopes map[string]*sharedScope
+	mu      sync.Mutex
+	scopes  map[string]*sharedScope
+	backoff map[string]*sharedBackoff
+	now     func() time.Time
+}
+
+// sharedBackoff is one scope's failed attempts to open its upstream watch.
+type sharedBackoff struct {
+	until time.Time
+	delay time.Duration
 }
 
 // NewSharedBackend shares one upstream watch per scope across every consumer of it.
@@ -94,6 +112,8 @@ func NewSharedBackendWithOptions(upstream Backend, options SharedOptions) *Share
 		queueDepth: depth,
 		observer:   options.Observer,
 		scopes:     map[string]*sharedScope{},
+		backoff:    map[string]*sharedBackoff{},
+		now:        time.Now,
 	}
 }
 
@@ -118,17 +138,60 @@ func (b *SharedBackend) Watch(_ context.Context, scope Scope) (Watcher, error) {
 	b.mu.Lock()
 	s, ok := b.scopes[key]
 	if !ok {
+		if wait := b.backoffRemainingLocked(key); wait > 0 {
+			b.mu.Unlock()
+			return nil, UpstreamUnavailable("the upstream is unavailable; retry later", wait)
+		}
 		var err error
 		s, err = b.startScope(scope, key)
 		if err != nil {
+			b.recordFailureLocked(key, err)
 			b.mu.Unlock()
 			return nil, err
 		}
+		delete(b.backoff, key)
 		b.scopes[key] = s
 	}
 	b.mu.Unlock()
 
 	return s.subscribe()
+}
+
+func (b *SharedBackend) backoffRemainingLocked(key string) time.Duration {
+	if bo := b.backoff[key]; bo != nil {
+		return bo.until.Sub(b.now())
+	}
+	return 0
+}
+
+// recordFailureLocked starts or doubles a scope's backoff after a retryable failure. Any other
+// failure is not the upstream being away, and backing off would only delay the real answer.
+func (b *SharedBackend) recordFailureLocked(key string, err error) {
+	var se *StreamError
+	if !errors.As(err, &se) || se == nil || se.Terminal || se.Code != CodeUpstreamUnavailable {
+		delete(b.backoff, key)
+		return
+	}
+	now := b.now()
+	for k, old := range b.backoff {
+		if now.Sub(old.until) > sharedRetryMax { // quiet for a full period: forget it, so the map stays small
+			delete(b.backoff, k)
+		}
+	}
+	bo := b.backoff[key]
+	if bo == nil {
+		bo = &sharedBackoff{delay: sharedRetryMin}
+		b.backoff[key] = bo
+	} else if bo.delay = 2 * bo.delay; bo.delay > sharedRetryMax {
+		bo.delay = sharedRetryMax
+	}
+	wait := bo.delay
+	if se.RetryAfterMs != nil {
+		if hint := time.Duration(*se.RetryAfterMs) * time.Millisecond; hint > wait {
+			wait = min(hint, sharedRetryMax)
+		}
+	}
+	bo.until = now.Add(wait)
 }
 
 // startScope opens the one upstream watch for a scope and pumps it. Called with b.mu held.

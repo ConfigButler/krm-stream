@@ -66,7 +66,7 @@ func SubjectAccessReviewAuthorizer(cs kubernetes.Interface, subjectFor SubjectFo
 	return gateway.AuthorizerFunc(func(ctx context.Context, p gateway.Principal, scope gateway.Scope) error {
 		subject, err := subjectFor(p)
 		if err != nil {
-			return gateway.Forbidden("not authenticated")
+			return gateway.Unauthenticated("not authenticated")
 		}
 		if subject.User == "" && len(subject.Groups) == 0 {
 			// An empty subject is not "anonymous, and therefore probably fine" — it is a request that
@@ -79,7 +79,15 @@ func SubjectAccessReviewAuthorizer(cs kubernetes.Interface, subjectFor SubjectFo
 			if err != nil {
 				// A SubjectAccessReview we could not complete is NOT an allow. If the API server
 				// cannot tell us whether this caller may look, the answer is no.
-				return fmt.Errorf("krm-stream/kube: subject access review (%s): %w", verb, err)
+				//
+				// An unreachable API server is UPSTREAM_UNAVAILABLE: the stream ends, and the client
+				// may come back. Anything else (a gateway identity that may not create reviews, say)
+				// is the host's misconfiguration, and stays a generic INTERNAL.
+				err = fmt.Errorf("krm-stream/kube: subject access review (%s): %w", verb, err)
+				if unavailable(err) || isUnavailableStatus(err) {
+					return withCause(gateway.UpstreamUnavailable("the API server is unavailable", 0), err)
+				}
+				return err
 			}
 			if !allowed {
 				// The API server's own words, so an operator can find this decision in the audit log
@@ -130,4 +138,9 @@ func groupResource(s gateway.Scope) string {
 		return s.Resource
 	}
 	return s.Group + "/" + s.Resource
+}
+
+func isUnavailableStatus(err error) bool {
+	se := classifyStatus(err)
+	return se != nil && se.Code == gateway.CodeUpstreamUnavailable
 }

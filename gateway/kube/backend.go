@@ -25,16 +25,21 @@ package kube
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 	"sync"
+	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	utilnet "k8s.io/apimachinery/pkg/util/net"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/rest"
@@ -58,7 +63,8 @@ type Backend struct {
 	client dynamic.Interface
 
 	// host is what this backend dialed, for error messages ONLY — it is never sent to a browser and
-	// never parsed. An upstream error that names neither the server nor the resource path reads like
+	// never parsed. Errors carry it as a StreamError's Cause, which reaches only the host's
+	// Diagnostics hook. An upstream error that names neither the server nor the resource path reads like
 	// "that resource does not exist", when what actually happened may be "you built the wrong URL".
 	// A kcp workspace, whose kubeconfig carries a path prefix, is exactly where the two are
 	// indistinguishable without this.
@@ -146,7 +152,7 @@ func (b *Backend) Watch(ctx context.Context, scope gateway.Scope) (gateway.Watch
 		// is NOT ours to paper over. Falling back on every failure would turn "you may not watch
 		// Secrets" into a second, differently-worded permission denial, which is how a gateway ends
 		// up lying about why it could not open a stream.
-		return nil, fmt.Errorf("krm-stream/kube: streaming list for %s: %w", b.upstream(scope), err)
+		return nil, classify(fmt.Errorf("krm-stream/kube: streaming list for %s: %w", b.upstream(scope), err))
 	}
 
 	// F6, in production. This API is aggregated (or otherwise has WatchList off); list-then-watch is not a
@@ -212,7 +218,7 @@ func (b *Backend) rememberListThenWatch(gv schema.GroupVersion) {
 func (b *Backend) listThenWatchStream(ctx context.Context, ri dynamic.ResourceInterface, scope gateway.Scope) (gateway.Watcher, error) {
 	list, err := ri.List(ctx, selectors(scope))
 	if err != nil {
-		return nil, fmt.Errorf("krm-stream/kube: list %s: %w", b.upstream(scope), err)
+		return nil, classify(fmt.Errorf("krm-stream/kube: list %s: %w", b.upstream(scope), err))
 	}
 
 	o := selectors(scope)
@@ -220,8 +226,8 @@ func (b *Backend) listThenWatchStream(ctx context.Context, ri dynamic.ResourceIn
 	o.ResourceVersion = list.GetResourceVersion() // resume EXACTLY where the list ended: no gap.
 	w, err := ri.Watch(ctx, o)
 	if err != nil {
-		return nil, fmt.Errorf("krm-stream/kube: watch %s from resourceVersion %q: %w",
-			b.upstream(scope), list.GetResourceVersion(), err)
+		return nil, classify(fmt.Errorf("krm-stream/kube: watch %s from resourceVersion %q: %w",
+			b.upstream(scope), list.GetResourceVersion(), err))
 	}
 
 	// The snapshot, in the shape a streaming list would deliver — including the boundary bookmark,
@@ -364,17 +370,88 @@ func translate(ev watch.Event) (gateway.WatchEvent, error) {
 	}
 }
 
-// watchError renders the *metav1.Status on a watch.Error as an error the gateway can act on. A 410
-// Gone / "Expired" is the continuity-losing one, and it is not fatal: it means "start a new snapshot
-// cycle", which is exactly what a non-terminal RESYNC_REQUIRED tells the consumer.
+// watchError renders the *metav1.Status on a watch.Error as an error the gateway can act on, by the
+// same rules as a failure to open the watch: a revoked grant on an open watch is as terminal as one
+// at opening. A 410 Gone / "Expired" is the continuity-losing one, and it is not fatal: it means
+// "start a new snapshot cycle", which is exactly what a non-terminal RESYNC_REQUIRED tells the
+// consumer. So is anything this adapter cannot classify.
 func watchError(obj runtime.Object) error {
-	if status, ok := obj.(*metav1.Status); ok {
-		if status.Reason == metav1.StatusReasonExpired || status.Code == 410 {
-			return gateway.ResyncRequired(fmt.Sprintf(
-				"the upstream resourceVersion expired (410 Gone): %s", status.Message))
-		}
-		return gateway.ResyncRequired(fmt.Sprintf("upstream watch error: %s (reason=%s code=%d)",
-			status.Message, status.Reason, status.Code))
+	status, ok := obj.(*metav1.Status)
+	if !ok {
+		return gateway.ResyncRequired(fmt.Sprintf("upstream watch error carrying %T", obj))
 	}
-	return gateway.ResyncRequired(fmt.Sprintf("upstream watch error carrying %T", obj))
+	cause := fmt.Errorf("krm-stream/kube: watch error event: %w", apierrors.FromObject(status))
+	if se := classifyStatus(cause); se != nil {
+		return se
+	}
+	resync := gateway.ResyncRequired("upstream watch error; a new snapshot cycle follows")
+	resync.Cause = cause
+	return resync
+}
+
+// classify maps an API-server failure onto the spec's error codes (§4.3). What it cannot classify it
+// returns unchanged, which the gateway sends as a generic INTERNAL; the full error, with the URL that
+// failed, always survives as the Cause, for the host's Diagnostics and never for the wire.
+func classify(err error) error {
+	if se := classifyStatus(err); se != nil {
+		return se
+	}
+	if unavailable(err) {
+		return withCause(gateway.UpstreamUnavailable("the API server is unavailable", 0), err)
+	}
+	return err
+}
+
+// classifyStatus maps an API-server Status, or nil when err carries none it recognises.
+func classifyStatus(err error) *gateway.StreamError {
+	var status apierrors.APIStatus
+	if !errors.As(err, &status) {
+		return nil
+	}
+	switch {
+	case apierrors.IsResourceExpired(err) || apierrors.IsGone(err):
+		return withCause(gateway.ResyncRequired("the upstream resourceVersion expired (410 Gone)"), err)
+	case apierrors.IsUnauthorized(err):
+		return withCause(gateway.Unauthenticated("the API server rejected the caller's credential"), err)
+	case apierrors.IsForbidden(err):
+		// Kubernetes' own answer, verbatim: it tells the caller about their own access, which is what
+		// a `kubectl` user or a `/k8s` proxy would see too. It names the resource and the subject, not
+		// the server.
+		msg := status.Status().Message
+		if msg == "" {
+			msg = "the API server refused this watch"
+		}
+		return withCause(gateway.Forbidden(msg), err)
+	case apierrors.IsNotFound(err):
+		return withCause(gateway.ScopeInvalid("the API server does not serve this resource at this version"), err)
+	case apierrors.IsTooManyRequests(err):
+		var retryAfter time.Duration
+		if seconds, ok := apierrors.SuggestsClientDelay(err); ok {
+			retryAfter = time.Duration(seconds) * time.Second
+		}
+		return withCause(gateway.UpstreamUnavailable("the API server is overloaded", retryAfter), err)
+	case status.Status().Code >= 500 || apierrors.IsServerTimeout(err) || apierrors.IsTimeout(err):
+		return withCause(gateway.UpstreamUnavailable("the API server is unavailable", 0), err)
+	}
+	return nil
+}
+
+// unavailable reports a transport failure: the API server could not be reached, or went away
+// mid-request. A certificate the client will not trust is not one of those. It is a configuration
+// error that no retry will fix, so it stays an INTERNAL.
+func unavailable(err error) bool {
+	var certInvalid x509.CertificateInvalidError
+	var unknownAuthority x509.UnknownAuthorityError
+	var hostname x509.HostnameError
+	var verification *tls.CertificateVerificationError
+	if errors.As(err, &certInvalid) || errors.As(err, &unknownAuthority) || errors.As(err, &hostname) || errors.As(err, &verification) {
+		return false
+	}
+	var netErr net.Error
+	return errors.As(err, &netErr) || utilnet.IsConnectionRefused(err) || utilnet.IsConnectionReset(err) || utilnet.IsProbableEOF(err)
+}
+
+func withCause(se *gateway.StreamError, cause error) *gateway.StreamError {
+	se.Cause = cause
+	return se
 }

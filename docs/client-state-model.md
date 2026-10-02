@@ -25,7 +25,9 @@ Use `applyStreamEvent` or the transport helpers instead of translating protocol 
 - `deleted` removes the resource and its draft.
 - `synced` prunes resources that were not seen during the completed snapshot.
 - `error` is terminal only when the event says it is terminal. `RESYNC_REQUIRED` starts a new
-  snapshot on the same connection.
+  snapshot on the same connection. After any other non-terminal error, such as
+  `UPSTREAM_UNAVAILABLE`, the gateway closes the connection and the client reconnects, waiting at
+  least `retryAfterMs`.
 
 An incomplete snapshot never prunes state. That prevents a transient disconnect from making a UI lose
 objects it has not yet reloaded.

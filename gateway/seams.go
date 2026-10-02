@@ -3,6 +3,7 @@ package gateway
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // The seams. This file is the whole of CONTRIBUTING's one rule, expressed as Go:
@@ -126,15 +127,28 @@ type WatchEvent struct {
 var ErrWatchClosed = fmt.Errorf("krm-stream: upstream watch closed")
 
 // StreamError is a protocol-level error the gateway emits to the consumer, and the type a host's
-// Authorizer or ClientFor returns to choose the code the browser sees.
+// Principal, Authorizer or ClientFor returns to choose the code the browser sees.
+//
+// Message goes on the wire, so it must be something the caller may read. Cause never does: it is the
+// detail behind the code (a dial error, the URL that failed), and it reaches only the host's
+// Diagnostics hook.
 type StreamError struct {
 	Code         ErrorCode
 	Message      string
 	Terminal     bool
 	RetryAfterMs *int
+	Cause        error
 }
 
-func (e *StreamError) Error() string { return fmt.Sprintf("%s: %s", e.Code, e.Message) }
+func (e *StreamError) Error() string {
+	if e.Cause != nil {
+		return fmt.Sprintf("%s: %s: %v", e.Code, e.Message, e.Cause)
+	}
+	return fmt.Sprintf("%s: %s", e.Code, e.Message)
+}
+
+// Unwrap exposes Cause to errors.Is and errors.As.
+func (e *StreamError) Unwrap() error { return e.Cause }
 
 // Event renders the error as the wire event.
 func (e *StreamError) Event() Event {
@@ -156,6 +170,24 @@ func Forbidden(msg string) *StreamError {
 // ScopeInvalid rejects a scope that is not allowlisted or not resolvable.
 func ScopeInvalid(msg string) *StreamError {
 	return &StreamError{Code: CodeScopeInvalid, Message: msg, Terminal: true}
+}
+
+// Unauthenticated refuses a caller whose credential is missing, expired or rejected. Terminal: signing
+// in again is the remedy, and a page offers that rather than retrying.
+func Unauthenticated(msg string) *StreamError {
+	return &StreamError{Code: CodeUnauthenticated, Message: msg, Terminal: true}
+}
+
+// UpstreamUnavailable reports an upstream that cannot be reached right now. NOT terminal, but it ends
+// the connection: the gateway sends it and closes, and the client reconnects with its own backoff,
+// waiting at least retryAfter when that is positive (spec §4.3). Zero means "use your own backoff".
+func UpstreamUnavailable(msg string, retryAfter time.Duration) *StreamError {
+	se := &StreamError{Code: CodeUpstreamUnavailable, Message: msg}
+	if retryAfter > 0 {
+		ms := int(retryAfter.Milliseconds())
+		se.RetryAfterMs = &ms
+	}
+	return se
 }
 
 // ResyncRequired announces a loss of upstream continuity. NOT terminal: a fresh snapshot cycle

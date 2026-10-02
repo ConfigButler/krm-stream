@@ -675,3 +675,55 @@ func TestFinalBookkeepingSuppressionAcrossProjections(t *testing.T) {
 		})
 	}
 }
+
+// RESYNC_REQUIRED recovers on the same connection; UPSTREAM_UNAVAILABLE does not. It is sent with its
+// code and hint, then the stream ends so the client reconnects on its own budget. Both reach
+// Diagnostics with the raw cause.
+func TestOnlyContinuityLossIsRecoveredInBand(t *testing.T) {
+	var diagnostics []Diagnostic
+	var observations []Observation
+	watches := 0
+	gw := &Gateway{
+		Auth:        AllowAll{},
+		Diagnostics: func(d Diagnostic) { diagnostics = append(diagnostics, d) },
+		Observer:    ObserverFunc(func(o Observation) { observations = append(observations, o) }),
+		Clients: func(context.Context, string, Principal) (Backend, error) {
+			return backendFunc(func() (Watcher, error) {
+				watches++
+				if watches == 1 {
+					return &stubWatcher{events: []WatchEvent{
+						{Type: WatchBookmark, InitialEventsEnd: true},
+						{Type: WatchError, Err: ResyncRequired("expired")},
+					}}, nil
+				}
+				se := UpstreamUnavailable("the API server is unavailable", 0)
+				se.Cause = errors.New("dial tcp 10.43.0.1:443: connect: connection refused")
+				return nil, se
+			}), nil
+		},
+	}
+	sink := &recordingSink{}
+	err := gw.Stream(t.Context(), nil, Scope{Version: "v1", Resource: "configmaps"}, sink)
+
+	var se *StreamError
+	if !errors.As(err, &se) || se.Code != CodeUpstreamUnavailable || se.Terminal {
+		t.Fatalf("Stream() = %v, want a non-terminal UPSTREAM_UNAVAILABLE", err)
+	}
+	if watches != 2 {
+		t.Errorf("watches = %d, want 2: one resync, then the unavailable upstream ends the stream", watches)
+	}
+	last := sink.events[len(sink.events)-1]
+	if last.Code != CodeUpstreamUnavailable || last.Terminal || strings.Contains(last.Message, "10.43") {
+		t.Errorf("last event = %+v", last)
+	}
+	if len(diagnostics) != 2 || diagnostics[0].Code != CodeResyncRequired || !strings.Contains(diagnostics[1].Err.Error(), "10.43.0.1") {
+		t.Errorf("diagnostics = %+v", diagnostics)
+	}
+	if !sawObservation(observations, ObservationRetryableError, "") || sawObservation(observations, ObservationTerminalError, "") {
+		t.Errorf("observations = %+v, want a retryable error and no terminal one", observations)
+	}
+}
+
+type backendFunc func() (Watcher, error)
+
+func (f backendFunc) Watch(context.Context, Scope) (Watcher, error) { return f() }

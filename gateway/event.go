@@ -49,7 +49,7 @@ const (
 	CodeForbidden           ErrorCode = "FORBIDDEN"            // terminal: lost (or never had) access
 	CodeUnauthenticated     ErrorCode = "UNAUTHENTICATED"      // terminal: credential expired/rejected
 	CodeScopeInvalid        ErrorCode = "SCOPE_INVALID"        // terminal: scope not allowlisted
-	CodeUpstreamUnavailable ErrorCode = "UPSTREAM_UNAVAILABLE" // retryable: can't reach the API server
+	CodeUpstreamUnavailable ErrorCode = "UPSTREAM_UNAVAILABLE" // retryable by the client: the gateway closes after it
 	CodeResyncRequired      ErrorCode = "RESYNC_REQUIRED"      // retryable: continuity lost, a new cycle follows
 	CodeSlowConsumer        ErrorCode = "SLOW_CONSUMER"        // terminal: fell too far behind, dropped
 	CodeInternal            ErrorCode = "INTERNAL"             // either; `terminal` says whether to give up
@@ -101,8 +101,8 @@ type Identity struct {
 }
 
 // Scope is the normalized, server-validated target of a stream. The browser asks for a LOGICAL
-// scope; the server maps it to an allowlisted target + GVR + a namespace the caller may actually
-// see. A raw API-server URL is never accepted.
+// scope; the server maps it to an allowlisted target, a host-approved GVR and a namespace the caller
+// may actually see. A raw API-server URL is never accepted.
 type Scope struct {
 	Target   string `json:"target"`
 	Group    string `json:"group,omitempty"`

@@ -29,6 +29,9 @@ const (
 	ObservationConsumerResync ObservationKind = "consumer_resync"
 	// ObservationSharedOverflow reports a shared-watch subscriber exceeding its bounded queue.
 	ObservationSharedOverflow ObservationKind = "shared_overflow"
+	// ObservationRetryableError reports a logical stream ending with a non-terminal error the client
+	// must reconnect for, such as UPSTREAM_UNAVAILABLE, before attempting its frame.
+	ObservationRetryableError ObservationKind = "retryable_error"
 	// ObservationTerminalError reports a logical-stream failure before attempting its
 	// terminal frame. It does not guarantee delivery.
 	ObservationTerminalError ObservationKind = "terminal_error"
@@ -61,3 +64,23 @@ type ObserverFunc func(Observation)
 func (f ObserverFunc) Observe(observation Observation) {
 	f(observation)
 }
+
+// Diagnostic is the raw error behind an error event, for the host's logs. Unlike an Observation it
+// carries the error itself, which may name internal addresses, URLs or anything else an upstream put
+// in it. That is why it has a hook of its own: the host decides what to log and what to redact.
+type Diagnostic struct {
+	// Principal is nil when the caller could not be identified.
+	Principal Principal
+	// Scope is the zero Scope when the request was refused before a scope was parsed.
+	Scope Scope
+	// Code and Terminal are what the consumer was sent.
+	Code     ErrorCode
+	Terminal bool
+	// Err is the complete error, including any StreamError.Cause.
+	Err error
+}
+
+// Diagnostics receives a Diagnostic for every error event the gateway sends, and for every upstream
+// error it recovers from with a new snapshot cycle. It runs on the stream goroutine and must return
+// promptly.
+type Diagnostics func(Diagnostic)

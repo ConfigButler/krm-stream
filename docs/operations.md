@@ -12,6 +12,10 @@ metrics := gateway.ObserverFunc(func(o gateway.Observation) {
 Do not block in `Observe`; it runs on the stream or shared-watch goroutine. Never label a metric with
 object name, UID, principal, patch contents, or an error message.
 
+Error text has its own hook, `Options.Diagnostics`, because it can name internal addresses and URLs.
+The browser receives only the protocol code and a message chosen for it; an unexpected error is sent
+as `INTERNAL` "internal error". Decide what to log there, and redact it.
+
 ## Signals to alert on
 
 | Signal | Meaning | First response |
@@ -20,6 +24,7 @@ object name, UID, principal, patch contents, or an error message.
 | `consumer_resync` rising | upstream continuity was lost or a shared subscriber fell behind | correlate with API-server errors, shared overflows, and deployments |
 | `shared_overflow` | one subscriber exceeded `SharedOptions.QueueDepth` | increase only after checking browser stalls and event rate; resnapshot is intentional |
 | `terminal_error` | logical-stream failure, observed before attempting its terminal frame; delivery can fail | alert by low-cardinality error code; browsers must not retry terminal errors |
+| `retryable_error` rising | streams ending with a non-terminal error, usually `UPSTREAM_UNAVAILABLE` | check API-server health and priority-and-fairness rejections; browsers reconnect on their own backoff |
 | `event_suppressed` ratio | `krm-spec/v1` is removing expected churn | a sharp drop may mean callers selected `krm-full/v1` or a projection changed |
 | stream count / snapshot duration | connection pressure or oversized scopes | narrow namespaces/selectors; avoid accidental all-namespaces watches |
 | unorderable `resourceVersion` terminal errors | an unsupported or aggregated API does not meet strict ordering | use `OrderingLenient` only after accepting the reduced monotonicity guarantee |
@@ -34,6 +39,7 @@ object name, UID, principal, patch contents, or an error message.
 | `ScopePolicy.AllowLabelSelector` | false | enable only for an endpoint that deliberately supports caller narrowing |
 | `GroupResource.AllowAllNamespaces` | false | make all-namespaces access an explicit reviewable policy decision |
 | `Gateway.Ordering` | strict | keep strict on supported Kubernetes; use lenient only for known aggregated APIs |
+| `gateway.Options.Diagnostics` | nil (discarded) | receive the raw error behind each error event; redact before logging |
 
 Snapshot object and byte limits remain a host-level scope policy concern. The gateway refuses to guess a
 safe universal cap: object size, useful namespace size, and recovery behavior are product-specific.

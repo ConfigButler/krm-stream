@@ -271,3 +271,81 @@ test("snapshot resets restart the health interval and close removes the timer", 
   t.mock.timers.tick(100);
   assert.equal(handle.state.status, "closed");
 });
+
+/** Runs a managed stream until its first retry is scheduled, and returns how long it would wait. */
+async function firstRetryDelay(fetch: typeof globalThis.fetch, opts: { maxRetryDelayMs?: number } = {}) {
+  let delay: number | undefined;
+  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    retryDelayMs: 0,
+    ...opts,
+    fetch,
+    onStateChange: (s) => {
+      if (s.status === "retrying" && delay === undefined) {
+        delay = s.retryInMs;
+        handle.close();
+      }
+    },
+  });
+  await handle.closed;
+  return delay;
+}
+
+test("a retryable error's retryAfterMs sets the least the reconnect waits", async () => {
+  const errors: unknown[][] = [];
+  const delay = await firstRetryDelay(async () =>
+    response([{ seq: 1, type: "error", code: "UPSTREAM_UNAVAILABLE", terminal: false, retryAfterMs: 1500 }]),
+  );
+  assert.equal(delay, 1500);
+
+  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    maxRetries: 0,
+    fetch: async () =>
+      response([{ seq: 1, type: "error", code: "UPSTREAM_UNAVAILABLE", terminal: false, retryAfterMs: 1500 }]),
+    onError: (...args) => errors.push(args),
+  });
+  await handle.closed;
+  assert.deepEqual(errors, [["UPSTREAM_UNAVAILABLE", "", false, 1500]]);
+});
+
+test("HTTP Retry-After is honoured within the client's own cap", async () => {
+  const fetch = async () => new Response(null, { status: 429, headers: { "Retry-After": "2" } });
+  assert.equal(await firstRetryDelay(fetch), 2000);
+  assert.equal(await firstRetryDelay(fetch, { maxRetryDelayMs: 300 }), 300);
+});
+
+test("a hint is discarded once a snapshot completes on the same connection", async () => {
+  const delay = await firstRetryDelay(async () =>
+    response([
+      { seq: 1, type: "error", code: "RESYNC_REQUIRED", terminal: false, retryAfterMs: 5000 },
+      { seq: 2, type: "reset" },
+      { seq: 3, type: "synced" },
+    ]),
+  );
+  assert.equal(delay, 0);
+});
+
+test("a refusal's Kubernetes Status message is shown instead of the bare status", async () => {
+  const messages: string[] = [];
+  const refuse =
+    (body: string, contentType = "application/json") =>
+    async () =>
+      new Response(body, { status: 403, headers: { "Content-Type": contentType } });
+  for (const fetch of [
+    refuse(JSON.stringify({ kind: "Status", code: 403, message: 'notes is forbidden: User "carol" cannot watch' })),
+    refuse(JSON.stringify({ kind: "Status", message: "not json" }), "text/plain"),
+    refuse(JSON.stringify({ kind: "Status", message: "x".repeat(20_000) })),
+    refuse("{not json"),
+  ]) {
+    const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+      fetch,
+      onError: (_code, message) => messages.push(message),
+    });
+    await handle.closed;
+  }
+  assert.deepEqual(messages, [
+    'notes is forbidden: User "carol" cannot watch',
+    "stream: HTTP 403",
+    "stream: HTTP 403",
+    "stream: HTTP 403",
+  ]);
+});

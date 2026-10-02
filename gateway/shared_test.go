@@ -411,3 +411,50 @@ func TestUpstreamErrorFansOutAndDoesNotStampede(t *testing.T) {
 		t.Errorf("upstream opens = %d, want 2: five subscribers resyncing at once caused a stampede", up.opens())
 	}
 }
+
+// A shared upstream has no browser to hand its retry to, and each of its subscribers reconnects on
+// its own budget. However many there are, the scope sees one open attempt per backoff period; the
+// rest are told how long to wait.
+func TestSharedBackendBacksOffAnUnavailableUpstream(t *testing.T) {
+	opens := 0
+	up := backendFunc(func() (Watcher, error) {
+		opens++
+		return nil, UpstreamUnavailable("the API server is unavailable", 0)
+	})
+	b := NewSharedBackend(up)
+	now := time.Unix(0, 0)
+	b.now = func() time.Time { return now }
+	scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
+
+	retryAfter := func() int {
+		t.Helper()
+		_, err := b.Watch(t.Context(), scope)
+		var se *StreamError
+		if !errors.As(err, &se) || se.Code != CodeUpstreamUnavailable || se.Terminal {
+			t.Fatalf("Watch() = %v, want UPSTREAM_UNAVAILABLE", err)
+		}
+		if se.RetryAfterMs == nil {
+			return 0
+		}
+		return *se.RetryAfterMs
+	}
+
+	retryAfter()
+	for range 50 { // a reconnect storm within the first second
+		if ms := retryAfter(); ms <= 0 || ms > 1000 {
+			t.Fatalf("retryAfterMs = %d, want the remaining backoff", ms)
+		}
+	}
+	if opens != 1 {
+		t.Fatalf("upstream opens = %d, want 1 during the backoff", opens)
+	}
+
+	now = now.Add(time.Second)
+	retryAfter()
+	if opens != 2 {
+		t.Fatalf("upstream opens = %d, want a second attempt once the backoff expired", opens)
+	}
+	if ms := retryAfter(); ms != 2000 {
+		t.Errorf("retryAfterMs = %d, want the backoff doubled to 2000", ms)
+	}
+}
