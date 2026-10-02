@@ -244,6 +244,13 @@ jobs:
             echo "::error file=gateway/kube/go.mod::the core requirement is a pseudo-version (v${core}). Release Please owns this line; restore the released version. CI already builds an unreleased adapter with the core from the same commit."
             exit 1
           fi
+          # A release's adapter must require the core it is released with. Release Please writes that
+          # line; if it ever did not, the adapter would resolve an older core, and nothing else here
+          # would notice, because the older tag exists.
+          if [ -n "$RELEASE_VERSION" ] && [ "$core" != "$RELEASE_VERSION" ]; then
+            echo "::error file=gateway/kube/go.mod::the released adapter requires core v${core}, not the v${RELEASE_VERSION} it is released with"
+            exit 1
+          fi
           # On a release PR the line names the version being released, whose tag does not exist until
           # the PR merges. Skip that case in ordinary CI; release CI requires the tags to exist.
           if ! git ls-remote --exit-code --tags origin "refs/tags/gateway/v${core}" >/dev/null 2>&1; then
