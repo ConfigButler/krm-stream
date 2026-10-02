@@ -1,18 +1,18 @@
 # Changelog
 
-## Unreleased
+## [0.5.0](https://github.com/ConfigButler/krm-stream/compare/gateway/v0.4.0...gateway/v0.5.0) (2026-10-02)
 
-- Add opt-in `Options.WriteTimeout` / `Gateway.WriteTimeout` for each HTTP write plus flush;
-  zero installs no deadline. Header, heartbeat and flush failures now terminate the HTTP stream.
-- Add `CheckHTTPStreaming` for mounted-writer tests. It clears the existing write deadline and
-  writes no response. Unsupported bounded transports abort and report `http_transport_rejected`;
-  they do not send a terminal SSE frame and clients may reconnect.
-- Add `stream_closed`, `shared_subscription_opened` and `shared_subscription_closed` observations.
-  They describe logical streams and active attachments, not physical API watches.
-- **Breaking:** remove `WriteSSEHeaders`; use `Gateway.ServeStream` or `ServeStreamProjection` to
-  own headers, delivery and cleanup. `SSESink.Heartbeat` now returns an error; callers must handle
-  failure and stop their stream. `NewSSESink(io.Writer)` remains generic and propagates available
-  flush errors without installing HTTP deadlines. The v1 wire protocol is unchanged.
+
+### ⚠ BREAKING CHANGES
+
+* Principal errors and kube.SubjectAccessReviewAuthorizer's unmapped callers are UNAUTHENTICATED instead of FORBIDDEN; unexpected error text no longer reaches the browser; non-terminal errors other than RESYNC_REQUIRED end the connection.
+
+### Features
+
+* map upstream errors, keep error text off the wire, and let the client own retries ([#40](https://github.com/ConfigButler/krm-stream/issues/40)) ([891e93e](https://github.com/ConfigButler/krm-stream/commit/891e93eed566b76a20ec651b139b30f11691afdc))
+
+### Details
+
 - Recover only `RESYNC_REQUIRED` on the open connection. Any other non-terminal error, such as
   `UPSTREAM_UNAVAILABLE`, is sent with its code and `retryAfterMs` and then closes the connection,
   so the client owns the retry. A new `retryable_error` observation reports it.
@@ -28,18 +28,6 @@
 - **Breaking:** a generated `INTERNAL` says "internal error" rather than the underlying error's
   text. Any other `Principal` error is `UNAUTHENTICATED` rather than `FORBIDDEN`. A timed
   reauthorization that fails with `UPSTREAM_UNAVAILABLE` ends the stream without making it terminal.
-
-
-## [0.5.0](https://github.com/ConfigButler/krm-stream/compare/gateway/v0.4.0...gateway/v0.5.0) (2026-10-02)
-
-
-### ⚠ BREAKING CHANGES
-
-* Principal errors and kube.SubjectAccessReviewAuthorizer's unmapped callers are UNAUTHENTICATED instead of FORBIDDEN; unexpected error text no longer reaches the browser; non-terminal errors other than RESYNC_REQUIRED end the connection.
-
-### Features
-
-* map upstream errors, keep error text off the wire, and let the client own retries ([#40](https://github.com/ConfigButler/krm-stream/issues/40)) ([891e93e](https://github.com/ConfigButler/krm-stream/commit/891e93eed566b76a20ec651b139b30f11691afdc))
 
 ## [0.4.0](https://github.com/ConfigButler/krm-stream/compare/gateway/v0.3.0...gateway/v0.4.0) (2026-09-11)
 
@@ -63,6 +51,20 @@
 ### Documentation
 
 * trim obsolete history and align current integration guidance ([#34](https://github.com/ConfigButler/krm-stream/issues/34)) ([e450334](https://github.com/ConfigButler/krm-stream/commit/e450334ac19c3b39cd546e5a0e6947865afd5e3e))
+
+### Details
+
+- Add opt-in `Options.WriteTimeout` / `Gateway.WriteTimeout` for each HTTP write plus flush;
+  zero installs no deadline. Header, heartbeat and flush failures now terminate the HTTP stream.
+- Add `CheckHTTPStreaming` for mounted-writer tests. It clears the existing write deadline and
+  writes no response. Unsupported bounded transports abort and report `http_transport_rejected`;
+  they do not send a terminal SSE frame and clients may reconnect.
+- Add `stream_closed`, `shared_subscription_opened` and `shared_subscription_closed` observations.
+  They describe logical streams and active attachments, not physical API watches.
+- **Breaking:** remove `WriteSSEHeaders`; use `Gateway.ServeStream` or `ServeStreamProjection` to
+  own headers, delivery and cleanup. `SSESink.Heartbeat` now returns an error; callers must handle
+  failure and stop their stream. `NewSSESink(io.Writer)` remains generic and propagates available
+  flush errors without installing HTTP deadlines. The v1 wire protocol is unchanged.
 
 ## [0.3.0](https://github.com/ConfigButler/krm-stream/compare/gateway/v0.2.1...gateway/v0.3.0) (2026-09-11)
 

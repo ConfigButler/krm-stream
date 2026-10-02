@@ -22,7 +22,13 @@
     "gateway/kube": {
       "release-type": "go",
       "component": "gateway/kube",
-      "tag-separator": "/"
+      "tag-separator": "/",
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "go.mod"
+        }
+      ]
     }
   },
   "plugins": [

@@ -20,8 +20,14 @@ go 1.27.1
 // So we sit on the floor and let the consumer pick the ceiling.
 //
 // Raise these only to raise the SUPPORTED MINOR, and say why in the commit.
+//
+// The core requirement is the opposite: it is always the release this adapter ships with, and
+// Release Please rewrites it in every release PR (the marker below). Never edit it by hand, and never
+// pin a pseudo-version: go.work wires the two modules together in this checkout, and CI builds an
+// unreleased adapter with the core from the same commit. The adapter relies on core behaviour, not
+// only API, so it must never resolve an older core than the one it was released with.
 require (
-	github.com/ConfigButler/krm-stream/gateway v0.4.1-0.20261002130336-e723903f0c9e
+	github.com/ConfigButler/krm-stream/gateway v0.5.0 // x-release-please-version
 	k8s.io/api v0.36.0
 	k8s.io/apimachinery v0.36.0
 	k8s.io/client-go v0.36.0
