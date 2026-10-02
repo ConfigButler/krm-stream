@@ -739,3 +739,70 @@ func (s *lockedSink) Emit(_ context.Context, ev Event) error {
 	s.events = append(s.events, ev)
 	return nil
 }
+
+// A typed error that ends the shared upstream reaches every subscriber as it is, even when its Cause
+// is ErrWatchClosed. StreamError.Unwrap exposes that cause, and reading it as a routine close would
+// turn a terminal refusal into a resync the browser retries, and drop an unavailable error's hint.
+func TestSharedSubscribersReceiveTypedErrorsCausedByAClosedWatch(t *testing.T) {
+	forbidden := Forbidden("the gateway's identity may no longer watch this scope")
+	forbidden.Cause = ErrWatchClosed
+	unavailable := UpstreamUnavailable("the API server is restarting", 4*time.Second)
+	unavailable.Cause = ErrWatchClosed
+	for name, sent := range map[string]*StreamError{"terminal FORBIDDEN": forbidden, "UPSTREAM_UNAVAILABLE with a hint": unavailable} {
+		for _, asEvent := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/event=%v", name, asEvent), func(t *testing.T) {
+				b := NewSharedBackend(backendFunc(func() (Watcher, error) {
+					if asEvent { // a WatchError event on the open watch
+						return &endsWith{events: []WatchEvent{boundary, {Type: WatchError, Err: sent}}, err: ErrWatchClosed}, nil
+					}
+					return &endsWith{events: []WatchEvent{boundary}, err: sent}, nil // a failing Next
+				}))
+				w, err := b.Watch(t.Context(), Scope{Version: "v1", Resource: "configmaps", Namespace: "app"})
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer w.Stop()
+				for err == nil {
+					var ev WatchEvent
+					ev, err = w.Next(t.Context())
+					if err == nil && ev.Type == WatchError {
+						err = ev.Err
+					}
+				}
+				var got *StreamError
+				if !errors.As(err, &got) {
+					t.Fatalf("subscriber got %v, want the typed error", err)
+				}
+				if got.Code != sent.Code || got.Terminal != sent.Terminal || got.Message != sent.Message || !equalHint(got.RetryAfterMs, sent.RetryAfterMs) {
+					t.Errorf("subscriber got %s terminal=%v %q hint=%v, want %s terminal=%v %q hint=%v",
+						got.Code, got.Terminal, got.Message, got.RetryAfterMs, sent.Code, sent.Terminal, sent.Message, sent.RetryAfterMs)
+				}
+			})
+		}
+	}
+}
+
+func equalHint(a, b *int) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
+
+// Seen from the browser: the terminal refusal is the stream's last event, not a resync and a retry.
+func TestAStreamOverASharedBackendEndsWithTheTypedRefusal(t *testing.T) {
+	forbidden := Forbidden("the gateway's identity may no longer watch this scope")
+	forbidden.Cause = ErrWatchClosed
+	b := NewSharedBackend(backendFunc(func() (Watcher, error) {
+		return &endsWith{events: []WatchEvent{boundary}, err: forbidden}, nil
+	}))
+	sink, err := streamOver(t, b, nil)
+	var se *StreamError
+	if !errors.As(err, &se) || se.Code != CodeForbidden || !se.Terminal {
+		t.Fatalf("Stream() = %v, want the terminal FORBIDDEN", err)
+	}
+	var codes []string
+	for _, ev := range sink.events {
+		if ev.Type == EventError {
+			codes = append(codes, fmt.Sprintf("%s terminal=%v", ev.Code, ev.Terminal))
+		}
+	}
+	if len(codes) != 1 || codes[0] != "FORBIDDEN terminal=true" {
+		t.Errorf("error events = %v, want only the terminal FORBIDDEN", codes)
+	}
+}

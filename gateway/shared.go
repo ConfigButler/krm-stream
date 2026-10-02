@@ -530,15 +530,19 @@ func (s *sharedScope) die(cause error) {
 	useful := s.usefulLocked()
 	s.mu.Unlock()
 	end := scopeEnd{useful: useful, cause: cause}
+	// A StreamError decides before ErrWatchClosed does, here and below: StreamError.Unwrap exposes
+	// its Cause, so a terminal FORBIDDEN caused by a closed watch also matches ErrWatchClosed.
 	var se *StreamError
-	if errors.As(cause, &se) && se != nil {
+	typed := errors.As(cause, &se) && se != nil
+	closed := !typed && (cause == nil || errors.Is(cause, ErrWatchClosed))
+	if typed {
 		switch {
 		case !se.Terminal && se.Code == CodeUpstreamUnavailable:
 			end.failure = cause
 		case !se.Terminal && se.Code == CodeResyncRequired:
 			end.early = !useful
 		}
-	} else if cause == nil || errors.Is(cause, ErrWatchClosed) {
+	} else if closed {
 		end.early = !useful
 	}
 	s.backend.forget(s.key, s, end)
@@ -547,7 +551,8 @@ func (s *sharedScope) die(cause error) {
 	// Whatever ended the upstream — a clean close, a 410, a cancelled context — means one thing to a
 	// subscriber: continuity is lost, start a new cycle. Say it as a non-terminal RESYNC_REQUIRED so
 	// the stream loop announces it and resnapshots, rather than tearing the browser's connection down.
-	if cause == nil || errors.Is(cause, ErrWatchClosed) {
+	// A typed error is passed on as it is, with its code, terminal flag, message and hint.
+	if closed {
 		cause = ResyncRequired("the shared upstream watch ended; a new snapshot cycle follows")
 	}
 
