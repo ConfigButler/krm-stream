@@ -129,12 +129,15 @@ var ErrRedirectRefused = errors.New("krm-stream/kube: the API server answered wi
 // it on this client: dynamic.NewForConfigAndClient(cfg, httpClient). A refused redirect reaches the
 // browser as a terminal INTERNAL, since it will not go away on retry; ErrRedirectRefused is its cause.
 func HTTPClientFor(cfg *rest.Config) (*http.Client, error) {
-	client, err := rest.HTTPClientFor(cfg)
+	shared, err := rest.HTTPClientFor(cfg)
 	if err != nil {
 		return nil, err
 	}
+	// A copy: for a configuration needing no special transport, client-go returns http.DefaultClient
+	// itself, and setting a policy on that would change every HTTP caller in the process.
+	client := *shared
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrRedirectRefused }
-	return client, nil
+	return &client, nil
 }
 
 // upstream describes what a failing call was actually reaching for: the server, and the resource path

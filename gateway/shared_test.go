@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -559,7 +560,7 @@ func TestSharedBackendBacksOffAWatchThatDiesAfterOpening(t *testing.T) {
 
 // Obtaining a watcher is not recovery; a completed upstream snapshot is. Only then does the backoff
 // reset, so a flapping upstream keeps doubling it.
-func TestSharedBackoffResetsOnlyAfterASnapshot(t *testing.T) {
+func TestSharedBackoffResetsOnlyAfterAUsefulWatch(t *testing.T) {
 	healthy := false
 	up := backendFunc(func() (Watcher, error) {
 		if healthy {
@@ -596,22 +597,29 @@ func TestSharedBackoffResetsOnlyAfterASnapshot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer w.Stop()
 	if ev := next(t, w); ev.Type != WatchBookmark || !ev.InitialEventsEnd {
 		t.Fatalf("got %+v, want the snapshot boundary", ev)
 	}
-	b.mu.Lock()
-	_, backingOff := b.backoff[key]
-	b.mu.Unlock()
-	if backingOff {
-		t.Error("the backoff survived a completed snapshot")
+	backingOff := func() bool {
+		b.mu.Lock()
+		defer b.mu.Unlock()
+		_, ok := b.backoff[key]
+		return ok
+	}
+	// A snapshot alone is not recovery: a watch that fails straight after it has not recovered.
+	if !backingOff() {
+		t.Fatal("the backoff was reset by a snapshot the watch did not outlive")
+	}
+	now = now.Add(minUsefulCycle)
+	w.Stop() // the last subscriber leaves a watch that was of use
+	if backingOff() {
+		t.Error("the backoff survived a watch that was of use")
 	}
 }
 
-// A watch's recovery is reported after it releases its own lock, so it can arrive late: after the
-// watch was forgotten and a replacement failed. That stale report must not erase the replacement's
-// backoff and let the next subscriber reopen the upstream at once.
-func TestAnObsoleteWatchsRecoveryCannotEraseANewerBackoff(t *testing.T) {
+// A watch can end after it was replaced: its pump notices last. That late end must not touch the
+// replacement's backoff, or the next subscriber would reopen the upstream at once.
+func TestAnObsoleteWatchsLateEndCannotEraseANewerBackoff(t *testing.T) {
 	opens := 0
 	failing := false
 	up := backendFunc(func() (Watcher, error) {
@@ -619,7 +627,7 @@ func TestAnObsoleteWatchsRecoveryCannotEraseANewerBackoff(t *testing.T) {
 		if failing {
 			return nil, UpstreamUnavailable("the API server is unavailable", 0)
 		}
-		return &stubWatcher{}, nil // opens, then idles: its recovery is replayed by hand below
+		return &stubWatcher{}, nil // opens, then idles: its end is replayed by hand below
 	})
 	b := NewSharedBackend(up)
 	now := time.Unix(0, 0)
@@ -627,7 +635,7 @@ func TestAnObsoleteWatchsRecoveryCannotEraseANewerBackoff(t *testing.T) {
 	scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
 	key := scopeKey(scope)
 
-	// 1. The old watch is open, and is about to report its recovery.
+	// 1. The old watch is open.
 	w, err := b.Watch(t.Context(), scope)
 	if err != nil {
 		t.Fatal(err)
@@ -645,13 +653,89 @@ func TestAnObsoleteWatchsRecoveryCannotEraseANewerBackoff(t *testing.T) {
 		t.Fatal("the replacement opened")
 	}
 
-	// 4. The old watch's delayed recovery arrives.
-	b.recovered(key, old)
+	// 4. The old watch's end arrives late, looking like an early end of its own.
+	old.die(ErrWatchClosed)
 
 	if _, err := b.Watch(t.Context(), scope); err == nil {
 		t.Fatal("a backoff-limited Watch succeeded")
 	}
 	if opens != 2 {
-		t.Errorf("upstream opens = %d, want 2: the stale recovery erased the newer backoff", opens)
+		t.Errorf("upstream opens = %d, want 2: the obsolete watch's end changed the newer backoff", opens)
 	}
+}
+
+// The stream loop stops each connection after two early cycles, but a cohort of reconnecting
+// subscribers would still reopen a shared upstream once per subscriber. The shared scope applies the
+// same rule to its upstream watch: one early end is tolerated, the second backs off, and the cohort
+// meets that backoff instead of the API server.
+func TestASharedUpstreamThatKeepsEndingEarlyIsBackedOffForTheWholeCohort(t *testing.T) {
+	for name, watcher := range map[string]func() Watcher{
+		"closed before its snapshot": func() Watcher { return &endsWith{err: ErrWatchClosed} },
+		"410 right after its snapshot": func() Watcher {
+			return &endsWith{events: []WatchEvent{boundary}, err: ResyncRequired("the upstream resourceVersion expired (410 Gone)")}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var opens atomic.Int32
+			b := NewSharedBackend(backendFunc(func() (Watcher, error) { opens.Add(1); return watcher(), nil }))
+			frozen := time.Unix(0, 0)
+			b.now = func() time.Time { return frozen } // the backoff never expires during the test
+			gw := &Gateway{Auth: AllowAll{}, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }}
+
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			var wg sync.WaitGroup
+			for range 100 {
+				wg.Go(func() {
+					err := gw.Stream(ctx, nil, Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}, &lockedSink{})
+					var se *StreamError
+					if !errors.As(err, &se) || se.Code != CodeUpstreamUnavailable || se.Terminal {
+						t.Errorf("Stream() = %v, want a non-terminal UPSTREAM_UNAVAILABLE", err)
+					}
+				})
+			}
+			wg.Wait()
+			if ctx.Err() != nil {
+				t.Fatal("the streams did not end")
+			}
+			if n := opens.Load(); n != 2 {
+				t.Errorf("upstream opens = %d for 100 streams, want 2: one tolerated early end, then the backoff", n)
+			}
+		})
+	}
+}
+
+// Ordinary closures of a watch that was of use (the API server's routine timeout) are recovered in
+// band, as often as they come, and never back off.
+func TestASharedUpstreamsLongLivedWatchesRecoverWithoutBackoff(t *testing.T) {
+	var opens atomic.Int32
+	b := NewSharedBackend(backendFunc(func() (Watcher, error) {
+		if opens.Add(1) > 5 {
+			return nil, Forbidden("stop") // ends the test
+		}
+		return &endsWith{events: []WatchEvent{boundary}, err: ErrWatchClosed}, nil
+	}))
+	clock := steppingClock(2 * time.Second) // every watch outlives its snapshot by a second or more
+	b.now = clock
+	gw := &Gateway{Auth: AllowAll{}, now: clock, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }}
+
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	err := gw.Stream(ctx, nil, Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}, &lockedSink{})
+	var se *StreamError
+	if !errors.As(err, &se) || se.Code != CodeForbidden {
+		t.Fatalf("Stream() = %v after %d opens, want the scripted FORBIDDEN: long-lived watches were backed off", err, opens.Load())
+	}
+}
+
+type lockedSink struct {
+	mu     sync.Mutex
+	events []Event
+}
+
+func (s *lockedSink) Emit(_ context.Context, ev Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.events = append(s.events, ev)
+	return nil
 }

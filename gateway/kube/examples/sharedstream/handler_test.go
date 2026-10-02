@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -220,5 +221,52 @@ func TestCounterMappingConcurrentAndUnknown(t *testing.T) {
 	c.Observe(gateway.Observation{Kind: gateway.ObservationHTTPTransportRejected})
 	if c.Streams.Load() != 0 || c.Subscriptions.Load() != 0 || c.TransportRejected.Load() != 1 {
 		t.Fatal("counter mapping is unbalanced")
+	}
+}
+
+// The participant's SelfSubjectReview client holds the participant's token, so it must refuse
+// redirects as the service clients do: client-go would carry the token to wherever one points.
+func TestParticipantIdentityResolutionRefusesRedirects(t *testing.T) {
+	var stolen atomic.Int32
+	api := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "selfsubjectreviews"):
+			// Same server, so the target's certificate is trusted: only the redirect policy stands
+			// between the token and the recording path.
+			http.Redirect(w, r, "/stolen", http.StatusTemporaryRedirect)
+		case r.URL.Path == "/stolen":
+			stolen.Add(1)
+			http.Error(w, "recorded", http.StatusTeapot)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	cluster := &rest.Config{
+		Host:            api.URL,
+		BearerToken:     "service",
+		ContentConfig:   rest.ContentConfig{ContentType: "application/json"},
+		TLSClientConfig: rest.TLSClientConfig{CAData: pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: api.Certificate().Raw})},
+	}
+	session := func(*http.Request) (Session, error) {
+		return Session{Token: "participant", SessionExpiry: time.Now().Add(time.Hour), TokenExpiry: time.Now().Add(time.Hour)}, nil
+	}
+	h, err := Handler(cluster, "app", "coffee", session, &Counters{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := httptest.NewServer(h)
+	defer host.Close()
+	res, err := host.Client().Get(host.URL + "/?version=v1&resource=configmaps&namespace=app&name=coffee")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(res.Body)
+	_ = res.Body.Close()
+	if n := stolen.Load(); n != 0 {
+		t.Fatalf("the participant's SelfSubjectReview followed a redirect %d times", n)
+	}
+	if !strings.Contains(string(body), `"type":"error"`) || strings.Contains(string(body), "synced") {
+		t.Fatalf("an unresolved participant was streamed: %s", body)
 	}
 }

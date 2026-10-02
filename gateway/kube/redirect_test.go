@@ -53,3 +53,27 @@ func TestABackendNeverFollowsARedirectWithTheCallersToken(t *testing.T) {
 		t.Errorf("err = %v, want it to wrap ErrRedirectRefused for the host's diagnostics", err)
 	}
 }
+
+// For a configuration that needs no special transport, rest.HTTPClientFor returns http.DefaultClient
+// itself. Installing the redirect policy on it would change every HTTP caller in the process, and
+// race with them.
+func TestHTTPClientForLeavesTheDefaultClientAlone(t *testing.T) {
+	cfg := &rest.Config{Host: "http://example.invalid"}
+	if shared, err := rest.HTTPClientFor(cfg); err != nil || shared != http.DefaultClient {
+		t.Skip("client-go no longer returns http.DefaultClient here; nothing to protect")
+	}
+	before := http.DefaultClient.CheckRedirect
+	client, err := HTTPClientFor(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client == http.DefaultClient {
+		t.Fatal("HTTPClientFor returned http.DefaultClient itself")
+	}
+	if http.DefaultClient.CheckRedirect != nil || before != nil {
+		t.Fatal("HTTPClientFor installed its redirect policy on http.DefaultClient")
+	}
+	if client.CheckRedirect == nil {
+		t.Fatal("the returned client follows redirects")
+	}
+}

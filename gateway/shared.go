@@ -53,12 +53,16 @@ import (
 // leak and never into a lie.
 const sharedQueueDepth = 256
 
-// The backoff after a shared upstream watch fails with UPSTREAM_UNAVAILABLE, whether opening it fails
-// or the open watch dies of it. Its subscribers each reconnect on their own budget, so without it the
-// API server would see one attempt per subscriber per retry. With it, a scope sees at most one
-// attempt per backoff period however many subscribers are waiting, and the rest are told when to
-// come back. Only a completed upstream snapshot resets it: a watch that opens and fails at once has
-// not recovered.
+// The backoff after a shared upstream watch fails: opening it fails with UPSTREAM_UNAVAILABLE, the open
+// watch dies of it, or the watch keeps ending before it is of use. Its subscribers each reconnect on
+// their own budget, so without it the API server would see one attempt per subscriber per retry. With
+// it, a scope sees at most one attempt per backoff period however many subscribers are waiting, and
+// the rest are told when to come back.
+//
+// A watch is of use once it has completed its snapshot and stayed live for minUsefulCycle, the same
+// rule the stream loop applies to one connection. Only such a watch's end resets the backoff; one
+// that opens and fails at once has not recovered. One early end is tolerated, as continuity loss is
+// (§5); a second in a row backs off.
 const (
 	sharedRetryMin = time.Second
 	sharedRetryMax = 30 * time.Second
@@ -93,6 +97,8 @@ type SharedBackend struct {
 type sharedBackoff struct {
 	until time.Time
 	delay time.Duration
+	// early counts consecutive watches that ended before they were of use.
+	early int
 }
 
 // NewSharedBackend shares one upstream watch per scope across every consumer of it.
@@ -180,11 +186,14 @@ func (b *SharedBackend) recordFailureLocked(key string, err error) {
 		}
 	}
 	bo := b.backoff[key]
-	if bo == nil {
+	switch {
+	case bo == nil:
 		bo = &sharedBackoff{delay: sharedRetryMin}
 		b.backoff[key] = bo
-	} else if bo.delay = 2 * bo.delay; bo.delay > sharedRetryMax {
-		bo.delay = sharedRetryMax
+	case bo.delay == 0: // so far only an early end, which waits for nothing
+		bo.delay = sharedRetryMin
+	default:
+		bo.delay = min(2*bo.delay, sharedRetryMax)
 	}
 	wait := bo.delay
 	if se.RetryAfterMs != nil {
@@ -223,28 +232,54 @@ func (b *SharedBackend) startScope(scope Scope, key string) (*sharedScope, error
 	return s, nil
 }
 
-// forget drops a dead-or-empty scope so the next Watch opens a fresh one. A retryable cause is
-// recorded in the same critical section, so no Watch can slip in between and reopen the upstream
-// without seeing the backoff.
-func (b *SharedBackend) forget(key string, s *sharedScope, cause error) {
+// scopeEnd is how a shared upstream watch ended, for the backoff.
+type scopeEnd struct {
+	// useful: it completed its snapshot and stayed live for minUsefulCycle. Its end resets the backoff.
+	useful bool
+	// early: it lost continuity (a close, a 410) before it was of use.
+	early bool
+	// failure is an UPSTREAM_UNAVAILABLE it died of, if any.
+	failure error
+	cause   error
+}
+
+// forget drops a dead-or-empty scope so the next Watch opens a fresh one, and accounts for how it
+// ended in the same critical section, so no Watch can slip in between and reopen the upstream
+// without seeing the backoff. Only the scope's current watch is accounted for: an obsolete one ending
+// late must not touch a newer attempt's backoff.
+func (b *SharedBackend) forget(key string, s *sharedScope, end scopeEnd) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if b.scopes[key] == s { // not a newer incarnation
-		delete(b.scopes, key)
-		b.recordFailureLocked(key, cause)
+	if b.scopes[key] != s { // a newer incarnation
+		return
+	}
+	delete(b.scopes, key)
+	if end.useful {
+		delete(b.backoff, key)
+	}
+	switch {
+	case end.failure != nil:
+		b.recordFailureLocked(key, end.failure)
+	case end.early:
+		b.recordEarlyEndLocked(key, end.cause)
 	}
 }
 
-// recovered resets a scope's backoff once its upstream has delivered a complete snapshot — but only
-// if s is still the scope's current watch. The call happens after s.mu is released, and by then s
-// may have been forgotten and a newer attempt may have failed; an obsolete watch's recovery must not
-// erase that newer failure's backoff.
-func (b *SharedBackend) recovered(key string, s *sharedScope) {
-	b.mu.Lock()
-	defer b.mu.Unlock()
-	if b.scopes[key] == s {
-		delete(b.backoff, key)
+// recordEarlyEndLocked counts a watch that ended before it was of use. The first is tolerated; a
+// second in a row is a failing upstream, and backs off.
+func (b *SharedBackend) recordEarlyEndLocked(key string, cause error) {
+	bo := b.backoff[key]
+	if bo == nil {
+		// until is now, not zero, so the sweep in recordFailureLocked keeps the count for a period.
+		b.backoff[key] = &sharedBackoff{until: b.now(), early: 1}
+		return
 	}
+	if bo.early++; bo.early < 2 {
+		return
+	}
+	unavailable := UpstreamUnavailable("the shared upstream watch keeps ending before it is of use; retry later", 0)
+	unavailable.Cause = cause
+	b.recordFailureLocked(key, unavailable)
 }
 
 // sharedScope is one upstream watch, its warm cache, and everyone reading from it.
@@ -255,11 +290,18 @@ type sharedScope struct {
 	watcher Watcher
 	cancel  context.CancelFunc
 
-	mu     sync.Mutex
-	cache  map[string]KRMObject // uid -> the object's current state
-	synced bool                 // has the upstream snapshot completed at least once?
-	dead   bool
-	subs   map[*subscriber]struct{}
+	mu       sync.Mutex
+	cache    map[string]KRMObject // uid -> the object's current state
+	synced   bool                 // has the upstream snapshot completed at least once?
+	syncedAt time.Time            // when it first did
+	dead     bool
+	subs     map[*subscriber]struct{}
+}
+
+// usefulLocked reports whether this watch completed its snapshot and stayed live for minUsefulCycle.
+// Called with s.mu held.
+func (s *sharedScope) usefulLocked() bool {
+	return s.synced && s.backend.now().Sub(s.syncedAt) >= minUsefulCycle
 }
 
 // subscriber is one consumer's view of the shared watch: a SNAPSHOT, then a bounded queue of live
@@ -413,15 +455,15 @@ func (s *sharedScope) pump(ctx context.Context) {
 			return
 		}
 
-		recovered := false
 		s.mu.Lock()
 		switch ev.Type {
 		case WatchBookmark:
 			if ev.InitialEventsEnd {
 				// The upstream snapshot is complete: the cache is now a true picture of the scope, and
-				// everyone waiting for one can have it. It is also the upstream's recovery, so the
-				// backoff resets — after s.mu is released, since b.mu is never taken under it.
-				recovered = !s.synced
+				// everyone waiting for one can have it.
+				if !s.synced {
+					s.syncedAt = s.backend.now()
+				}
 				s.synced = true
 				for sub := range s.subs {
 					if sub.awaiting {
@@ -465,9 +507,6 @@ func (s *sharedScope) pump(ctx context.Context) {
 			return
 		}
 		s.mu.Unlock()
-		if recovered {
-			s.backend.recovered(s.key, s)
-		}
 	}
 }
 
@@ -487,7 +526,22 @@ func (s *sharedScope) fanOutLocked(ev WatchEvent) {
 // die ends the scope: every subscriber is told continuity was lost, and the scope is removed so the
 // next Watch opens a fresh upstream.
 func (s *sharedScope) die(cause error) {
-	s.backend.forget(s.key, s, cause)
+	s.mu.Lock()
+	useful := s.usefulLocked()
+	s.mu.Unlock()
+	end := scopeEnd{useful: useful, cause: cause}
+	var se *StreamError
+	if errors.As(cause, &se) && se != nil {
+		switch {
+		case !se.Terminal && se.Code == CodeUpstreamUnavailable:
+			end.failure = cause
+		case !se.Terminal && se.Code == CodeResyncRequired:
+			end.early = !useful
+		}
+	} else if cause == nil || errors.Is(cause, ErrWatchClosed) {
+		end.early = !useful
+	}
+	s.backend.forget(s.key, s, end)
 	s.cancel()
 
 	// Whatever ended the upstream — a clean close, a 410, a cancelled context — means one thing to a
@@ -520,10 +574,12 @@ func (s *sharedScope) leave(sub *subscriber) {
 	if empty {
 		s.dead = true
 	}
+	useful := s.usefulLocked()
 	s.mu.Unlock()
 
 	if empty {
-		s.backend.forget(s.key, s, nil)
+		// Nobody is watching any more: not a failure, but a useful watch still resets the backoff.
+		s.backend.forget(s.key, s, scopeEnd{useful: useful})
 		s.cancel() // stops pump, which stops the upstream watch
 	}
 }

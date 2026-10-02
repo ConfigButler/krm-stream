@@ -79,7 +79,12 @@ func Handler(cluster *rest.Config, namespace, name string, sessionFor func(*http
 			}
 			cfg := rest.CopyConfig(participantConfig)
 			cfg.BearerToken = state.session.Token
-			client, err := kubernetes.NewForConfig(cfg)
+			// The participant's token, so redirects are refused here too.
+			httpClient, err := kube.HTTPClientFor(cfg)
+			if err != nil {
+				return nil, err
+			}
+			client, err := kubernetes.NewForConfigAndClient(cfg, httpClient)
 			if err != nil {
 				return nil, err
 			}
