@@ -83,6 +83,8 @@ tasks:
       - task: fixtures-check
       - task: lint
       - task: test
+      # After the suites, not beside them: it rewrites go.work while it runs.
+      - task: release-rehearsal
       - task: e2e-wire
       - task: e2e-browser
       # Last, because nothing else proves it: what we upload contains what the exports map advertises.
@@ -111,6 +113,11 @@ tasks:
     dir: gateway/kube
     cmds:
       - go test ./...
+
+  release-rehearsal:
+    desc: "Build the Go adapter as a release PR would, with a core version that is not tagged yet."
+    cmds:
+      - node .github/scripts/release-rehearsal.mjs
 
   test-client:
     desc: "TypeScript: the client + its half of the conformance suite (node --test, no deps)."

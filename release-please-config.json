@@ -27,6 +27,10 @@
         {
           "type": "generic",
           "path": "go.mod"
+        },
+        {
+          "type": "generic",
+          "path": "/go.work"
         }
       ]
     }

@@ -32,7 +32,10 @@ Only `@configbutler/krm-stream` is maintained on npm. Do not publish to the unsc
 
 `gateway/kube/go.mod` requires the core module at the release it ships with. Every release pull
 request rewrites that line to the version being released (its `x-release-please-version` marker),
-so a released adapter always resolves at least its own core. Do not edit it, and do not pin a
+so a released adapter always resolves at least its own core. The matching `replace` in `go.work` moves
+with it: a release PR names a core version that is not tagged until it merges, and that replace is
+what lets the adapter build in it. `task release-rehearsal`, run by `task verify` and CI, builds the
+adapter in exactly that state. Do not edit either line, and do not pin a
 pseudo-version when an adapter change needs unreleased core API: `go.work` wires the two modules
 together in this checkout, and CI's `a stranger can go get this` job builds an unreleased adapter
 with the core from the same commit. Someone using an unreleased commit does the same:
