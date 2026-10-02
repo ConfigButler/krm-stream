@@ -3,9 +3,13 @@ package kube_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 
 	authzv1 "k8s.io/api/authorization/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
@@ -167,6 +171,34 @@ func TestANamedScopeAsksAboutThatName(t *testing.T) {
 	for _, sar := range *asked {
 		if got := sar.Spec.ResourceAttributes.Name; got != "app-config" {
 			t.Errorf("%s asked about name %q, want app-config", sar.Spec.ResourceAttributes.Verb, got)
+		}
+	}
+}
+
+// A review the API server throttles is retryable, and keeps the wait the API server asked for, all
+// the way to the event the browser reads.
+func TestAThrottledReviewKeepsItsRetryHint(t *testing.T) {
+	cs := fake.NewSimpleClientset()
+	cs.PrependReactor("create", "subjectaccessreviews",
+		func(k8stesting.Action) (bool, runtime.Object, error) {
+			return true, nil, apierrors.NewTooManyRequests("priority and fairness", 7)
+		})
+	handler := gateway.Handler(gateway.Options{
+		Principal:  func(*http.Request) (gateway.Principal, error) { return alice, nil },
+		Authorizer: kube.SubjectAccessReviewAuthorizer(cs, subjectOf),
+		Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
+			t.Fatal("a throttled review opened a watch")
+			return nil, nil
+		},
+		Scopes: gateway.ScopePolicy{Targets: []string{""}, AnyResource: true},
+	})
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/s?version=v1&resource=configmaps&namespace=app", nil))
+
+	body := rec.Body.String()
+	for _, want := range []string{`"code":"UPSTREAM_UNAVAILABLE"`, `"retryAfterMs":7000`, `"terminal":false`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("want %s in:\n%s", want, body)
 		}
 	}
 }

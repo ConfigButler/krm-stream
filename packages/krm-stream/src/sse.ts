@@ -199,7 +199,8 @@ export function connectResourceStream(url: string, store: LiveResourceStore, opt
               ? "UPSTREAM_UNAVAILABLE"
               : "INTERNAL";
       const terminal = res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429;
-      const message = (await statusMessage(res)) ?? `stream: HTTP ${res.status}`;
+      const message = (await statusMessage(res, controller.signal)) ?? `stream: HTTP ${res.status}`;
+      if (controller.signal.aborted) return; // closed while reading the refusal: report nothing
       opts.onError?.(code, message, terminal, retryAfter(res.headers.get("Retry-After")));
       return;
     }
@@ -245,21 +246,38 @@ export function connectResourceStream(url: string, store: LiveResourceStore, opt
 
 /** The largest refusal body read in search of a Kubernetes Status message. */
 const maxStatusBytes = 16 * 1024;
+/** How long a refusal body may take to arrive. A known 401, 403 or 429 must not wait on a server
+ * that stalls the body explaining it. */
+const statusBudgetMs = 2_000;
 
 /** The `message` of a Kubernetes `Status` body, as a host proxying `/k8s` refuses with, or
- * undefined. Reads at most maxStatusBytes and always releases the body. */
-async function statusMessage(res: Response): Promise<string | undefined> {
+ * undefined. It reads at most maxStatusBytes for at most budgetMs, stops when `signal` aborts, and
+ * always releases the body. */
+export async function statusMessage(
+  res: Response,
+  signal: AbortSignal,
+  budgetMs = statusBudgetMs,
+): Promise<string | undefined> {
   if (!res.body) return undefined;
-  if (!/^application\/json\b/i.test(res.headers.get("Content-Type") ?? "")) {
+  if (signal.aborted || !/^application\/json\b/i.test(res.headers.get("Content-Type") ?? "")) {
     await res.body.cancel().catch(() => {});
     return undefined;
   }
   const reader = res.body.getReader();
+  let gaveUp = false;
+  // Cancelling the reader settles a pending read(), so a quiet body cannot hold this open.
+  const giveUp = () => {
+    gaveUp = true;
+    void reader.cancel().catch(() => {});
+  };
+  const timer = setTimeout(giveUp, budgetMs);
+  signal.addEventListener("abort", giveUp, { once: true });
   const chunks: Uint8Array[] = [];
   let size = 0;
   try {
     for (;;) {
       const { done, value } = await reader.read();
+      if (gaveUp) return undefined;
       if (done) break;
       size += value.byteLength;
       if (size > maxStatusBytes) return undefined;
@@ -278,6 +296,8 @@ async function statusMessage(res: Response): Promise<string | undefined> {
   } catch {
     return undefined;
   } finally {
+    clearTimeout(timer);
+    signal.removeEventListener("abort", giveUp);
     await reader.cancel().catch(() => {});
   }
 }

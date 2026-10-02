@@ -349,3 +349,66 @@ test("a refusal's Kubernetes Status message is shown instead of the bare status"
     "stream: HTTP 403",
   ]);
 });
+
+/** A JSON refusal whose body sends `prefix` and then goes quiet. Records whether it was cancelled. */
+function stalledRefusal(prefix = "") {
+  const body = { cancelled: false };
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (prefix) controller.enqueue(new TextEncoder().encode(prefix));
+      },
+      cancel() {
+        body.cancelled = true;
+      },
+    }),
+    { status: 403, headers: { "Content-Type": "application/json" } },
+  );
+  return { response, body };
+}
+
+test("close() while a refusal body is quiet ends the stream and cancels the body", async () => {
+  const { response, body } = stalledRefusal();
+  const errors: string[] = [];
+  let fetched!: () => void;
+  const wasFetched = new Promise<void>((resolve) => {
+    fetched = resolve;
+  });
+  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    fetch: async () => {
+      fetched();
+      return response;
+    },
+    onError: (_code, message) => errors.push(message),
+  });
+  await wasFetched;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  handle.close();
+  await handle.closed;
+  assert.equal(handle.state.status, "closed");
+  assert.equal(body.cancelled, true);
+  assert.deepEqual(errors, [], "a closed stream reports nothing");
+});
+
+for (const [name, prefix] of [
+  ["quiet", ""],
+  ["partial", '{"kind":"Status","mess'],
+] as const)
+  test(`a ${name} refusal body falls back to the bare status within its budget`, async () => {
+    const { statusMessage } = await import("../src/sse.ts");
+    const { response, body } = stalledRefusal(prefix);
+    const started = Date.now();
+    assert.equal(await statusMessage(response, new AbortController().signal, 20), undefined);
+    assert.ok(Date.now() - started < 1_000, "the budget bounds the read");
+    assert.equal(body.cancelled, true);
+  });
+
+test("aborting during a refusal-body read stops it at once", async () => {
+  const { statusMessage } = await import("../src/sse.ts");
+  const { response, body } = stalledRefusal('{"kind":');
+  const abort = new AbortController();
+  const read = statusMessage(response, abort.signal, 60_000);
+  setTimeout(() => abort.abort(), 10);
+  assert.equal(await read, undefined);
+  assert.equal(body.cancelled, true);
+});

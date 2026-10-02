@@ -84,8 +84,8 @@ func SubjectAccessReviewAuthorizer(cs kubernetes.Interface, subjectFor SubjectFo
 				// may come back. Anything else (a gateway identity that may not create reviews, say)
 				// is the host's misconfiguration, and stays a generic INTERNAL.
 				err = fmt.Errorf("krm-stream/kube: subject access review (%s): %w", verb, err)
-				if unavailable(err) || isUnavailableStatus(err) {
-					return withCause(gateway.UpstreamUnavailable("the API server is unavailable", 0), err)
+				if se, ok := classify(err).(*gateway.StreamError); ok && se.Code == gateway.CodeUpstreamUnavailable {
+					return se // with its Retry-After hint and cause intact
 				}
 				return err
 			}
@@ -138,9 +138,4 @@ func groupResource(s gateway.Scope) string {
 		return s.Resource
 	}
 	return s.Group + "/" + s.Resource
-}
-
-func isUnavailableStatus(err error) bool {
-	se := classifyStatus(err)
-	return se != nil && se.Code == gateway.CodeUpstreamUnavailable
 }
