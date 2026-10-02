@@ -607,3 +607,51 @@ func TestSharedBackoffResetsOnlyAfterASnapshot(t *testing.T) {
 		t.Error("the backoff survived a completed snapshot")
 	}
 }
+
+// A watch's recovery is reported after it releases its own lock, so it can arrive late: after the
+// watch was forgotten and a replacement failed. That stale report must not erase the replacement's
+// backoff and let the next subscriber reopen the upstream at once.
+func TestAnObsoleteWatchsRecoveryCannotEraseANewerBackoff(t *testing.T) {
+	opens := 0
+	failing := false
+	up := backendFunc(func() (Watcher, error) {
+		opens++
+		if failing {
+			return nil, UpstreamUnavailable("the API server is unavailable", 0)
+		}
+		return &stubWatcher{}, nil // opens, then idles: its recovery is replayed by hand below
+	})
+	b := NewSharedBackend(up)
+	now := time.Unix(0, 0)
+	b.now = func() time.Time { return now }
+	scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
+	key := scopeKey(scope)
+
+	// 1. The old watch is open, and is about to report its recovery.
+	w, err := b.Watch(t.Context(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	old := b.scopes[key]
+	b.mu.Unlock()
+
+	// 2. Its last subscriber leaves, so it is forgotten.
+	w.Stop()
+
+	// 3. A replacement fails to open and records a backoff.
+	failing = true
+	if _, err := b.Watch(t.Context(), scope); err == nil {
+		t.Fatal("the replacement opened")
+	}
+
+	// 4. The old watch's delayed recovery arrives.
+	b.recovered(key, old)
+
+	if _, err := b.Watch(t.Context(), scope); err == nil {
+		t.Fatal("a backoff-limited Watch succeeded")
+	}
+	if opens != 2 {
+		t.Errorf("upstream opens = %d, want 2: the stale recovery erased the newer backoff", opens)
+	}
+}

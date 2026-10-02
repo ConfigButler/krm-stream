@@ -235,11 +235,16 @@ func (b *SharedBackend) forget(key string, s *sharedScope, cause error) {
 	}
 }
 
-// recovered resets a scope's backoff once its upstream has delivered a complete snapshot.
-func (b *SharedBackend) recovered(key string) {
+// recovered resets a scope's backoff once its upstream has delivered a complete snapshot — but only
+// if s is still the scope's current watch. The call happens after s.mu is released, and by then s
+// may have been forgotten and a newer attempt may have failed; an obsolete watch's recovery must not
+// erase that newer failure's backoff.
+func (b *SharedBackend) recovered(key string, s *sharedScope) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	delete(b.backoff, key)
+	if b.scopes[key] == s {
+		delete(b.backoff, key)
+	}
 }
 
 // sharedScope is one upstream watch, its warm cache, and everyone reading from it.
@@ -461,7 +466,7 @@ func (s *sharedScope) pump(ctx context.Context) {
 		}
 		s.mu.Unlock()
 		if recovered {
-			s.backend.recovered(s.key)
+			s.backend.recovered(s.key, s)
 		}
 	}
 }
