@@ -38,6 +38,9 @@ updates:
       - dependency-name: k8s.io/api
       - dependency-name: k8s.io/apimachinery
       - dependency-name: k8s.io/client-go
+      # The adapter's requirement on its own core module is Release Please's, not Dependabot's:
+      # every release PR moves it to the version being released (see gateway/kube/go.mod).
+      - dependency-name: github.com/ConfigButler/krm-stream/gateway
     commit-message:
       prefix: "chore(deps)"
 

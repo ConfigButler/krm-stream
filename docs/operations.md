@@ -29,6 +29,25 @@ as `INTERNAL` "internal error". Decide what to log there, and redact it.
 | stream count / snapshot duration | connection pressure or oversized scopes | narrow namespaces/selectors; avoid accidental all-namespaces watches |
 | unorderable `resourceVersion` terminal errors | an unsupported or aggregated API does not meet strict ordering | use `OrderingLenient` only after accepting the reduced monotonicity guarantee |
 
+## When the API server pushes back
+
+client-go retries on its own before the gateway sees an error. A 429 from Priority and Fairness, or
+any 5xx, that carries a `Retry-After` header is retried up to ten times at the pace that header sets.
+Only when client-go gives up does the gateway map the answer, to `UPSTREAM_UNAVAILABLE` with
+`retryAfterMs`, and close the connection for the browser's client to retry.
+
+While client-go waits, the browser holds an open connection with heartbeats and no snapshot yet: the
+managed connector reports `syncing`, not an error. krm-stream keeps client-go's default on purpose.
+The API server sets the pace, so it is not a tight loop, and the wait happens once per stream at the
+API server's request, where a reconnect would cost every browser a new connection and a fresh
+snapshot. The cost is that the browser is not told why it is waiting. A rising `syncing` time,
+without errors, is the signal to look at API-server load.
+
+A watch that ends before it is of use (before its snapshot completes, or within a second of it) is
+recovered once on the same connection. A second such end in a row closes the connection with
+`UPSTREAM_UNAVAILABLE`, so an upstream that ends every watch early meets the client's backoff and not
+a reconnect loop. It shows as `retryable_error`.
+
 ## Runtime controls
 
 | Control | Default | Use |

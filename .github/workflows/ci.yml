@@ -63,6 +63,17 @@ jobs:
 
       - run: hadolint .devcontainer/Dockerfile
 
+      # Release Please writes every changelog from the conventional commits it releases. It inserts
+      # each version below whatever heading it finds and never removes a hand-written section, so an
+      # "Unreleased" section ships labelled unreleased forever. Detail belongs in the commit or PR.
+      - name: changelogs are Release Please's
+        run: |
+          set -euo pipefail
+          if git ls-files -z '*CHANGELOG.md' | xargs -0 grep -nE '^## ' | grep -vE ':## (\[[0-9]+\.[0-9]+\.[0-9]+\]\(|[0-9]+\.[0-9]+\.[0-9]+ \()'; then
+            echo "::error::a CHANGELOG.md has a hand-written section. Release Please generates them from commit messages; put the detail in the commit or PR description instead."
+            exit 1
+          fi
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "24"
@@ -216,32 +227,49 @@ jobs:
         run: |
           set -euo pipefail
 
-          # gateway/kube requires the core module by version. On an ordinary commit that version is
-          # one that has already been released, so the resolution below is exactly what an adopter
-          # gets. On a RELEASE commit it is the version being released — whose tag does not exist
-          # until the release PR merges — and `go get` would fail here for a reason that is not a
-          # bug. Skip that case in ordinary CI; release CI requires the tags to exist.
-          core="$(sed -n 's|^[[:space:]]*github.com/ConfigButler/krm-stream/gateway v\([^ ]*\).*|\1|p' gateway/kube/go.mod | head -1)"
+          # gateway/kube requires the core module at the release it ships with, and Release Please
+          # rewrites that line in every release PR (x-release-please-version). Nobody edits it by
+          # hand, so it must keep its marker, and it must never be a pseudo-version: the release
+          # updater would mangle one (v0.6.0-e723903f0c9e), and a released adapter must not depend
+          # on a commit that may live only on a merged branch.
+          line="$(grep -E '^[[:space:]]*github.com/ConfigButler/krm-stream/gateway v' gateway/kube/go.mod | head -1)"
+          core="$(printf '%s' "$line" | sed -n 's|^[[:space:]]*github.com/ConfigButler/krm-stream/gateway v\([^ ]*\).*|\1|p')"
           if [ -z "$core" ]; then
-            echo "::error::gateway/kube/go.mod does not require the core module at all" && exit 1
+            echo "::error file=gateway/kube/go.mod::gateway/kube/go.mod does not require the core module at all" && exit 1
           fi
-          # A pseudo-version names a commit, and always resolves. It ends in a 14-digit timestamp and a
-          # 12-character revision, whatever its base: v0.0.0-…, or v0.4.1-0.… once a tag precedes it,
-          # which is the form Go chooses when an adapter change needs unreleased core API.
-          if ! printf '%s' "$core" | grep -Eq '[-.][0-9]{14}-[0-9a-f]{12}$'; then
-            if ! git ls-remote --exit-code --tags origin "refs/tags/gateway/v${core}" >/dev/null 2>&1; then
-              if [ -n "$RELEASE_VERSION" ]; then
-                echo "::error::released adapter requires missing core tag gateway/v${core}"
-                exit 1
-              fi
-              echo "::notice::core v${core} is not tagged yet; release CI verifies the public tag after tagging."
-              exit 0
+          if ! printf '%s' "$line" | grep -q '// x-release-please-version'; then
+            echo "::error file=gateway/kube/go.mod::the core requirement lost its x-release-please-version marker, so releases would stop updating it" && exit 1
+          fi
+          if printf '%s' "$core" | grep -Eq '[-.][0-9]{14}-[0-9a-f]{12}$'; then
+            echo "::error file=gateway/kube/go.mod::the core requirement is a pseudo-version (v${core}). Release Please owns this line; restore the released version. CI already builds an unreleased adapter with the core from the same commit."
+            exit 1
+          fi
+          # A release's adapter must require the core it is released with. Release Please writes that
+          # line; if it ever did not, the adapter would resolve an older core, and nothing else here
+          # would notice, because the older tag exists.
+          if [ -n "$RELEASE_VERSION" ] && [ "$core" != "$RELEASE_VERSION" ]; then
+            echo "::error file=gateway/kube/go.mod::the released adapter requires core v${core}, not the v${RELEASE_VERSION} it is released with"
+            exit 1
+          fi
+          # On a release PR the line names the version being released, whose tag does not exist until
+          # the PR merges. Skip that case in ordinary CI; release CI requires the tags to exist.
+          if ! git ls-remote --exit-code --tags origin "refs/tags/gateway/v${core}" >/dev/null 2>&1; then
+            if [ -n "$RELEASE_VERSION" ]; then
+              echo "::error::released adapter requires missing core tag gateway/v${core}"
+              exit 1
             fi
+            echo "::notice::core v${core} is not tagged yet; release CI verifies the public tag after tagging."
+            exit 0
           fi
 
           revision="${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}"
+          # A release is fetched by its tag ALONE: the adapter must resolve its own core. An ordinary
+          # commit may use core API that is not released yet, so it is fetched the way a consumer of
+          # an unreleased commit must fetch it: both modules at that same commit.
+          modules=("github.com/ConfigButler/krm-stream/gateway/kube@${revision}" "github.com/ConfigButler/krm-stream/gateway@${revision}")
           if [ -n "$RELEASE_VERSION" ]; then
             revision="v${RELEASE_VERSION}"
+            modules=("github.com/ConfigButler/krm-stream/gateway/kube@${revision}")
           fi
           tmp="$(mktemp -d)"
           cd "$tmp"
@@ -261,8 +289,9 @@ jobs:
 
           func main() {}
           GO
-          go get "github.com/ConfigButler/krm-stream/gateway/kube@${revision}"
+          go get "${modules[@]}"
           go build ./...
+          go list -m github.com/ConfigButler/krm-stream/gateway github.com/ConfigButler/krm-stream/gateway/kube
           echo "a stranger can go get and build the Kubernetes adapter at ${revision}."
 
       - name: warm the released module versions in the Go proxy

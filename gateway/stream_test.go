@@ -727,3 +727,112 @@ func TestOnlyContinuityLossIsRecoveredInBand(t *testing.T) {
 type backendFunc func() (Watcher, error)
 
 func (f backendFunc) Watch(context.Context, Scope) (Watcher, error) { return f() }
+
+// scriptedEnds hands out one watcher per open, each ending the way the script says.
+type scriptedEnds struct {
+	opens int
+	next  func(open int) Watcher
+}
+
+func (b *scriptedEnds) Watch(context.Context, Scope) (Watcher, error) {
+	b.opens++
+	return b.next(b.opens), nil
+}
+
+// endsWith replays events and then fails with err.
+type endsWith struct {
+	events []WatchEvent
+	err    error
+}
+
+func (w *endsWith) Next(context.Context) (WatchEvent, error) {
+	if len(w.events) > 0 {
+		ev := w.events[0]
+		w.events = w.events[1:]
+		return ev, nil
+	}
+	return WatchEvent{}, w.err
+}
+func (*endsWith) Stop() {}
+
+var boundary = WatchEvent{Type: WatchBookmark, InitialEventsEnd: true}
+
+func streamOver(t *testing.T, b Backend, now func() time.Time) (*recordingSink, error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	sink := &recordingSink{}
+	gw := &Gateway{Auth: AllowAll{}, now: now, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }}
+	err := gw.Stream(ctx, nil, Scope{Version: "v1", Resource: "configmaps"}, sink)
+	if ctx.Err() != nil {
+		t.Fatalf("the stream did not end: %d events, the gateway is reopening a failing upstream in a loop", len(sink.events))
+	}
+	return sink, err
+}
+
+// An upstream that ends every watch before it is of use (before its snapshot completes, or with a
+// 410 straight after) would be reopened at once, forever, on one connection. The first early end
+// is recovered in band like any continuity loss; the second in a row ends the connection with a
+// retryable error, so the client's backoff takes over.
+func TestAnUpstreamThatKeepsEndingEarlyIsNotReopenedInALoop(t *testing.T) {
+	for name, watcher := range map[string]func() Watcher{
+		"closed before its snapshot": func() Watcher { return &endsWith{err: ErrWatchClosed} },
+		"410 right after its snapshot": func() Watcher {
+			return &endsWith{events: []WatchEvent{boundary}, err: ResyncRequired("the upstream resourceVersion expired (410 Gone)")}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			b := &scriptedEnds{next: func(int) Watcher { return watcher() }}
+			sink, err := streamOver(t, b, nil)
+			var se *StreamError
+			if !errors.As(err, &se) || se.Code != CodeUpstreamUnavailable || se.Terminal {
+				t.Fatalf("Stream() = %v, want a non-terminal UPSTREAM_UNAVAILABLE", err)
+			}
+			if b.opens != 2 {
+				t.Errorf("upstream opens = %d, want 2: one in-band recovery, then the client's backoff", b.opens)
+			}
+			if last := sink.events[len(sink.events)-1]; last.Code != CodeUpstreamUnavailable || last.Terminal {
+				t.Errorf("last event = %+v", last)
+			}
+		})
+	}
+}
+
+// One early end between useful cycles is ordinary continuity loss, and resets nothing: the count is
+// of consecutive early ends.
+func TestAUsefulCycleResetsTheEarlyEndCount(t *testing.T) {
+	b := &scriptedEnds{next: func(open int) Watcher {
+		switch {
+		case open > 6:
+			return &endsWith{err: Forbidden("stop")} // ends the test
+		case open%2 == 1:
+			return &endsWith{err: ErrWatchClosed} // early: before its snapshot
+		default:
+			return &endsWith{events: []WatchEvent{boundary}, err: ErrWatchClosed} // useful, by the clock
+		}
+	}}
+	_, err := streamOver(t, b, steppingClock(2*time.Second))
+	var se *StreamError
+	if !errors.As(err, &se) || se.Code != CodeForbidden {
+		t.Fatalf("Stream() = %v after %d opens, want the scripted FORBIDDEN: alternating early ends were treated as a failing upstream", err, b.opens)
+	}
+}
+
+// StreamError.Unwrap exposes its Cause, so an UPSTREAM_UNAVAILABLE caused by a closed watch also
+// matches errors.Is(err, ErrWatchClosed). It must still end the connection, not be reopened as a
+// routine timeout.
+func TestAStreamErrorCausedByAClosedWatchIsNotARoutineClose(t *testing.T) {
+	b := &scriptedEnds{next: func(int) Watcher {
+		se := UpstreamUnavailable("the upstream ended the watch early", 0)
+		se.Cause = ErrWatchClosed
+		return &endsWith{events: []WatchEvent{boundary}, err: se}
+	}}
+	_, err := streamOver(t, b, steppingClock(2*time.Second))
+	var se *StreamError
+	if !errors.As(err, &se) || se.Code != CodeUpstreamUnavailable {
+		t.Fatalf("Stream() = %v", err)
+	}
+	if b.opens != 1 {
+		t.Errorf("upstream opens = %d, want 1: the error was read as a routine close and reopened", b.opens)
+	}
+}

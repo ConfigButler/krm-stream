@@ -2,6 +2,12 @@
 
 Releases are generated from conventional commits on `main`. Release Please opens a release pull
 request with version bumps and changelog entries; merging that pull request creates the release.
+Nothing in it needs editing by hand.
+
+The changelogs are written entirely from commit subjects and `BREAKING CHANGE:` footers. Do not add
+sections to a `CHANGELOG.md` yourself: Release Please never removes them, so an "Unreleased" section
+would ship labelled unreleased. CI refuses one. Put the detail in the commit body or the PR
+description, which the changelog links to.
 
 | Commit | Release effect |
 |---|---|
@@ -24,18 +30,16 @@ produces these tags and packages:
 
 Only `@configbutler/krm-stream` is maintained on npm. Do not publish to the unscoped `krm-stream` name.
 
-`gateway/kube/go.mod` requires the core module by version, and `go.work` hides that version in this
-checkout. When an adapter change needs core API or behaviour that is not released yet, push the core
-change first, then point the adapter at that commit from outside the workspace:
+`gateway/kube/go.mod` requires the core module at the release it ships with. Every release pull
+request rewrites that line to the version being released (its `x-release-please-version` marker),
+so a released adapter always resolves at least its own core. Do not edit it, and do not pin a
+pseudo-version when an adapter change needs unreleased core API: `go.work` wires the two modules
+together in this checkout, and CI's `a stranger can go get this` job builds an unreleased adapter
+with the core from the same commit. Someone using an unreleased commit does the same:
 
 ```sh
-cd gateway/kube
-GOWORK=off GOPROXY=direct go get github.com/ConfigButler/krm-stream/gateway@<commit>
-GOWORK=off go mod tidy
+go get github.com/ConfigButler/krm-stream/gateway/kube@<commit> github.com/ConfigButler/krm-stream/gateway@<commit>
 ```
-
-Check it from a clean module outside this workspace, as CI's `a stranger can go get this` job does.
-After the next release, move the requirement to the released core tag.
 
 Before 1.0, remove superseded API names and forwarding packages instead of maintaining compatibility
 shims. Record each removal and its replacement in release notes, and update repository callers,

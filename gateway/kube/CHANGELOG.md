@@ -1,22 +1,5 @@
 # Changelog
 
-## Unreleased
-
-- Add a tested, copyable shared ConfigMap host example with local full-subject resolution,
-  session expiry, service-account SARs, bounded SSE delivery and lifecycle counters. It requires a
-  verified-HTTPS cluster configuration, since it carries service and participant tokens. Includes a
-  manually invoked independent-identity Kubernetes fixture; no new public identity helper.
-- Map API-server failures to protocol codes on every path (streaming list, the fallback's LIST and
-  WATCH, watch `ERROR` events): 403 `FORBIDDEN` with Kubernetes' message, 401 `UNAUTHENTICATED`,
-  404 `SCOPE_INVALID`, 429, 5xx and unreachable servers `UPSTREAM_UNAVAILABLE` with `Retry-After` as
-  `retryAfterMs`. A 410 still starts a new snapshot cycle. The raw error, with the URL that failed,
-  is the `Cause`.
-- A SubjectAccessReview that cannot reach the API server, or is throttled, is `UPSTREAM_UNAVAILABLE`
-  and keeps its retry hint.
-- **Breaking:** `SubjectAccessReviewAuthorizer` refuses a principal it cannot map with
-  `UNAUTHENTICATED` rather than `FORBIDDEN`.
-
-
 ## [0.5.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.4.0...gateway/kube/v0.5.0) (2026-10-02)
 
 
@@ -27,6 +10,18 @@
 ### Features
 
 * map upstream errors, keep error text off the wire, and let the client own retries ([#40](https://github.com/ConfigButler/krm-stream/issues/40)) ([891e93e](https://github.com/ConfigButler/krm-stream/commit/891e93eed566b76a20ec651b139b30f11691afdc))
+
+### Details
+
+- Map API-server failures to protocol codes on every path (streaming list, the fallback's LIST and
+  WATCH, watch `ERROR` events): 403 `FORBIDDEN` with Kubernetes' message, 401 `UNAUTHENTICATED`,
+  404 `SCOPE_INVALID`, 429, 5xx and unreachable servers `UPSTREAM_UNAVAILABLE` with `Retry-After` as
+  `retryAfterMs`. A 410 still starts a new snapshot cycle. The raw error, with the URL that failed,
+  is the `Cause`.
+- A SubjectAccessReview that cannot reach the API server, or is throttled, is `UPSTREAM_UNAVAILABLE`
+  and keeps its retry hint.
+- **Breaking:** `SubjectAccessReviewAuthorizer` refuses a principal it cannot map with
+  `UNAUTHENTICATED` rather than `FORBIDDEN`.
 
 ## [0.4.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.3.0...gateway/kube/v0.4.0) (2026-09-11)
 
@@ -45,6 +40,13 @@
 ### Documentation
 
 * trim obsolete history and align current integration guidance ([#34](https://github.com/ConfigButler/krm-stream/issues/34)) ([e450334](https://github.com/ConfigButler/krm-stream/commit/e450334ac19c3b39cd546e5a0e6947865afd5e3e))
+
+### Details
+
+- Add a tested, copyable shared ConfigMap host example with local full-subject resolution,
+  session expiry, service-account SARs, bounded SSE delivery and lifecycle counters. It requires a
+  verified-HTTPS cluster configuration, since it carries service and participant tokens. Includes a
+  manually invoked independent-identity Kubernetes fixture; no new public identity helper.
 
 ## [0.3.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.2.1...gateway/kube/v0.3.0) (2026-09-11)
 

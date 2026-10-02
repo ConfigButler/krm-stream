@@ -47,7 +47,7 @@ gateway.Handler(gateway.Options{
     Principal: sessionUser,
     Authorizer: authorizeScope,
     Clients: func(_ context.Context, target string, p gateway.Principal) (gateway.Backend, error) {
-        return kube.NewBackend(dynamicClientFor(target, p.(*User))), nil
+        return kube.NewBackendForConfig(restConfigFor(target, p.(*User)))
     },
     Scopes: scopePolicy,
 })
@@ -58,6 +58,10 @@ gateway.Handler(gateway.Options{
   `UNAUTHENTICATED` without its text.
 - `Authorizer` denies unauthorized scopes before a watch opens and on subsequent checks.
 - `Clients` is a `ClientFor` callback supplying the backend for that identity and target.
+  `kube.NewBackendForConfig` builds a client that refuses redirects, since client-go would
+  otherwise carry the caller's token to wherever a redirect points. A host that builds its own
+  dynamic client for `kube.NewBackend` must build it on `kube.HTTPClientFor(cfg)` for the same
+  reason.
 - `Scopes` allowlists targets and resources, or with `AnyResource` leaves resource admission to the
   API server's RBAC for a backend that acts as the caller. A browser cannot supply a raw API-server
   URL.
