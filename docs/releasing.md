@@ -24,6 +24,19 @@ produces these tags and packages:
 
 Only `@configbutler/krm-stream` is maintained on npm. Do not publish to the unscoped `krm-stream` name.
 
+`gateway/kube/go.mod` requires the core module by version, and `go.work` hides that version in this
+checkout. When an adapter change needs core API or behaviour that is not released yet, push the core
+change first, then point the adapter at that commit from outside the workspace:
+
+```sh
+cd gateway/kube
+GOWORK=off GOPROXY=direct go get github.com/ConfigButler/krm-stream/gateway@<commit>
+GOWORK=off go mod tidy
+```
+
+CI's `a stranger can go get this` job builds the adapter from that pseudo-version. After the next
+release, move the requirement to the released core tag.
+
 Before 1.0, remove superseded API names and forwarding packages instead of maintaining compatibility
 shims. Record each removal and its replacement in release notes, and update repository callers,
 examples and documentation together. Changes to wire semantics still require explicit spec and
