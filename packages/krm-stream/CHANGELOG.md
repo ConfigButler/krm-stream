@@ -10,6 +10,17 @@
 - HTTP 429, 502, 503 and 504 report `UPSTREAM_UNAVAILABLE` rather than `INTERNAL`.
 
 
+## [0.5.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.4.0...@configbutler/krm-stream-v0.5.0) (2026-10-02)
+
+
+### ⚠ BREAKING CHANGES
+
+* Principal errors and kube.SubjectAccessReviewAuthorizer's unmapped callers are UNAUTHENTICATED instead of FORBIDDEN; unexpected error text no longer reaches the browser; non-terminal errors other than RESYNC_REQUIRED end the connection.
+
+### Features
+
+* map upstream errors, keep error text off the wire, and let the client own retries ([#40](https://github.com/ConfigButler/krm-stream/issues/40)) ([891e93e](https://github.com/ConfigButler/krm-stream/commit/891e93eed566b76a20ec651b139b30f11691afdc))
+
 ## [0.4.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.3.0...@configbutler/krm-stream-v0.4.0) (2026-09-11)
 
 
