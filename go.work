@@ -21,3 +21,11 @@ use (
 	./gateway
 	./gateway/kube
 )
+
+// The adapter requires the core at the release it ships with, and a release PR names a version whose
+// tag does not exist until it merges. Workspace mode still reads the required version's go.mod, so
+// without this every build of the adapter in a release PR fails ("unknown revision gateway/vX.Y.Z").
+// This points that exact version at the working tree. Go refuses an unversioned replace of a
+// workspace module, so the version is spelled out, and Release Please moves it together with
+// gateway/kube/go.mod; CI fails if the two disagree.
+replace github.com/ConfigButler/krm-stream/gateway v0.5.0 => ./gateway // x-release-please-version

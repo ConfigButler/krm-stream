@@ -160,6 +160,15 @@ jobs:
           working-directory: gateway/kube
           args: --build-tags e2e
 
+      # A release PR requires a core version whose tag does not exist until it merges, which main
+      # never does. 0.6.0's release PR failed here for that reason alone. Rehearse it on every change:
+      # Release Please's own regex, a version that is never tagged, then vet and build.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24"
+      - name: rehearse a release PR (its core version is not tagged yet)
+        run: node .github/scripts/release-rehearsal.mjs
+
   # Can a STRANGER actually use this? Nothing else in this repo can answer that.
   #
   # gateway/kube once carried `replace ... => ../`, and a replace applies ONLY to the main module. So
