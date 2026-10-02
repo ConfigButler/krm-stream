@@ -75,7 +75,10 @@ A `rest.Config.Host` may include a path prefix, such as a kcp workspace URL
 (`https://kcp.example/clusters/root:org:ws`). The dynamic client preserves it when constructing API
 requests. Use `kube.NewBackendForConfig(cfg)` to include the endpoint in upstream errors, which reach
 `Options.Diagnostics` and never the browser;
-`kube.NewBackend(dynamicClient)` also works when a dynamic client already exists.
+`kube.NewBackend(dynamicClient)` also works when a dynamic client already exists. Build that client on
+`kube.HTTPClientFor(cfg)` (`dynamic.NewForConfigAndClient(cfg, httpClient)`): client-go follows
+redirects and carries the configured credential along, so a client holding a user's token must refuse
+them, as `NewBackendForConfig`'s does.
 
 ## 2. Mount the same-origin cookie endpoint
 
@@ -83,11 +86,13 @@ requests. Use `kube.NewBackendForConfig(cfg)` to include the endpoint in upstrea
 import (
     "net/http"
 
+    "k8s.io/client-go/rest"
+
     "github.com/ConfigButler/krm-stream/gateway"
     "github.com/ConfigButler/krm-stream/gateway/kube"
 )
 
-func mount(mux *http.ServeMux, dynamicClientFor func(*User) dynamic.Interface) {
+func mount(mux *http.ServeMux, restConfigFor func(*User) *rest.Config) {
     mux.Handle("/resource-stream/v1", gateway.Handler(gateway.Options{
         // Your session cookie -> your application user. krm-stream never sees a token.
         Principal: func(r *http.Request) (gateway.Principal, error) {
@@ -101,9 +106,9 @@ func mount(mux *http.ServeMux, dynamicClientFor func(*User) dynamic.Interface) {
             }
             return nil
         }),
-        // Build a dynamic client acting as this user. Kubernetes RBAC remains the boundary.
+        // Build a backend acting as this user. Kubernetes RBAC remains the boundary.
         Clients: func(_ context.Context, _ string, p gateway.Principal) (gateway.Backend, error) {
-            return kube.NewBackend(dynamicClientFor(p.(*User))), nil
+            return kube.NewBackendForConfig(restConfigFor(p.(*User)))
         },
         Scopes: gateway.ScopePolicy{
             Targets: []string{"production"},

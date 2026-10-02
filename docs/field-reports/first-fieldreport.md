@@ -7,6 +7,18 @@ Everything was checked against krm-stream v0.4.0 (`gateway`, `gateway/kube` and
 `@configbutler/krm-stream`) on 2026-10-02, by reading the source and, for the error
 output below, by running the gateway.
 
+## Status (2026-10-02): asks 1 to 5 are in krm-stream 0.5.0
+
+krm-stream 0.5.0 took all five asks below (krm-stream #40), and krm-foyer moved to it:
+the gateway maps the API server's answers, keeps their text off the wire, sends it to a
+`Diagnostics` hook, leaves retries to the browser's client with the server's hint, admits
+any resource with `ScopePolicy.AnyResource`, and lets `Principal` choose its refusal.
+krm-foyer's own mapping, status capture and backoff are gone.
+
+Reviewing krm-foyer's integration found three more, below the original asks as
+[asks 6 to 8](#ask-6-refuse-redirects-in-the-kubernetes-backend). krm-foyer works around
+each meanwhile.
+
 ## The asks at a glance
 
 | # | Ask | Priority | What krm-foyer does meanwhile |
@@ -208,3 +220,43 @@ Smaller, and related: on a non-200 answer the connector reports only `stream: HT
 and discards the body. When the body is a Kubernetes `Status`, as krm-foyer's refusals
 are, its `message` would be more useful to show. A bounded read of a JSON `Status`, or a
 decoder the host supplies, with today's text as the fallback, would cover it.
+
+## Ask 6: refuse redirects in the Kubernetes backend
+
+**This one is about credentials.** client-go follows redirects, and its transport adds the
+bearer token to the redirected request too. A backend built with
+`kube.NewBackendForConfig(cfg)` from a `rest.Config` holding the caller's token therefore
+sends that token wherever a redirect points: another host, or plain `http`. Pinning the
+host and leaving `Proxy` unset does not prevent it. krm-foyer reproduced it against a
+test API server that redirects to a recording server, which received the token. An
+aggregated API's answer passes back through the API server, so a redirect is not only a
+hostile-server case.
+
+krm-foyer builds its client with `rest.HTTPClientFor`, sets `CheckRedirect` to refuse,
+and ends the stream with a terminal error. We suggest `NewBackendForConfig` do the same,
+and that the gateway map a refused redirect to a terminal error, since a redirect will
+not go away on retry. The docs that show `kube.NewBackend(dynamicClientFor(user))`
+should say a host-built client must refuse redirects too.
+
+## Ask 7: treat a watch that ends before it was of use as a failure
+
+The stream loop reopens at once, on the same connection, after `ErrWatchClosed`, and
+after a `RESYNC_REQUIRED`. That is right for the API server's routine timeout, which
+comes after half an hour. But an upstream that ends every watch before its snapshot is
+complete, or answers 410 right after it, gets a tight loop: krm-foyer measured about 100
+reopenings a second against a test server that does so, on one browser connection.
+
+krm-foyer's backend now answers such an end with a non-terminal `UPSTREAM_UNAVAILABLE`,
+so the connection closes and the client waits: an end before the `synced` boundary, or
+within a second of it. We suggest the gateway do this itself, for every backend. One
+detail cost us a bug: `StreamError.Unwrap` returns `Cause`, so an `UPSTREAM_UNAVAILABLE`
+whose cause is `ErrWatchClosed` is still read by the loop as a routine close.
+
+## Ask 8: say that client-go retries a 429 with Retry-After itself
+
+client-go asks again on its own, up to ten times, when a 429 or 5xx answer carries a
+`Retry-After` header, before the backend sees the error. The API server sets the pace, so
+this is not a tight loop, but the browser hears nothing meanwhile, and the
+`retryAfterMs` mapping of 0.5.0 only applies once client-go has given up. We suggest
+saying so in the operations guide, and considering a client with those retries off,
+so the browser's client, which shows the wait, owns them as 0.5.0 intends.

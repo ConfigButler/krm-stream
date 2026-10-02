@@ -3,8 +3,10 @@ package gateway
 import (
 	"context"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // Authorization and credentials, across the LIFE of a stream — not merely at its start.
@@ -108,6 +110,9 @@ func TestTheClientIsResolvedOnEveryCycle(t *testing.T) {
 			}
 			return backend, nil
 		},
+		// Each cycle stands in for a long-lived one: without this, instant cycles are an upstream
+		// ending every watch early, which the gateway stops reopening after the second.
+		now: steppingClock(2 * time.Second),
 	}
 
 	_ = g.Stream(t.Context(), "alice", Scope{Version: "v1", Resource: "configmaps"}, sink)
@@ -159,5 +164,17 @@ func TestDenialOpensNoWatchAtAll(t *testing.T) {
 	}
 	if len(sink.events) != 1 || sink.events[0].Code != CodeForbidden {
 		t.Errorf("want a single terminal FORBIDDEN, got: %s", sink.codes())
+	}
+}
+
+// steppingClock returns a clock that advances by step on every reading.
+func steppingClock(step time.Duration) func() time.Time {
+	var mu sync.Mutex
+	now := time.Unix(0, 0)
+	return func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		now = now.Add(step)
+		return now
 	}
 }

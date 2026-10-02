@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -97,14 +98,43 @@ func NewBackend(client dynamic.Interface) *Backend {
 // wrongly — two /clusters/ segments, say — the API server answers "the server could not find the
 // requested resource", which is indistinguishable from "that CRD is not installed" until the error
 // tells you which URL it dialed. Now it does.
+//
+// Its client refuses redirects: see HTTPClientFor.
 func NewBackendForConfig(cfg *rest.Config) (*Backend, error) {
-	client, err := dynamic.NewForConfig(cfg)
+	httpClient, err := HTTPClientFor(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("krm-stream/kube: HTTP client for %s: %w", cfg.Host, err)
+	}
+	client, err := dynamic.NewForConfigAndClient(cfg, httpClient)
 	if err != nil {
 		return nil, fmt.Errorf("krm-stream/kube: dynamic client for %s: %w", cfg.Host, err)
 	}
 	b := NewBackend(client)
 	b.host = cfg.Host
 	return b, nil
+}
+
+// ErrRedirectRefused is the cause of a request that the API server answered with a redirect.
+var ErrRedirectRefused = errors.New("krm-stream/kube: the API server answered with a redirect, which is refused")
+
+// HTTPClientFor is rest.HTTPClientFor with redirects refused.
+//
+// client-go follows redirects, and its transport puts the configured credential (a bearer token, a
+// client certificate's TLS session) on the redirected request too. A client holding the caller's
+// token would hand it to wherever a redirect points: another host, or plain http. Pinning the host
+// and leaving Proxy unset does not prevent it. An aggregated API's answer passes back through the
+// API server, so this is not only a hostile-server case.
+//
+// NewBackendForConfig uses it. A host that builds its own dynamic client for NewBackend should build
+// it on this client: dynamic.NewForConfigAndClient(cfg, httpClient). A refused redirect reaches the
+// browser as a terminal INTERNAL, since it will not go away on retry; ErrRedirectRefused is its cause.
+func HTTPClientFor(cfg *rest.Config) (*http.Client, error) {
+	client, err := rest.HTTPClientFor(cfg)
+	if err != nil {
+		return nil, err
+	}
+	client.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrRedirectRefused }
+	return client, nil
 }
 
 // upstream describes what a failing call was actually reaching for: the server, and the resource path
@@ -393,6 +423,12 @@ func watchError(obj runtime.Object) error {
 // returns unchanged, which the gateway sends as a generic INTERNAL; the full error, with the URL that
 // failed, always survives as the Cause, for the host's Diagnostics and never for the wire.
 func classify(err error) error {
+	// First: a refused redirect arrives as a *url.Error, which would otherwise read as a transport
+	// failure and be retried, and it will be refused again every time.
+	if errors.Is(err, ErrRedirectRefused) {
+		return withCause(&gateway.StreamError{Code: gateway.CodeInternal, Terminal: true,
+			Message: "the API server answered with a redirect, which this gateway refuses to follow"}, err)
+	}
 	if se := classifyStatus(err); se != nil {
 		return se
 	}

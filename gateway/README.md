@@ -25,7 +25,7 @@ handler := gateway.Handler(gateway.Options{
 	Principal:  principalFromSession,
 	Authorizer: authorizeScope,
 	Clients: func(_ context.Context, target string, p gateway.Principal) (gateway.Backend, error) {
-		return kube.NewBackend(dynamicClientFor(target, p)), nil
+		return kube.NewBackendForConfig(restConfigFor(target, p))
 	},
 	Scopes: gateway.ScopePolicy{
 		Targets: []string{"production"},

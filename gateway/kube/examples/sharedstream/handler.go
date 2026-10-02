@@ -45,11 +45,17 @@ func Handler(cluster *rest.Config, namespace, name string, sessionFor func(*http
 	if !rest.IsConfigTransportTLS(*cluster) || cluster.Insecure {
 		return nil, fmt.Errorf("sharedstream: cluster must use HTTPS with certificate verification")
 	}
-	service, err := kubernetes.NewForConfig(cluster)
+	// One client for both, and it refuses redirects: client-go would otherwise carry the service
+	// token to wherever a redirect points.
+	httpClient, err := kube.HTTPClientFor(cluster)
 	if err != nil {
 		return nil, err
 	}
-	data, err := dynamic.NewForConfig(cluster)
+	service, err := kubernetes.NewForConfigAndClient(cluster, httpClient)
+	if err != nil {
+		return nil, err
+	}
+	data, err := dynamic.NewForConfigAndClient(cluster, httpClient)
 	if err != nil {
 		return nil, err
 	}

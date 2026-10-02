@@ -103,6 +103,9 @@ type Gateway struct {
 	// ReauthorizationTimeout bounds a timed check. Zero defaults to 10 seconds.
 	// Authorizers and projection policies must honor context cancellation.
 	ReauthorizationTimeout time.Duration
+	// now is the clock that decides whether a cycle lasted long enough to count. Nil uses time.Now.
+	now func() time.Time
+
 	// Ordering is how far the upstream's resourceVersions may be trusted. The zero value is
 	// OrderingStrict: this library targets Kubernetes 1.35+, where orderability is a conformance
 	// requirement, and it says so rather than degrading quietly on every cluster to accommodate one.
@@ -132,6 +135,12 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 		policy = StaticProjection(g.Projection)
 	}
 
+	// quickEnds counts consecutive cycles that ended before they were of use. One is recovered in
+	// band, as continuity loss always is (§5). A second in a row is an upstream that ends every
+	// watch early — before its snapshot completes, or straight after — and reopening it at once
+	// on this connection would be a tight loop. That ends the connection instead, and the client
+	// waits on its own budget.
+	quickEnds := 0
 	for cycles := 0; ; cycles++ {
 		if cycles > 0 {
 			g.observe(Observation{Kind: ObservationConsumerResync, Scope: scope})
@@ -171,32 +180,79 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 			return g.emitError(ctx, sink, principal, scope, projection, err)
 		}
 
-		err = g.authorizedCycle(ctx, principal, scope, requested, policy, backend, projection, revisions, sink)
+		tracker := &syncTracker{sink: sink, now: g.clock}
+		err = g.authorizedCycle(ctx, principal, scope, requested, policy, backend, projection, revisions, tracker)
 		switch {
 		case err == nil:
 			// A cycle only ends by error or cancellation; nil would be a bug in the loop below.
 			return nil
 		case ctx.Err() != nil:
 			return ctx.Err()
-		case errors.Is(err, ErrWatchClosed):
-			// A routine watch timeout. Reopen — with a full snapshot, because between the close and
-			// the reopen we can promise nothing, and the protocol's whole value is that what you
-			// end up holding is right.
-			continue
 		}
 
-		// Continuity lost (a 410, a partial object, an overflowing shared queue): announce,
-		// resnapshot, carry on. Every other error ends the connection, including retryable ones. The
-		// client owns the retry: it already has a bounded budget, backoff and jitter, a second backoff
-		// here would multiply with it, and a held connection would pin a goroutine and a subscription
-		// for an outage of unknown length. A reconnect costs the same fresh snapshot a retry here would.
+		// Two endings are recovered with a new cycle on this connection: a routine watch timeout
+		// (ErrWatchClosed), because between the close and the reopen we can promise nothing; and lost
+		// continuity (a 410, a partial object, an overflowing shared queue), announced as
+		// RESYNC_REQUIRED. Every other error ends the connection, including retryable ones. The client
+		// owns the retry: it already has a bounded budget, backoff and jitter, a second backoff here
+		// would multiply with it, and a held connection would pin a goroutine and a subscription for
+		// an outage of unknown length. A reconnect costs the same fresh snapshot a retry here would.
+		//
+		// A StreamError decides before ErrWatchClosed does. StreamError.Unwrap exposes its Cause, so
+		// an UPSTREAM_UNAVAILABLE caused by a closed watch also satisfies errors.Is(err,
+		// ErrWatchClosed), and must not be mistaken for a routine timeout.
 		var se *StreamError
-		if errors.As(err, &se) && se != nil && !se.Terminal && se.Code == CodeResyncRequired {
+		hasStreamError := errors.As(err, &se) && se != nil
+		recoverable := hasStreamError && !se.Terminal && se.Code == CodeResyncRequired ||
+			!hasStreamError && errors.Is(err, ErrWatchClosed)
+		if !recoverable {
+			return g.emitError(ctx, sink, principal, scope, projection, err)
+		}
+		if hasStreamError {
 			g.diagnose(Diagnostic{Principal: principal, Scope: scope, Code: se.Code, Err: err})
+		}
+		if tracker.lastedPast(minUsefulCycle) {
+			quickEnds = 0
 			continue
 		}
-		return g.emitError(ctx, sink, principal, scope, projection, err)
+		if quickEnds++; quickEnds > 1 {
+			unavailable := UpstreamUnavailable("the upstream watch keeps ending before it is of use; retry later", 0)
+			unavailable.Cause = err
+			return g.emitError(ctx, sink, principal, scope, projection, unavailable)
+		}
 	}
+}
+
+// minUsefulCycle is how long a cycle must stay live after its snapshot to count as useful. The API
+// server's routine watch timeout comes after many minutes; an upstream that ends a watch within a
+// second of its snapshot is failing, not timing out.
+const minUsefulCycle = time.Second
+
+func (g *Gateway) clock() time.Time {
+	if g.now != nil {
+		return g.now()
+	}
+	return time.Now()
+}
+
+// syncTracker passes a cycle's events through and remembers when its snapshot completed.
+type syncTracker struct {
+	sink     Sink
+	now      func() time.Time
+	syncedAt time.Time
+}
+
+func (t *syncTracker) Emit(ctx context.Context, ev Event) error {
+	err := t.sink.Emit(ctx, ev)
+	if err == nil && ev.Type == EventSynced && t.syncedAt.IsZero() {
+		t.syncedAt = t.now()
+	}
+	return err
+}
+
+// lastedPast reports whether the cycle completed its snapshot and then stayed live for at least d.
+func (t *syncTracker) lastedPast(d time.Duration) bool {
+	return !t.syncedAt.IsZero() && t.now().Sub(t.syncedAt) >= d
 }
 
 func isBuiltinProjection(projection Projection) bool {
