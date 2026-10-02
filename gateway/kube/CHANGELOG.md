@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.6.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.5.0...gateway/kube/v0.6.0) (2026-10-02)
+
+
+### Features
+
+* refuse credential-carrying redirects, stop reopening early-ending watches, and let releases own versions ([#42](https://github.com/ConfigButler/krm-stream/issues/42)) ([fb52085](https://github.com/ConfigButler/krm-stream/commit/fb52085847e15996ba69fab16f4f021342a20608))
+
 ## [0.5.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.4.0...gateway/kube/v0.5.0) (2026-10-02)
 
 
