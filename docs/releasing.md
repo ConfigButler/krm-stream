@@ -34,8 +34,8 @@ GOWORK=off GOPROXY=direct go get github.com/ConfigButler/krm-stream/gateway@<com
 GOWORK=off go mod tidy
 ```
 
-CI's `a stranger can go get this` job builds the adapter from that pseudo-version. After the next
-release, move the requirement to the released core tag.
+Check it from a clean module outside this workspace, as CI's `a stranger can go get this` job does.
+After the next release, move the requirement to the released core tag.
 
 Before 1.0, remove superseded API names and forwarding packages instead of maintaining compatibility
 shims. Record each removal and its replacement in release notes, and update repository callers,
