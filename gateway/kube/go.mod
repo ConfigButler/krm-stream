@@ -27,7 +27,7 @@ go 1.27.1
 // unreleased adapter with the core from the same commit. The adapter relies on core behaviour, not
 // only API, so it must never resolve an older core than the one it was released with.
 require (
-	github.com/ConfigButler/krm-stream/gateway v0.5.0 // x-release-please-version
+	github.com/ConfigButler/krm-stream/gateway v0.6.0 // x-release-please-version
 	k8s.io/api v0.36.0
 	k8s.io/apimachinery v0.36.0
 	k8s.io/client-go v0.36.0
