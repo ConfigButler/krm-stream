@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 )
@@ -35,6 +36,12 @@ type Options struct {
 	// Principal answers "who is calling?" from the request — a session cookie, an mTLS peer, a
 	// header your ingress set. Return an error to refuse.
 	//
+	// Return a *StreamError to choose what the caller is told: Unauthenticated when signing in again
+	// will help, UpstreamUnavailable when your session store is down and the honest answer is "try
+	// later". Any other error is sent as UNAUTHENTICATED "not authenticated", and its text goes only
+	// to Diagnostics: what went wrong identifying a caller is your business, and possibly your
+	// internals.
+	//
 	// Required, and there is deliberately no default. Every default that could go here ("nil
 	// principal", "the request's Authorization header") is a policy decision about someone's auth
 	// system, and this library does not get to make one.
@@ -48,7 +55,7 @@ type Options struct {
 	Clients ClientFor
 
 	// Scopes is the allowlist (spec §8). Required, and deny-by-default: the zero value streams
-	// nothing, so forgetting it fails closed.
+	// nothing, so forgetting it fails closed. Setting both Resources and AnyResource panics.
 	Scopes ScopePolicy
 
 	// Projection defaults to ProjectionFull — the safe one. A gateway that defaulted to raw and
@@ -64,6 +71,10 @@ type Options struct {
 
 	// Observer receives low-cardinality stream lifecycle signals. It must not block.
 	Observer Observer
+
+	// Diagnostics receives the raw error behind every error event, including the detail the wire
+	// does not carry. It must not block. Nil discards it.
+	Diagnostics Diagnostics
 
 	// HeartbeatInterval defaults to HeartbeatInterval. Set a positive value to match a proxy's idle
 	// timeout; it affects HTTP streams only.
@@ -100,6 +111,8 @@ func Handler(o Options) http.Handler {
 		panic("krm-stream: Options.Authorizer is required — use gateway.AllowAll{} to say you meant it")
 	case o.Clients == nil:
 		panic("krm-stream: Options.Clients is required — the library holds no cluster connection of its own")
+	case o.Scopes.AnyResource && len(o.Scopes.Resources) > 0:
+		panic("krm-stream: ScopePolicy sets both Resources and AnyResource — choose an allowlist or delegation, not both")
 	}
 
 	g := &Gateway{
@@ -109,6 +122,7 @@ func Handler(o Options) http.Handler {
 		Projections:             o.Projections,
 		Ordering:                o.Ordering,
 		Observer:                o.Observer,
+		Diagnostics:             o.Diagnostics,
 		HeartbeatInterval:       o.HeartbeatInterval,
 		WriteTimeout:            o.WriteTimeout,
 		ReauthorizationInterval: o.ReauthorizationInterval,
@@ -118,10 +132,11 @@ func Handler(o Options) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, err := o.Principal(r)
 		if err != nil {
-			// Forbidden, not the host's error verbatim: whatever went wrong identifying this caller
-			// is the host's business and possibly its internals. The caller learns that they may not
-			// have this, and nothing else.
-			g.refuse(w, r, Forbidden("not authenticated"))
+			var se *StreamError
+			if !errors.As(err, &se) || se == nil {
+				se = &StreamError{Code: CodeUnauthenticated, Message: "not authenticated", Terminal: true, Cause: err}
+			}
+			g.refuse(w, r, Diagnostic{Code: se.Code, Terminal: se.Terminal, Err: err}, se)
 			return
 		}
 
@@ -130,7 +145,8 @@ func Handler(o Options) http.Handler {
 			err = o.Scopes.Validate(scope)
 		}
 		if err != nil {
-			g.refuse(w, r, asStreamError(err))
+			se := asStreamError(err)
+			g.refuse(w, r, Diagnostic{Principal: principal, Scope: scope, Code: se.Code, Terminal: se.Terminal, Err: err}, se)
 			return
 		}
 
@@ -138,8 +154,9 @@ func Handler(o Options) http.Handler {
 	})
 }
 
-// refuse writes a terminal error as a well-formed one-event stream, and closes.
-func (g *Gateway) refuse(w http.ResponseWriter, r *http.Request, serr *StreamError) {
+// refuse writes an error as a well-formed one-event stream, and closes.
+func (g *Gateway) refuse(w http.ResponseWriter, r *http.Request, d Diagnostic, serr *StreamError) {
+	g.diagnose(d)
 	g.serveHTTP(w, r, func(ctx context.Context, sink *SSESink) {
 		_ = (&sequenceSink{sink: sink}).Emit(ctx, serr.Event())
 	})

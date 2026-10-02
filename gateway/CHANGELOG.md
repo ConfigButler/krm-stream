@@ -13,6 +13,21 @@
   own headers, delivery and cleanup. `SSESink.Heartbeat` now returns an error; callers must handle
   failure and stop their stream. `NewSSESink(io.Writer)` remains generic and propagates available
   flush errors without installing HTTP deadlines. The v1 wire protocol is unchanged.
+- Recover only `RESYNC_REQUIRED` on the open connection. Any other non-terminal error, such as
+  `UPSTREAM_UNAVAILABLE`, is sent with its code and `retryAfterMs` and then closes the connection,
+  so the client owns the retry. A new `retryable_error` observation reports it.
+- `SharedBackend` backs off a scope whose upstream fails with `UPSTREAM_UNAVAILABLE`, whether opening
+  fails or the open watch dies of it: one attempt per period (1s doubling to 30s, or the upstream's
+  hint) however many subscribers reconnect. A completed upstream snapshot resets it.
+- Add `Options.Diagnostics` / `Gateway.Diagnostics`, which receive the raw error behind each error
+  event, and `StreamError.Cause`, which never reaches the wire. Add `Unauthenticated` and
+  `UpstreamUnavailable` constructors.
+- Add `ScopePolicy.AnyResource`, which leaves resource admission to the upstream's authorization.
+  Setting it with `Resources` panics in `Handler` and refuses every scope in `Validate`.
+- `Principal` may return a `*StreamError` to choose its refusal.
+- **Breaking:** a generated `INTERNAL` says "internal error" rather than the underlying error's
+  text. Any other `Principal` error is `UNAUTHENTICATED` rather than `FORBIDDEN`. A timed
+  reauthorization that fails with `UPSTREAM_UNAVAILABLE` ends the stream without making it terminal.
 
 
 ## [0.4.0](https://github.com/ConfigButler/krm-stream/compare/gateway/v0.3.0...gateway/v0.4.0) (2026-09-11)

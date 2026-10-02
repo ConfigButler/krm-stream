@@ -15,7 +15,7 @@ right upstream for the host application.
 | `Principal` | Resolve the HTTP request to an application principal. |
 | `Authorizer` | Allow or deny the normalized scope before a watch opens. |
 | `Clients` | Return a backend acting as the caller, or an explicitly shared backend. |
-| `Scopes` | Allowlist target and Kubernetes group/resource combinations. |
+| `Scopes` | Allowlist targets, and allowlist group/resource combinations or delegate them to Kubernetes. |
 
 The zero `ScopePolicy` denies every request. The gateway never accepts an API-server URL or a
 credential from a browser request.
@@ -56,7 +56,17 @@ narrowing only; a host should still constrain selector complexity at its HTTP bo
 
 Every snapshot cycle emits `reset`, zero or more `added` events, then `synced`. Live updates are
 complete-object replacements. A recoverable upstream discontinuity emits `RESYNC_REQUIRED` and starts
-a new cycle on the same SSE connection. Terminal errors are the final event and close the connection.
+a new cycle on the same SSE connection. Any other non-terminal error, such as `UPSTREAM_UNAVAILABLE`,
+is sent with its `retryAfterMs` and then closes the connection: the client owns that retry. Terminal
+errors are the final event and close the connection.
+
+An unexpected error reaches the browser as `INTERNAL` with the message `internal error`. Its text,
+and the `Cause` of any `StreamError`, go only to `Options.Diagnostics`, so the host decides what to
+log and what to redact. `gateway/kube` maps API-server failures to protocol codes: 403 to
+`FORBIDDEN` with Kubernetes' own message, 401 to `UNAUTHENTICATED`, 404 to `SCOPE_INVALID`, and 429,
+5xx or an unreachable server to `UPSTREAM_UNAVAILABLE` (with `Retry-After` as `retryAfterMs`).
+`SharedBackend` backs off a scope whose upstream will not open, so its subscribers' reconnects do
+not add up to a stampede.
 
 The gateway absorbs Kubernetes-specific mechanics including bookmarks, relists, 410 responses,
 partial metadata objects, and ambiguous deletion tombstones. The normative details are in

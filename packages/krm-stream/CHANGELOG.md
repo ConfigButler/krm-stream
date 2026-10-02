@@ -1,5 +1,15 @@
 # Changelog
 
+## Unreleased
+
+- The managed connector waits at least the server's retry hint (HTTP `Retry-After`, or an error
+  event's `retryAfterMs`) before reconnecting, within `maxRetryDelayMs`. A completed snapshot
+  discards the hint. `onError` receives it as a fourth argument.
+- A refusal whose body is a Kubernetes `Status` reports its `message` instead of `stream: HTTP
+  <status>`. The body read is bounded to 16 KiB and 2 seconds, and stops when the stream closes.
+- HTTP 429, 502, 503 and 504 report `UPSTREAM_UNAVAILABLE` rather than `INTERNAL`.
+
+
 ## [0.4.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.3.0...@configbutler/krm-stream-v0.4.0) (2026-09-11)
 
 

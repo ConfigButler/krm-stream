@@ -182,3 +182,13 @@ function decodeInChunks(bytes: string, size: number): StreamEvent[] {
   }
   return out;
 }
+
+test("Retry-After accepts delay-seconds and an HTTP-date", async () => {
+  const { retryAfter } = await import("../src/sse.ts");
+  const now = Date.parse("2026-10-02T12:00:00Z");
+  assert.equal(retryAfter("3", now), 3000);
+  assert.equal(retryAfter("Fri, 02 Oct 2026 12:00:05 GMT", now), 5000);
+  assert.equal(retryAfter("Fri, 02 Oct 2026 11:00:00 GMT", now), 0);
+  assert.equal(retryAfter("soon", now), undefined);
+  assert.equal(retryAfter(null, now), undefined);
+});

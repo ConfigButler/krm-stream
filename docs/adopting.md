@@ -19,6 +19,28 @@ namespaced resource. `ScopePolicy` makes the host choose explicitly.
 Keep all-namespaces access rare. It changes the size, disclosure risk, and operating cost of a stream.
 Use an `Authorizer` to pin a user to a namespace or target before any watch opens.
 
+### Delegating resource admission to Kubernetes
+
+A host whose endpoint should expose whatever Kubernetes lets each user read, as a `/k8s` proxy does,
+has no resource list to keep. `AnyResource` says so explicitly:
+
+```go
+Scopes: gateway.ScopePolicy{
+	Targets:     []string{""},
+	AnyResource: true, // admission is left to the upstream's own authorization
+},
+```
+
+Any resource the scope syntax accepts then passes, with or without a namespace. Without one, the API
+server decides: the list of a cluster-scoped resource, or every namespace for a namespaced one, which
+RBAC allows only with a cluster-wide grant. The target allowlist, `AllowLabelSelector`, the refusal of
+API-server addresses and the `Authorizer` all still apply.
+
+`AnyResource` is safe only when `Clients` returns a backend built from the caller's own credential.
+The library cannot check that: a `kube.Backend` can carry a service account's client, and a wrapper
+can hide a `SharedBackend`. With either, every resource that identity can read is open to everyone
+your `Authorizer` admits. Prove the binding in the host's own tests.
+
 ### Errors from the exported surface are `error`
 
 `ScopeFromQuery` and `ScopePolicy.Validate` return `error`, and the concrete value is a
@@ -31,11 +53,28 @@ if errors.As(err, &serr) {
 }
 ```
 
+### Errors on the wire, and the detail behind them
+
+A `StreamError` you return keeps its `Message`; its `Cause` never reaches the wire. Any other error
+reaches the browser as `INTERNAL` with the message `internal error`. Set `Options.Diagnostics` to see
+the raw error, with the principal and scope it belongs to, and log what your policy allows:
+
+```go
+Diagnostics: func(d gateway.Diagnostic) {
+	slog.Warn("stream error", "code", d.Code, "resource", d.Scope.Resource, "err", redact(d.Err))
+},
+```
+
+`Principal` may return a `*StreamError` too: `gateway.Unauthenticated` when signing in again will
+help, or `gateway.UpstreamUnavailable` when your session store is down. Any other `Principal` error
+is sent as `UNAUTHENTICATED` "not authenticated".
+
 ### Targets with a path prefix
 
 A `rest.Config.Host` may include a path prefix, such as a kcp workspace URL
 (`https://kcp.example/clusters/root:org:ws`). The dynamic client preserves it when constructing API
-requests. Use `kube.NewBackendForConfig(cfg)` to include the endpoint in upstream error diagnostics;
+requests. Use `kube.NewBackendForConfig(cfg)` to include the endpoint in upstream errors, which reach
+`Options.Diagnostics` and never the browser;
 `kube.NewBackend(dynamicClient)` also works when a dynamic client already exists.
 
 ## 2. Mount the same-origin cookie endpoint

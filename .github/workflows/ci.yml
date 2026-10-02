@@ -222,20 +222,22 @@ jobs:
           # until the release PR merges — and `go get` would fail here for a reason that is not a
           # bug. Skip that case in ordinary CI; release CI requires the tags to exist.
           core="$(sed -n 's|^[[:space:]]*github.com/ConfigButler/krm-stream/gateway v\([^ ]*\).*|\1|p' gateway/kube/go.mod | head -1)"
-          case "$core" in
-            0.0.0-*) ;;  # a pseudo-version names a commit, and always resolves
-            "")
-              echo "::error::gateway/kube/go.mod does not require the core module at all" && exit 1 ;;
-            *)
-              if ! git ls-remote --exit-code --tags origin "refs/tags/gateway/v${core}" >/dev/null 2>&1; then
-                if [ -n "$RELEASE_VERSION" ]; then
-                  echo "::error::released adapter requires missing core tag gateway/v${core}"
-                  exit 1
-                fi
-                echo "::notice::core v${core} is not tagged yet; release CI verifies the public tag after tagging."
-                exit 0
-              fi ;;
-          esac
+          if [ -z "$core" ]; then
+            echo "::error::gateway/kube/go.mod does not require the core module at all" && exit 1
+          fi
+          # A pseudo-version names a commit, and always resolves. It ends in a 14-digit timestamp and a
+          # 12-character revision, whatever its base: v0.0.0-…, or v0.4.1-0.… once a tag precedes it,
+          # which is the form Go chooses when an adapter change needs unreleased core API.
+          if ! printf '%s' "$core" | grep -Eq '[-.][0-9]{14}-[0-9a-f]{12}$'; then
+            if ! git ls-remote --exit-code --tags origin "refs/tags/gateway/v${core}" >/dev/null 2>&1; then
+              if [ -n "$RELEASE_VERSION" ]; then
+                echo "::error::released adapter requires missing core tag gateway/v${core}"
+                exit 1
+              fi
+              echo "::notice::core v${core} is not tagged yet; release CI verifies the public tag after tagging."
+              exit 0
+            fi
+          fi
 
           revision="${{ inputs.ref || github.event.pull_request.head.sha || github.sha }}"
           if [ -n "$RELEASE_VERSION" ]; then

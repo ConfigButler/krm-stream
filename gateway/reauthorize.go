@@ -67,9 +67,11 @@ func (g *Gateway) authorizedCycle(ctx context.Context, principal Principal, scop
 					return
 				}
 				if err != nil {
-					// Fail closed even if a host returns a normally recoverable StreamError.
+					// Fail closed even if a host returns a normally recoverable StreamError. The one
+					// exception is an unreachable authority (a SubjectAccessReview that could not be
+					// sent): the stream still ends, but the client may reconnect later.
 					se := *asStreamError(err)
-					se.Terminal = true
+					se.Terminal = se.Code != CodeUpstreamUnavailable
 					cancel()
 					gate.mu.Unlock()
 					done <- &se

@@ -67,7 +67,8 @@ await connection.closed;
 
 Import `connectManagedResourceStream` from the package. It uses fetch for same-origin cookies or
 bearer headers; `credentials: "include"` opts into cross-origin cookies. It requests a fresh snapshot
-on sequence gaps, network failures, HTTP 408/429/5xx and EOF. Existing drafts survive recovery.
+on sequence gaps, network failures, HTTP 408/429/5xx, EOF, and a connection the gateway closes after
+a retryable error such as `UPSTREAM_UNAVAILABLE`. Existing drafts survive recovery.
 States are `connecting`, `syncing`, `live`, `retrying`, `closed`, `terminal`, and `exhausted`.
 A reset makes the connection `syncing` until `synced`; enable saves while `live`.
 
@@ -77,7 +78,14 @@ this threshold). Brief snapshots do not replenish the budget; reset, disconnect 
 the health timer. Terminal protocol errors and HTTP client
 errors (including 401/403, excluding 408/429) stop retries. `close()` or `signal` cancels the stream and
 pending backoff; `closed` resolves after cleanup. Create a new handle after credentials change or an
-explicit user retry. The low-level fetch and native EventSource connectors remain available; native
+explicit user retry.
+
+The server's retry hint sets the least the next reconnect waits, within `maxRetryDelayMs`: an HTTP
+`Retry-After`, or an error event's `retryAfterMs`. `onError` receives it as its fourth argument. When
+a refusal's body is a Kubernetes `Status`, as a host proxying `/k8s` might send, `onError` receives
+its `message` instead of `stream: HTTP 403`.
+
+The low-level fetch and native EventSource connectors remain available; native
 EventSource owns network reconnects but closes on sequence gaps. Use the managed connector for
 bounded recovery and observable lifecycle state.
 

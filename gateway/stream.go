@@ -87,6 +87,9 @@ type Gateway struct {
 	Projections ProjectionPolicy
 	// Observer receives low-cardinality lifecycle signals. Nil disables observations.
 	Observer Observer
+	// Diagnostics receives the raw error behind every error event, including detail kept off the
+	// wire. Nil discards it.
+	Diagnostics Diagnostics
 	// HeartbeatInterval controls SSE heartbeats when ServeStream is used. Zero uses the package
 	// default. It has no effect on the transport-neutral Stream method.
 	HeartbeatInterval time.Duration
@@ -106,11 +109,11 @@ type Gateway struct {
 	Ordering ResourceVersionOrdering
 }
 
-// Stream runs one consumer's stream until the context is done or a terminal error is emitted.
+// Stream runs one consumer's stream until the context is done or an error event ends it.
 //
-// It returns after emitting a terminal error; the caller (the SSE handler) must then CLOSE the
-// connection. A browser's EventSource reconnects automatically otherwise, and would hammer a
-// forbidden scope forever.
+// It returns after emitting a terminal error, or a non-terminal one such as UPSTREAM_UNAVAILABLE
+// that the client must reconnect for; the caller (the SSE handler) must then CLOSE the connection.
+// Only RESYNC_REQUIRED is recovered on the same connection.
 func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, sink Sink) error {
 	return g.StreamProjection(ctx, principal, scope, "", sink)
 }
@@ -153,19 +156,19 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 		// hammering a forbidden scope forever.
 		//
 		if err := g.Auth.Authorize(ctx, principal, scope); err != nil {
-			return g.emitTerminal(ctx, sink, scope, "", err)
+			return g.emitError(ctx, sink, principal, scope, "", err)
 		}
 		projection, err := policy.SelectProjection(ctx, principal, scope, requested)
 		if err != nil {
-			return g.emitTerminal(ctx, sink, scope, "", err)
+			return g.emitError(ctx, sink, principal, scope, "", err)
 		}
 		if !isBuiltinProjection(projection) {
-			return g.emitTerminal(ctx, sink, scope, projection, &StreamError{Code: CodeInternal, Terminal: true, Message: "projection policy selected an unknown projection: " + string(projection)})
+			return g.emitError(ctx, sink, principal, scope, projection, &StreamError{Code: CodeInternal, Terminal: true, Message: "projection policy selected an unknown projection: " + string(projection)})
 		}
 		g.observe(Observation{Kind: ObservationCycleStarted, Scope: scope, Projection: projection})
 		backend, err := g.Clients(ctx, scope.Target, principal)
 		if err != nil {
-			return g.emitTerminal(ctx, sink, scope, projection, err)
+			return g.emitError(ctx, sink, principal, scope, projection, err)
 		}
 
 		err = g.authorizedCycle(ctx, principal, scope, requested, policy, backend, projection, revisions, sink)
@@ -182,11 +185,17 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 			continue
 		}
 
+		// Continuity lost (a 410, a partial object, an overflowing shared queue): announce,
+		// resnapshot, carry on. Every other error ends the connection, including retryable ones. The
+		// client owns the retry: it already has a bounded budget, backoff and jitter, a second backoff
+		// here would multiply with it, and a held connection would pin a goroutine and a subscription
+		// for an outage of unknown length. A reconnect costs the same fresh snapshot a retry here would.
 		var se *StreamError
-		if errors.As(err, &se) && !se.Terminal {
-			continue // a recoverable upstream error: announce, resnapshot, carry on
+		if errors.As(err, &se) && se != nil && !se.Terminal && se.Code == CodeResyncRequired {
+			g.diagnose(Diagnostic{Principal: principal, Scope: scope, Code: se.Code, Err: err})
+			continue
 		}
-		return g.emitTerminal(ctx, sink, scope, projection, err)
+		return g.emitError(ctx, sink, principal, scope, projection, err)
 	}
 }
 
@@ -329,11 +338,22 @@ func (g *Gateway) observe(observation Observation) {
 	}
 }
 
-func (g *Gateway) emitTerminal(ctx context.Context, sink Sink, scope Scope, projection Projection, err error) error {
-	se := asStreamError(err)
-	if se.Terminal {
-		g.observe(Observation{Kind: ObservationTerminalError, Scope: scope, Projection: projection, Code: se.Code})
+func (g *Gateway) diagnose(d Diagnostic) {
+	if g.Diagnostics != nil {
+		g.Diagnostics(d)
 	}
+}
+
+// emitError sends the error event that ends a stream. The caller closes the connection after it,
+// whether or not it is terminal.
+func (g *Gateway) emitError(ctx context.Context, sink Sink, principal Principal, scope Scope, projection Projection, err error) error {
+	se := asStreamError(err)
+	g.diagnose(Diagnostic{Principal: principal, Scope: scope, Code: se.Code, Terminal: se.Terminal, Err: err})
+	kind := ObservationRetryableError
+	if se.Terminal {
+		kind = ObservationTerminalError
+	}
+	g.observe(Observation{Kind: kind, Scope: scope, Projection: projection, Code: se.Code})
 	if emitErr := sink.Emit(ctx, se.Event()); emitErr != nil {
 		return emitErr
 	}
@@ -505,6 +525,11 @@ func isDecimalResourceVersion(rv string) bool {
 
 // asStreamError finds the *StreamError a host meant to send, or makes one.
 //
+// A made one says "internal error" and nothing else. Whatever an unexpected error says (a dial error
+// naming the cluster's internal address, a URL a backend promised never to show a browser) is for the
+// host's Diagnostics hook, not the wire. A StreamError the host or a backend chose keeps its message:
+// choosing a message is choosing to send it.
+//
 // The `se == nil` arm is the typed-nil trap seen from the other side. A host whose Authorizer is
 // declared to return `error` and returns a nil *StreamError hands us a non-nil error interface
 // wrapping nothing: errors.As matches, sets se to nil, and every path downstream would dereference it
@@ -513,7 +538,7 @@ func isDecimalResourceVersion(rv string) bool {
 func asStreamError(err error) *StreamError {
 	var se *StreamError
 	if !errors.As(err, &se) || se == nil {
-		return &StreamError{Code: CodeInternal, Message: err.Error(), Terminal: true}
+		return &StreamError{Code: CodeInternal, Message: "internal error", Terminal: true, Cause: err}
 	}
 	return se
 }

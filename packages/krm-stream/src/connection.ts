@@ -28,7 +28,13 @@ export interface ManagedStreamHandle extends StreamHandle {
 
 /** Managed fetch transport for both session cookies and bearer headers. Every reconnect requests a
  * fresh snapshot; the existing store and its drafts survive. HTTP 401/403 and terminal protocol
- * errors stop permanently. EOF, network failures and sequence gaps consume a bounded retry budget. */
+ * errors stop permanently. EOF, network failures, sequence gaps and retryable errors such as
+ * UPSTREAM_UNAVAILABLE consume a bounded retry budget.
+ *
+ * A server's retry hint (an HTTP `Retry-After`, or an error event's `retryAfterMs`) sets the least
+ * the next reconnect waits, within `maxRetryDelayMs`. A non-terminal event on an open connection does
+ * not itself reconnect: the gateway recovers RESYNC_REQUIRED in band, and closes the connection
+ * after any error it wants the client to retry. A completed snapshot discards the hint. */
 export function connectManagedResourceStream(
   url: string,
   store: LiveResourceStore,
@@ -56,6 +62,7 @@ export function connectManagedResourceStream(
   const subscribers = new Set<(state: Readonly<ConnectionState>) => void>();
   let state: Readonly<ConnectionState> = Object.freeze({ status: "connecting", retries: 0 });
   let terminal = false;
+  let hintMs: number | undefined;
   let healthTimer: ReturnType<typeof setTimeout> | undefined;
   const clearHealthTimer = () => {
     clearTimeout(healthTimer);
@@ -79,6 +86,7 @@ export function connectManagedResourceStream(
       while (!controller.signal.aborted) {
         publish("connecting");
         if (controller.signal.aborted) break;
+        hintMs = undefined;
         const stream = connectResourceStream(url, store, {
           ...opts,
           signal: controller.signal,
@@ -98,6 +106,7 @@ export function connectManagedResourceStream(
             opts.onChange?.(change);
           },
           onSynced: () => {
+            hintMs = undefined;
             if (state.status !== "live") {
               healthTimer = setTimeout(() => {
                 healthTimer = undefined;
@@ -110,10 +119,11 @@ export function connectManagedResourceStream(
             publish("live");
             opts.onSynced?.();
           },
-          onError: (code, message, isTerminal) => {
+          onError: (code, message, isTerminal, retryAfterMs) => {
             if (isTerminal) clearHealthTimer();
             terminal ||= isTerminal;
-            opts.onError?.(code, message, isTerminal);
+            if (!isTerminal && retryAfterMs !== undefined) hintMs = retryAfterMs;
+            opts.onError?.(code, message, isTerminal, retryAfterMs);
           },
         });
         await stream.closed;
@@ -128,7 +138,8 @@ export function connectManagedResourceStream(
           return;
         }
         const ceiling = Math.min(cap, delay * 2 ** Math.min(state.retries, 30));
-        const wait = Math.floor(ceiling * (0.5 + Math.random() * 0.5));
+        const jittered = Math.floor(ceiling * (0.5 + Math.random() * 0.5));
+        const wait = Math.min(cap, Math.max(jittered, hintMs ?? 0));
         state = { ...state, retries: state.retries + 1 };
         publish("retrying", wait);
         await new Promise<void>((resolve) => {

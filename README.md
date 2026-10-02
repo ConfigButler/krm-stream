@@ -99,6 +99,13 @@ version: see [why a quiet stream can reject a save](docs/saving.md#why-a-quiet-s
 
 ## Start here
 
+**Want it running in minutes?** [krm-foyer](https://github.com/ConfigButler/krm-foyer) is a
+ready-made backend for browser apps on Kubernetes: OIDC sign-in, server-side sessions, a `/k8s` API
+proxy, and krm-stream's live resources, with each watch opened as the signed-in user so Kubernetes
+RBAC decides what they see. Its `task demo` starts a test cluster and an example app. Start there if
+you don't already have a Go backend to embed the gateway in. To build the integration yourself, read
+on.
+
 There are two halves, and they are usually two different people.
 
 ### The browser half

@@ -271,3 +271,144 @@ test("snapshot resets restart the health interval and close removes the timer", 
   t.mock.timers.tick(100);
   assert.equal(handle.state.status, "closed");
 });
+
+/** Runs a managed stream until its first retry is scheduled, and returns how long it would wait. */
+async function firstRetryDelay(fetch: typeof globalThis.fetch, opts: { maxRetryDelayMs?: number } = {}) {
+  let delay: number | undefined;
+  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    retryDelayMs: 0,
+    ...opts,
+    fetch,
+    onStateChange: (s) => {
+      if (s.status === "retrying" && delay === undefined) {
+        delay = s.retryInMs;
+        handle.close();
+      }
+    },
+  });
+  await handle.closed;
+  return delay;
+}
+
+test("a retryable error's retryAfterMs sets the least the reconnect waits", async () => {
+  const errors: unknown[][] = [];
+  const delay = await firstRetryDelay(async () =>
+    response([{ seq: 1, type: "error", code: "UPSTREAM_UNAVAILABLE", terminal: false, retryAfterMs: 1500 }]),
+  );
+  assert.equal(delay, 1500);
+
+  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    maxRetries: 0,
+    fetch: async () =>
+      response([{ seq: 1, type: "error", code: "UPSTREAM_UNAVAILABLE", terminal: false, retryAfterMs: 1500 }]),
+    onError: (...args) => errors.push(args),
+  });
+  await handle.closed;
+  assert.deepEqual(errors, [["UPSTREAM_UNAVAILABLE", "", false, 1500]]);
+});
+
+test("HTTP Retry-After is honoured within the client's own cap", async () => {
+  const fetch = async () => new Response(null, { status: 429, headers: { "Retry-After": "2" } });
+  assert.equal(await firstRetryDelay(fetch), 2000);
+  assert.equal(await firstRetryDelay(fetch, { maxRetryDelayMs: 300 }), 300);
+});
+
+test("a hint is discarded once a snapshot completes on the same connection", async () => {
+  const delay = await firstRetryDelay(async () =>
+    response([
+      { seq: 1, type: "error", code: "RESYNC_REQUIRED", terminal: false, retryAfterMs: 5000 },
+      { seq: 2, type: "reset" },
+      { seq: 3, type: "synced" },
+    ]),
+  );
+  assert.equal(delay, 0);
+});
+
+test("a refusal's Kubernetes Status message is shown instead of the bare status", async () => {
+  const messages: string[] = [];
+  const refuse =
+    (body: string, contentType = "application/json") =>
+    async () =>
+      new Response(body, { status: 403, headers: { "Content-Type": contentType } });
+  for (const fetch of [
+    refuse(JSON.stringify({ kind: "Status", code: 403, message: 'notes is forbidden: User "carol" cannot watch' })),
+    refuse(JSON.stringify({ kind: "Status", message: "not json" }), "text/plain"),
+    refuse(JSON.stringify({ kind: "Status", message: "x".repeat(20_000) })),
+    refuse("{not json"),
+  ]) {
+    const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+      fetch,
+      onError: (_code, message) => messages.push(message),
+    });
+    await handle.closed;
+  }
+  assert.deepEqual(messages, [
+    'notes is forbidden: User "carol" cannot watch',
+    "stream: HTTP 403",
+    "stream: HTTP 403",
+    "stream: HTTP 403",
+  ]);
+});
+
+/** A JSON refusal whose body sends `prefix` and then goes quiet. Records whether it was cancelled. */
+function stalledRefusal(prefix = "") {
+  const body = { cancelled: false };
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      start(controller) {
+        if (prefix) controller.enqueue(new TextEncoder().encode(prefix));
+      },
+      cancel() {
+        body.cancelled = true;
+      },
+    }),
+    { status: 403, headers: { "Content-Type": "application/json" } },
+  );
+  return { response, body };
+}
+
+test("close() while a refusal body is quiet ends the stream and cancels the body", async () => {
+  const { response, body } = stalledRefusal();
+  const errors: string[] = [];
+  let fetched!: () => void;
+  const wasFetched = new Promise<void>((resolve) => {
+    fetched = resolve;
+  });
+  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    fetch: async () => {
+      fetched();
+      return response;
+    },
+    onError: (_code, message) => errors.push(message),
+  });
+  await wasFetched;
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  handle.close();
+  await handle.closed;
+  assert.equal(handle.state.status, "closed");
+  assert.equal(body.cancelled, true);
+  assert.deepEqual(errors, [], "a closed stream reports nothing");
+});
+
+for (const [name, prefix] of [
+  ["quiet", ""],
+  ["partial", '{"kind":"Status","mess'],
+] as const)
+  test(`a ${name} refusal body falls back to the bare status within its budget`, async () => {
+    const { statusMessage } = await import("../src/sse.ts");
+    const { response, body } = stalledRefusal(prefix);
+    const started = Date.now();
+    assert.equal(await statusMessage(response, new AbortController().signal, 20), undefined);
+    assert.ok(Date.now() - started < 1_000, "the budget bounds the read");
+    assert.equal(body.cancelled, true);
+  });
+
+test("aborting during a refusal-body read stops it at once", async () => {
+  const { statusMessage } = await import("../src/sse.ts");
+  const { response, body } = stalledRefusal('{"kind":');
+  const abort = new AbortController();
+  const read = statusMessage(response, abort.signal, 60_000);
+  setTimeout(() => abort.abort(), 10);
+  assert.equal(await read, undefined);
+  assert.equal(body.cancelled, true);
+});

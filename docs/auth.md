@@ -53,10 +53,14 @@ gateway.Handler(gateway.Options{
 })
 ```
 
-- `Principal` resolves the request to an opaque application identity.
+- `Principal` resolves the request to an opaque application identity. Return a `*StreamError` to
+  choose the refusal (`UNAUTHENTICATED`, `UPSTREAM_UNAVAILABLE`); any other error is sent as
+  `UNAUTHENTICATED` without its text.
 - `Authorizer` denies unauthorized scopes before a watch opens and on subsequent checks.
 - `Clients` is a `ClientFor` callback supplying the backend for that identity and target.
-- `Scopes` allowlists targets and resources. A browser cannot supply a raw API-server URL.
+- `Scopes` allowlists targets and resources, or with `AnyResource` leaves resource admission to the
+  API server's RBAC for a backend that acts as the caller. A browser cannot supply a raw API-server
+  URL.
 
 A per-user backend can use the user's bearer token or Kubernetes impersonation. Impersonation
 requires explicit host credentials with impersonation rights. Scope and disclosure policy remain
@@ -76,7 +80,9 @@ options.ReauthorizationTimeout = 5 * time.Second
 ```
 
 Timed checks run per subscriber and pause that subscriber's object delivery. Denial, timeout, policy
-failure or a changed projection terminates only that stream; other subscribers continue. Zero
+failure or a changed projection terminates only that stream; other subscribers continue. A
+SubjectAccessReview that cannot reach the API server ends the stream with a non-terminal
+`UPSTREAM_UNAVAILABLE`, so the client may reconnect once it is back. Zero
 interval keeps cycle-only checks; zero timeout uses 10 seconds. The bound assumes callbacks honor
 context cancellation and sinks do not block indefinitely.
 

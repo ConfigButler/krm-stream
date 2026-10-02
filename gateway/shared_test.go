@@ -411,3 +411,247 @@ func TestUpstreamErrorFansOutAndDoesNotStampede(t *testing.T) {
 		t.Errorf("upstream opens = %d, want 2: five subscribers resyncing at once caused a stampede", up.opens())
 	}
 }
+
+// A shared upstream has no browser to hand its retry to, and each of its subscribers reconnects on
+// its own budget. However many there are, the scope sees one open attempt per backoff period; the
+// rest are told how long to wait.
+func TestSharedBackendBacksOffAnUnavailableUpstream(t *testing.T) {
+	opens := 0
+	up := backendFunc(func() (Watcher, error) {
+		opens++
+		return nil, UpstreamUnavailable("the API server is unavailable", 0)
+	})
+	b := NewSharedBackend(up)
+	now := time.Unix(0, 0)
+	b.now = func() time.Time { return now }
+	scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
+
+	retryAfter := func() int {
+		t.Helper()
+		_, err := b.Watch(t.Context(), scope)
+		var se *StreamError
+		if !errors.As(err, &se) || se.Code != CodeUpstreamUnavailable || se.Terminal {
+			t.Fatalf("Watch() = %v, want UPSTREAM_UNAVAILABLE", err)
+		}
+		if se.RetryAfterMs == nil {
+			return 0
+		}
+		return *se.RetryAfterMs
+	}
+
+	retryAfter()
+	for range 50 { // a reconnect storm within the first second
+		if ms := retryAfter(); ms <= 0 || ms > 1000 {
+			t.Fatalf("retryAfterMs = %d, want the remaining backoff", ms)
+		}
+	}
+	if opens != 1 {
+		t.Fatalf("upstream opens = %d, want 1 during the backoff", opens)
+	}
+
+	now = now.Add(time.Second)
+	retryAfter()
+	if opens != 2 {
+		t.Fatalf("upstream opens = %d, want a second attempt once the backoff expired", opens)
+	}
+	if ms := retryAfter(); ms != 2000 {
+		t.Errorf("retryAfterMs = %d, want the backoff doubled to 2000", ms)
+	}
+}
+
+// dyingWatcher opens fine and then fails at once: through Next, or as a WatchError event.
+type dyingWatcher struct {
+	err     error
+	asEvent bool
+}
+
+func (w dyingWatcher) Next(context.Context) (WatchEvent, error) {
+	if w.asEvent {
+		return WatchEvent{Type: WatchError, Err: w.err}, nil
+	}
+	return WatchEvent{}, w.err
+}
+func (dyingWatcher) Stop() {}
+
+// A watch that opens and then dies of an unavailable upstream is the same outage as one that fails
+// to open, and must be bounded the same way: one upstream attempt per backoff period, however many
+// subscribers reconnect at once, honouring the upstream's hint.
+func TestSharedBackendBacksOffAWatchThatDiesAfterOpening(t *testing.T) {
+	for _, asEvent := range []bool{false, true} {
+		t.Run(map[bool]string{false: "Next error", true: "WatchError event"}[asEvent], func(t *testing.T) {
+			var mu sync.Mutex
+			opens := 0
+			up := backendFunc(func() (Watcher, error) {
+				mu.Lock()
+				opens++
+				mu.Unlock()
+				return dyingWatcher{err: UpstreamUnavailable("the API server is unavailable", 10*time.Second), asEvent: asEvent}, nil
+			})
+			b := NewSharedBackend(up)
+			var clock sync.Mutex
+			now := time.Unix(0, 0)
+			b.now = func() time.Time { clock.Lock(); defer clock.Unlock(); return now }
+			scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
+
+			// What a subscriber's stream loop does: resync in band on a closed watch, and give up on
+			// anything else (the gateway sends it and closes).
+			reconnect := func() *StreamError {
+				for {
+					w, err := b.Watch(t.Context(), scope)
+					if err == nil {
+						for err == nil {
+							var ev WatchEvent
+							ev, err = w.Next(t.Context())
+							if err == nil && ev.Type == WatchError {
+								err = ev.Err
+							}
+						}
+						w.Stop()
+					}
+					var se *StreamError
+					if errors.As(err, &se) && se.Code == CodeUpstreamUnavailable {
+						return se
+					}
+					if !errors.Is(err, ErrWatchClosed) && (se == nil || se.Code != CodeResyncRequired) {
+						t.Errorf("unexpected error: %v", err)
+						return nil
+					}
+				}
+			}
+
+			var wg sync.WaitGroup
+			hints := make(chan int, 100)
+			for range 100 {
+				wg.Go(func() {
+					if se := reconnect(); se != nil && se.RetryAfterMs != nil {
+						hints <- *se.RetryAfterMs
+					}
+				})
+			}
+			wg.Wait()
+			close(hints)
+			if opens != 1 {
+				t.Fatalf("upstream opens = %d, want 1 for 100 concurrent reconnects", opens)
+			}
+			for ms := range hints {
+				if ms <= 0 || ms > 10_000 {
+					t.Fatalf("retryAfterMs = %d, want the upstream's 10s hint or what remains of it", ms)
+				}
+			}
+
+			clock.Lock()
+			now = now.Add(9 * time.Second)
+			clock.Unlock()
+			_ = reconnect()
+			if opens != 1 {
+				t.Fatalf("upstream opens = %d, want the 10s hint honoured", opens)
+			}
+			clock.Lock()
+			now = now.Add(time.Second)
+			clock.Unlock()
+			_ = reconnect()
+			if opens != 2 {
+				t.Fatalf("upstream opens = %d, want one attempt once the hint expired", opens)
+			}
+		})
+	}
+}
+
+// Obtaining a watcher is not recovery; a completed upstream snapshot is. Only then does the backoff
+// reset, so a flapping upstream keeps doubling it.
+func TestSharedBackoffResetsOnlyAfterASnapshot(t *testing.T) {
+	healthy := false
+	up := backendFunc(func() (Watcher, error) {
+		if healthy {
+			return &stubWatcher{events: []WatchEvent{{Type: WatchBookmark, InitialEventsEnd: true}}}, nil
+		}
+		return dyingWatcher{err: UpstreamUnavailable("the API server is unavailable", 0)}, nil
+	})
+	b := NewSharedBackend(up)
+	now := time.Unix(0, 0)
+	b.now = func() time.Time { return now }
+	scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
+	key := scopeKey(scope)
+
+	for i := range 3 {
+		w, err := b.Watch(t.Context(), scope)
+		if err != nil {
+			t.Fatalf("attempt %d: %v", i, err)
+		}
+		for err == nil {
+			_, err = w.Next(t.Context())
+		}
+		w.Stop()
+		b.mu.Lock()
+		delay := b.backoff[key].delay
+		b.mu.Unlock()
+		if want := sharedRetryMin << i; delay != want {
+			t.Fatalf("attempt %d: backoff = %v, want %v: an open that fails at once is not recovery", i, delay, want)
+		}
+		now = now.Add(delay)
+	}
+
+	healthy = true
+	w, err := b.Watch(t.Context(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer w.Stop()
+	if ev := next(t, w); ev.Type != WatchBookmark || !ev.InitialEventsEnd {
+		t.Fatalf("got %+v, want the snapshot boundary", ev)
+	}
+	b.mu.Lock()
+	_, backingOff := b.backoff[key]
+	b.mu.Unlock()
+	if backingOff {
+		t.Error("the backoff survived a completed snapshot")
+	}
+}
+
+// A watch's recovery is reported after it releases its own lock, so it can arrive late: after the
+// watch was forgotten and a replacement failed. That stale report must not erase the replacement's
+// backoff and let the next subscriber reopen the upstream at once.
+func TestAnObsoleteWatchsRecoveryCannotEraseANewerBackoff(t *testing.T) {
+	opens := 0
+	failing := false
+	up := backendFunc(func() (Watcher, error) {
+		opens++
+		if failing {
+			return nil, UpstreamUnavailable("the API server is unavailable", 0)
+		}
+		return &stubWatcher{}, nil // opens, then idles: its recovery is replayed by hand below
+	})
+	b := NewSharedBackend(up)
+	now := time.Unix(0, 0)
+	b.now = func() time.Time { return now }
+	scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
+	key := scopeKey(scope)
+
+	// 1. The old watch is open, and is about to report its recovery.
+	w, err := b.Watch(t.Context(), scope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b.mu.Lock()
+	old := b.scopes[key]
+	b.mu.Unlock()
+
+	// 2. Its last subscriber leaves, so it is forgotten.
+	w.Stop()
+
+	// 3. A replacement fails to open and records a backoff.
+	failing = true
+	if _, err := b.Watch(t.Context(), scope); err == nil {
+		t.Fatal("the replacement opened")
+	}
+
+	// 4. The old watch's delayed recovery arrives.
+	b.recovered(key, old)
+
+	if _, err := b.Watch(t.Context(), scope); err == nil {
+		t.Fatal("a backoff-limited Watch succeeded")
+	}
+	if opens != 2 {
+		t.Errorf("upstream opens = %d, want 2: the stale recovery erased the newer backoff", opens)
+	}
+}

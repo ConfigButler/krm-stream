@@ -176,6 +176,24 @@ type ScopePolicy struct {
 	Targets []string
 	// Resources are the group+resource pairs that may be streamed.
 	Resources []GroupResource
+	// AnyResource leaves resource admission to the upstream's own authorization: any resource the
+	// scope syntax accepts passes, in a namespace or without one. Without one, the upstream decides
+	// what that means — the list of a cluster-scoped resource, or every namespace for a namespaced
+	// one, which Kubernetes RBAC allows only with a cluster-wide grant.
+	//
+	// It is another valid host policy, not a weaker allowlist: a host whose stream endpoint promises
+	// "whatever Kubernetes lets you read", as a `/k8s` proxy does, has deliberately no list to keep.
+	// The target allowlist, the label-selector switch, the refusal of API-server addresses and the
+	// Authorizer all still apply.
+	//
+	// What it does NOT do is check that the stream runs as the caller. That is the host's obligation,
+	// in its ClientFor, and no type check here could prove it: a kube.Backend can carry a service
+	// account's client, and a wrapper can hide a SharedBackend. With either, AnyResource streams every
+	// resource that identity can read to everyone your Authorizer admits. Use it only with a backend
+	// built from the caller's own credential.
+	//
+	// Setting both AnyResource and Resources is refused: Handler panics, and Validate admits nothing.
+	AnyResource bool
 	// AllowLabelSelector permits a caller to narrow an already-allowed scope with Kubernetes label
 	// selector syntax. The zero value refuses selectors rather than silently expanding the supported
 	// request surface. A host that enables it should still constrain selector complexity at its edge.
@@ -211,6 +229,12 @@ func (p ScopePolicy) Validate(s Scope) error {
 	}
 	if !contains(p.Targets, s.Target) {
 		return ScopeInvalid("target is not allowlisted: " + quoteOrEmpty(s.Target))
+	}
+	if p.AnyResource {
+		if len(p.Resources) > 0 {
+			return &StreamError{Code: CodeInternal, Terminal: true, Message: "scope policy sets both Resources and AnyResource"}
+		}
+		return nil
 	}
 	for _, gr := range p.Resources {
 		if gr.Group != s.Group || gr.Resource != s.Resource {
