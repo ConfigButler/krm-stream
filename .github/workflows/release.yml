@@ -107,5 +107,5 @@ jobs:
       - name: publish the official package
         if: steps.artifact.outputs.needed == 'true'
         env:
-          TARBALL: ${{ steps.artifact.outputs.tarball }}
-        run: npm publish "$TARBALL" --provenance --access public
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: node .github/scripts/release.mjs publish

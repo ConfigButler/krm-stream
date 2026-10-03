@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
 import { execFileSync } from 'node:child_process';
 import { appendFileSync, readFileSync } from 'node:fs';
 import { pathToFileURL } from 'node:url';
@@ -25,7 +26,7 @@ export function validateRelease(version, shas, manifest, pkg) {
 // Keep the outbound URL constant: manifest and workflow-input data stay local.
 export async function registryMetadata(fetcher = fetch) {
   const response = await fetcher('https://registry.npmjs.org/@configbutler%2Fkrm-stream', {
-    headers: { Accept: 'application/vnd.npm.install-v1+json' },
+    headers: { Accept: 'application/vnd.npm.install-v1+json', 'Cache-Control': 'no-cache' },
     signal: AbortSignal.timeout(30_000),
   });
   if (response.status === 404) return null;
@@ -63,6 +64,32 @@ export function validatePackage(pkg, version) {
   assert.equal(pkg.version, version, 'tarball version disagrees with release');
 }
 
+// A registry read may lag a successful upload. Only recover npm's explicit immutable-version
+// rejection, and only when the registry confirms exactly the validated artifact's bytes.
+export async function publishWithRecovery({ version, integrity, publish, fetcher = fetch,
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)) }) {
+  releaseTags(version);
+  assert.match(integrity, /^sha512-[A-Za-z0-9+/]+={0,2}$/);
+  try {
+    await publish();
+    return 'published';
+  } catch (error) {
+    const detail = `${error.stderr ?? ''}\n${error.stdout ?? ''}`;
+    if (!detail.includes(`You cannot publish over the previously published versions: ${version}.`)) throw error;
+    for (let attempt = 0; attempt < 5; attempt++) {
+      if (attempt) await wait(2_000);
+      const metadata = await registryMetadata(fetcher);
+      const existing = metadata?.versions[version];
+      if (!existing) continue;
+      assert.equal(existing.version, version);
+      assert.equal(existing.dist?.integrity, integrity,
+        'published version does not match the validated tarball');
+      return 'already published';
+    }
+    throw error;
+  }
+}
+
 const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const output = (key, value) => appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
 
@@ -95,8 +122,24 @@ async function main() {
     // A retry after npm accepted the upload is successful without another publish attempt.
     output('needed', await needsPublish(version));
     output('tarball', tarball);
+  } else if (process.argv[2] === 'publish') {
+    const tarball = `/tmp/npm/configbutler-krm-stream-${version}.tgz`;
+    const pkg = JSON.parse(execFileSync('tar', ['-xOf', tarball, 'package/package.json'], { encoding: 'utf8' }));
+    validatePackage(pkg, version);
+    const integrity = `sha512-${createHash('sha512').update(readFileSync(tarball)).digest('base64')}`;
+    const result = await publishWithRecovery({ version, integrity, publish: () => {
+      try {
+        const log = execFileSync('npm', ['publish', tarball, '--provenance', '--access', 'public'], { encoding: 'utf8' });
+        process.stdout.write(log);
+      } catch (error) {
+        process.stdout.write(error.stdout ?? '');
+        process.stderr.write(error.stderr ?? '');
+        throw error;
+      }
+    } });
+    console.log(`${packageName}@${version}: ${result}.`);
   } else {
-    throw new Error('usage: release.mjs resolve|verify');
+    throw new Error('usage: release.mjs resolve|verify|publish');
   }
 }
 
