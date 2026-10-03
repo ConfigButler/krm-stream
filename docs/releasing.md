@@ -1,5 +1,18 @@
 # Releasing
 
+If npm rejects an upload because the version already exists, the release job checks registry
+metadata again for a bounded period. It succeeds only when that version's SHA-512 integrity matches
+the validated tarball. Other publish failures, unavailable metadata and mismatched artifacts still
+fail. Registry reads request cache revalidation.
+
+The 0.6.0 release demonstrated two distinct delays/failures: its first release attempt failed when
+the Go checksum database returned `unknown revision gateway/v0.6.0` shortly after tagging. A rerun
+later passed and published npm 0.6.0. A subsequent push attempted the same npm version and was
+rejected as a duplicate. Do not bypass Go checksum verification or bump the version to recover these
+cases; verify the public release state first. See the
+[release run, including its attempts](https://github.com/ConfigButler/krm-stream/actions/runs/37061239061)
+and the [duplicate upload failure](https://github.com/ConfigButler/krm-stream/actions/runs/37065350963).
+
 Releases are generated from conventional commits on `main`. Release Please opens a release pull
 request with version bumps and changelog entries; merging that pull request creates the release.
 Nothing in it needs editing by hand.
