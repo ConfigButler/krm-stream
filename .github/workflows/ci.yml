@@ -185,6 +185,7 @@ jobs:
   consumable:
     name: a stranger can `go get` this
     runs-on: ubuntu-latest
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -298,7 +299,22 @@ jobs:
 
           func main() {}
           GO
-          go get "${modules[@]}"
+          # The checksum service can briefly report a new tag as unknown even though GitHub has it.
+          # Allow its documented 30-minute cache window, only for this release's missing revisions.
+          attempt=0
+          until go get "${modules[@]}" 2>go-get.log; do
+            cat go-get.log >&2
+            if [ -z "$RELEASE_VERSION" ] || [ "$attempt" -ge 30 ] \
+              || ! grep -Fq 'reading https://sum.golang.org/lookup/' go-get.log \
+              || ! grep -Fq -e "unknown revision gateway/v${RELEASE_VERSION}" \
+                -e "unknown revision gateway/kube/v${RELEASE_VERSION}" go-get.log; then
+              exit 1
+            fi
+            attempt=$((attempt + 1))
+            echo "::notice::waiting for Go checksum service to see v${RELEASE_VERSION} (${attempt}/30); retrying in 60 seconds"
+            sleep 60
+          done
+          cat go-get.log >&2
           go build ./...
           go list -m github.com/ConfigButler/krm-stream/gateway github.com/ConfigButler/krm-stream/gateway/kube
           echo "a stranger can go get and build the Kubernetes adapter at ${revision}."

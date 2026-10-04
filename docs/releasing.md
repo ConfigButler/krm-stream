@@ -99,7 +99,9 @@ npm version is published. Then:
   SHA-512 integrity matches the validated tarball. Other publish failures, unavailable metadata and
   mismatched artifacts still fail.
 - **The Go checksum database does not know the new tag yet** (`unknown revision gateway/vX.Y.Z`
-  shortly after tagging). Wait and rerun; do not bypass checksum verification.
+  shortly after tagging). Release CI retries this error once a minute for up to 30 minutes, covering
+  the [Go module mirror's cache window](https://sum.golang.org/). Checksum verification stays enabled;
+  other errors fail immediately. If the delay outlasts that window, wait and rerun the failed job.
 - **The tarball has expired.** Tarballs are kept for 30 days, matching
   [GitHub's job retry window](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).
   An explicit recovery run rebuilds and validates once:
