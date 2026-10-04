@@ -11,6 +11,13 @@ observations and tested shared-host composition. That work can support the autho
 and continuation measurements below, but adds no dependency or acceptance gate to this plan.
 Hosts may demonstrate the existing requirements with their own bounded sinks and instrumentation.
 
+[Proposal 0009](0009-stream-and-editor-separation.md) separates browser stream consumption from the
+optional editor layer. It owns that API and package-boundary work; this plan retains the existing
+behavioral follow-ups and acceptance criteria. Priorities 2–3 below form the editor track, and
+priority 4 forms the stream track. Deliver them independently. Complete the browser separation
+before expanding the editor's public API; it does not block gateway fixes, real-API evidence or
+upstream continuation.
+
 ## Baseline and order
 
 Use the [adoption guide](../adopting.md), [saving guide](../saving.md) and
