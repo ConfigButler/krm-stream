@@ -329,6 +329,103 @@ test("even a thrown undefined is kept, not mistaken for a clean end", async () =
   assert.equal(handle.state.status, "closed");
 });
 
+// A subscriber or onError that throws is the host's bug, exactly like a consumer that throws. Before,
+// one thrown during a connection read as a network failure and retried until the budget ran out — a
+// broken render function became a reconnect storm ending in `exhausted`.
+test("a subscriber that throws during a connection stops the stream without retrying", async () => {
+  const boom = new Error("render failed");
+  let calls = 0;
+  let body!: { cancelled: boolean };
+  const handle = connectResourceStream("/stream", ignore, {
+    retryDelayMs: 0,
+    fetch: async () => {
+      calls++;
+      const opened = openBody(
+        sse([
+          { seq: 1, type: "reset" },
+          { seq: 2, type: "synced" },
+        ]),
+      );
+      body = opened.body;
+      return opened.response;
+    },
+  });
+  handle.subscribe((state) => {
+    if (state.status === "live") throw boom;
+  });
+  const others = statuses(handle);
+  await assert.rejects(handle.closed, (error) => error === boom);
+  assert.equal(calls, 1, "a host bug is not retried");
+  assert.equal(body.cancelled, true);
+  assert.deepEqual(others, ["connecting", "syncing", "syncing", "live", "closed"], "every subscriber still hears it");
+  assert.equal(handle.state.status, "closed");
+});
+
+test("a subscriber that throws between connections never opens another", async () => {
+  for (const at of ["connecting", "retrying"] as const) {
+    const boom = new Error(`threw on ${at}`);
+    let calls = 0;
+    const handle = connectResourceStream("/stream", ignore, {
+      retryDelayMs: 0,
+      fetch: async () => {
+        calls++;
+        throw new Error("offline");
+      },
+    });
+    handle.subscribe((state) => {
+      if (state.status === at) throw boom;
+    });
+    const states = statuses(handle);
+    await assert.rejects(handle.closed, (error) => error === boom);
+    assert.equal(calls, at === "connecting" ? 0 : 1, at);
+    assert.equal(states.at(-1), "closed", at);
+  }
+});
+
+test("a live republished by the health timer that throws ends the stream", async () => {
+  const boom = new Error("threw on the health reset");
+  let body!: { cancelled: boolean };
+  const handle = connectResourceStream("/stream", ignore, {
+    healthyResetMs: 5,
+    fetch: async () => {
+      const opened = openBody(
+        sse([
+          { seq: 1, type: "reset" },
+          { seq: 2, type: "synced" },
+        ]),
+      );
+      body = opened.body;
+      return opened.response;
+    },
+  });
+  let lives = 0;
+  handle.subscribe((state) => {
+    if (state.status === "live" && ++lives === 2) throw boom;
+  });
+  await assert.rejects(handle.closed, (error) => error === boom);
+  assert.equal(body.cancelled, true);
+  assert.equal(handle.state.status, "closed");
+});
+
+test("onError that throws stops the stream instead of retrying", async () => {
+  const boom = new Error("could not show the error");
+  let calls = 0;
+  const handle = connectResourceStream("/stream", ignore, {
+    retryDelayMs: 0,
+    onError: () => {
+      throw boom;
+    },
+    fetch: async () => {
+      calls++;
+      return new Response(null, { status: 503 });
+    },
+  });
+  const states = statuses(handle);
+  await assert.rejects(handle.closed, (error) => error === boom);
+  assert.equal(calls, 1);
+  assert.deepEqual(states, ["connecting", "closed"]);
+});
+
 test("a matching or absent protocol header is accepted", async () => {
   for (const headers of [{ "X-KRM-Stream-Protocol": "1" }, {}] as Record<string, string>[]) {
     const seen: string[] = [];
