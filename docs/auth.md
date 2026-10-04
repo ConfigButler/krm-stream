@@ -8,11 +8,14 @@ host's scope and projection decisions. How Kubernetes checks a caller depends on
 | Per-user | The caller's token or an impersonated user | Resolve the caller, authorize the scope and supply their client. |
 | Shared | One service identity | Authorize every subscriber before serving cached objects; use `kube.SubjectAccessReviewAuthorizer` for Kubernetes RBAC decisions. |
 
+Prefer a per-user backend: Kubernetes RBAC is then the boundary by construction. The wiring for both
+is in [adopting](adopting.md).
+
 ## Browser sessions
 
-Use a same-origin session cookie for browser applications. The host handles OIDC with its identity
-provider, keeps the tokens server-side and issues a secure session cookie. The managed fetch connector
-sends that cookie; native `EventSource` can use the same route.
+Use a same-origin session cookie. The host handles OIDC with its identity provider, keeps the tokens
+server-side and issues a secure session cookie. The managed fetch connector sends that cookie; native
+`EventSource` can use the same route.
 
 ```mermaid
 sequenceDiagram
@@ -35,109 +38,128 @@ sequenceDiagram
     S-->>B: Projected SSE stream or terminal error
 ```
 
-Native `EventSource` cannot send an `Authorization` header. Use `connectManagedResourceStream` with
-explicit headers for an intentionally token-bearing client. The host must enforce trusted HTTPS
-endpoints and redirect handling; the connector delegates those transport decisions to fetch.
-See [adoption](adopting.md#3-browser-client).
+A token-bearing client uses `connectManagedResourceStream` with explicit headers, because native
+`EventSource` cannot send an `Authorization` header. The host must then enforce trusted HTTPS
+endpoints and redirect handling; see [adoption](adopting.md#3-connect-the-browser).
 
 ## Host seams
-
-```go
-gateway.Handler(gateway.Options{
-    Principal: sessionUser,
-    Authorizer: authorizeScope,
-    Clients: func(_ context.Context, target string, p gateway.Principal) (gateway.Backend, error) {
-        return kube.NewBackendForConfig(restConfigFor(target, p.(*User)))
-    },
-    Scopes: scopePolicy,
-})
-```
 
 - `Principal` resolves the request to an opaque application identity. Return a `*StreamError` to
   choose the refusal (`UNAUTHENTICATED`, `UPSTREAM_UNAVAILABLE`); any other error is sent as
   `UNAUTHENTICATED` without its text.
-- `Authorizer` denies unauthorized scopes before a watch opens and on subsequent checks.
-- `Clients` is a `ClientFor` callback supplying the backend for that identity and target.
-  `kube.NewBackendForConfig` builds a client that refuses redirects, since client-go would
-  otherwise carry the caller's token to wherever a redirect points. A host that builds its own
-  dynamic client for `kube.NewBackend` must build it on `kube.HTTPClientFor(cfg)` for the same
-  reason.
+- `Authorizer` denies unauthorized scopes before a watch opens and on every later check.
+- `Clients` supplies the backend for that identity and target. Build it with
+  `kube.NewBackendForConfig`, which refuses redirects: client-go would otherwise carry the caller's
+  token to wherever a redirect points. A dynamic client for `kube.NewBackend` must be built on
+  `kube.HTTPClientFor(cfg)` for the same reason.
 - `Scopes` allowlists targets and resources, or with `AnyResource` leaves resource admission to the
-  API server's RBAC for a backend that acts as the caller. A browser cannot supply a raw API-server
-  URL.
+  API server's RBAC for a backend that acts as the caller. A browser cannot supply an API-server URL.
 
-A per-user backend can use the user's bearer token or Kubernetes impersonation. Impersonation
-requires explicit host credentials with impersonation rights. Scope and disclosure policy remain
-host-owned in either case; a projection does not grant permission to read or write a resource.
-Redaction is an additional disclosure restriction for an authorized caller, never a substitute for
-verifying that caller may read the resource.
+A per-user backend can use the user's bearer token or Kubernetes impersonation; impersonation needs
+host credentials with impersonation rights. A projection does not grant permission to read or write a
+resource: redaction restricts disclosure to a caller who is already authorized.
 
-## Long streams, short tokens
+## Session validity and timed checks
 
-The gateway rechecks authorization and projection policy on every snapshot cycle and calls `Clients`
-again so the host can provide refreshing credentials. Cycle-only checks do not bound revocation time
-on a quiet stream. Set a timed recheck when the host needs that bound:
+The gateway rechecks authorization and projection policy on every snapshot cycle, and calls `Clients`
+again so the host can supply refreshed credentials. Checks use the principal captured when the stream
+opened, so resolve current session and account validity inside the `Authorizer`. End the request when
+the session or token expires: the [shared-host example](../gateway/kube/examples/sharedstream/handler.go)
+puts the earlier of the two on the request context as a deadline.
+
+A quiet stream may go a long time without a new cycle. To bound how long a revoked caller keeps it,
+recheck on a timer:
 
 ```go
-options.ReauthorizationInterval = 30 * time.Second
-options.ReauthorizationTimeout = 5 * time.Second
+options.ReauthorizationInterval = 30 * time.Second // how often each subscriber is rechecked
+options.ReauthorizationTimeout = 5 * time.Second   // budget for each periodic check's callbacks
+options.WriteTimeout = 10 * time.Second            // required over HTTP with timed checks
 ```
 
-Timed checks run per subscriber and pause that subscriber's object delivery. Denial, timeout, policy
-failure or a changed projection terminates only that stream; other subscribers continue. A
-SubjectAccessReview that cannot reach the API server ends the stream with a non-terminal
-`UPSTREAM_UNAVAILABLE`, so the client may reconnect once it is back. Zero
-interval keeps cycle-only checks; zero timeout uses 10 seconds. The bound assumes callbacks honor
-context cancellation and sinks do not block indefinitely.
+Each subscriber is checked on its own timer. Denial, timeout, policy failure or a changed projection
+ends only that stream. A SubjectAccessReview that cannot reach the API server ends it with a
+non-terminal `UPSTREAM_UNAVAILABLE`, so the client reconnects later. Zero interval keeps cycle-only
+checks; zero timeout uses 10 seconds. Timed checks do not call `Clients`.
 
-Checks use the principal captured at stream open. Resolve current session/account validity inside the
-host authorizer. Timed checks do not invoke `Clients`; credential refresh remains per snapshot cycle
-or inside the supplied client.
+A timed check shares the subscriber's delivery gate: while it runs, that subscriber receives no
+objects, and it waits for the delivery in progress. A write to a browser that has stopped reading
+blocks once the buffers fill, so HTTP serving requires a positive `WriteTimeout` with timed checks.
+`Handler` panics at construction without one, and `ServeStream` and `ServeStreamProjection` panic
+before writing. Test that your mounted middleware supports flushing and write deadlines with the
+[capability-check recipe](../gateway/kube/examples/sharedstream/README.md#middleware-capability-test).
+`Stream` and `StreamProjection` allow timed checks with any sink; the host bounds that sink's I/O.
 
-With 200 subscribers, a 30-second interval adds roughly 13 SubjectAccessReviews per second (list and
-watch per subscriber), plus opening/cycle checks. Choose intervals for the host's revocation budget
-and API-server capacity; checks are not cached across identities.
+Each check costs the host's authorizer a call. With `SubjectAccessReviewAuthorizer`, 200 subscribers
+on a 30-second interval add about 13 reviews per second (list and watch each), plus opening and
+cycle checks. Choose the interval for both your revocation budget and API-server capacity.
+
+### Revocation budget
+
+The time from withdrawing access until a stream stops delivering is made of these parts:
+
+| Part | Bounded by | What it covers |
+|---|---|---|
+| Decision freshness | the host | Until the authorizer can see the change: session stores, group sync, any decision cache. |
+| Timer | `ReauthorizationInterval` | Up to one interval until that subscriber's next check. |
+| Gate wait | not bounded as a whole | Waits for current delivery; `WriteTimeout` bounds individual HTTP writes, not total gate waiting. |
+| Check | `ReauthorizationTimeout` | Starts once the check holds the gate; covers the `Authorizer` and projection policy. |
+| Termination | `WriteTimeout`, then the host | The refusal is written as the terminal frame; the request then returns and releases its subscription. |
+
+Measure the total revocation latency for your deployment under its intended load.
+
+Revocation ends three things at different times. New object delivery stops when a denying check holds
+the gate. The request returns once the terminal frame is written or fails. The browser sees the
+refusal only if the transport delivers it; a reader that stopped reading may never see it. Bytes
+already written to the socket or buffered by a proxy cannot be recalled.
+
+`ReauthorizationTimeout` covers periodic checks only. Opening and snapshot-cycle checks run under the
+request's context, so give host callbacks their own deadlines, but not a short deadline on the whole
+healthy stream.
 
 ## Shared-watch authorization
 
 [`SharedBackend`](../gateway/shared.go) opens one upstream watch per scope as one service identity.
-The host's `Authorizer` is then the only access check between a subscriber and the cached objects:
-an overly permissive authorizer exposes the service identity's data to that subscriber. This is why
-sharing is opt-in. Every subscriber must be authorized independently before receiving the cache:
+The host's `Authorizer` is then the only check between a subscriber and the cached objects, which is
+why sharing is opt-in. Authorize every subscriber with `kube.SubjectAccessReviewAuthorizer`, so
+Kubernetes still decides whether that caller may list and watch the scope.
 
-```go
-shared := gateway.NewSharedBackend(serviceAccountBackend)
-opts.Authorizer = kube.SubjectAccessReviewAuthorizer(clientset, subjectOf)
-opts.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
-```
+The adapter refuses an incomplete review, and an explicit `Denied` wins over `Allowed`. The service
+account needs `create` on `subjectaccessreviews` (`system:auth-delegator`), not impersonation rights.
+These are SubjectAccessReview requests, not SelfSubjectAccessReview requests. Opening, cycle and timed
+checks use the same authorizer.
 
-The [`SubjectAccessReviewAuthorizer`](../gateway/kube/authz.go) adapter delegates the decision to
-Kubernetes. `subjectOf` supplies the API-server-resolved username, groups, UID and extras. The adapter checks
-both `list` and `watch`. An incomplete review is refused, and an explicit `Denied` wins over
-`Allowed`.
+### What the SubjectAccessReview asks
 
-The service account needs `create` on `subjectaccessreviews`; `system:auth-delegator` supplies that
-permission. Reviews do not require impersonation rights. These are SubjectAccessReview requests,
-not SelfSubjectAccessReview requests. Cycle and timed checks use the same authorizer.
+For each check the adapter sends one review per verb, `list` then `watch`, and stops at the first
+refusal or failure:
+
+| Field | Value |
+|---|---|
+| `user`, `groups`, `uid`, `extra` | The `kube.Subject` returned by the host's `SubjectFor`, unchanged. |
+| `resourceAttributes.verb` | `list`, then `watch`. |
+| `resourceAttributes.group`, `.version`, `.resource` | Copied from the scope. |
+| `resourceAttributes.namespace`, `.name` | Copied from the scope. |
+
+Selectors are omitted from the authorization request: the label selector, any field selector, and
+the subresource are not sent, so a selector does not narrow the question. The scope's target and the
+stream's projection are not review attributes; the clientset given to the adapter decides which API
+server receives the review. This describes the adapter's request, not how every Kubernetes authorizer
+evaluates it.
+
+A host that caches decisions must:
+
+- key on the complete subject (user, groups, UID and extra) and the complete request, including the
+  verb;
+- keep decisions from different API servers or targets apart;
+- never let a reused review skip its own checks of session validity or projection policy.
+
+Changing these inputs is a compatibility change for caching hosts, and is announced in the release
+notes. The library does not provide a decision cache.
+
+The [shared ConfigMap host](../gateway/kube/examples/sharedstream/README.md) is a tested composition
+of participant identity resolution, service-account reviews, session expiry and bounded HTTP
+delivery. Its identity helper is an example, not a library API.
 
 ## Save boundary
 
-The host owns writes, CSRF protection, audit and write authorization. Before a merge PATCH, call
-`gateway.ValidateMergePatch` with the effective projection and current object, and include the
-captured UID and resourceVersion preconditions. Project any resource returned to the browser.
-See [saving](saving.md) for the complete flow.
-
-## Tested shared-host composition
-
-The [shared ConfigMap host](../gateway/kube/examples/sharedstream/README.md) demonstrates a local
-SelfSubjectReview helper using participant credentials, service-account SARs and data access,
-fixed scope, session/token expiry and bounded HTTP delivery. Identity resolution is an example,
-not a public library authentication API. It does not re-resolve identity on every timed check.
-
-`ReauthorizationTimeout` applies to periodic callbacks after acquiring the delivery gate. Opening
-and cycle authorization need their own host callback deadlines. Do not put a short callback deadline
-on the entire healthy stream. Write bounds limit in-flight HTTP I/O, not all gate waiting, backend
-operations or callback work; declare and measure the total revocation budget under the intended load.
-For 200 allowed participants, opening can issue 400 SARs plus 200 SSRs. Timers can align, recovery
-adds checks, and client-side throttling consumes callback budgets. Neither the example's rate settings
-nor Voter's reported rehearsal results are production defaults or supported-version evidence.
+The host owns writes, CSRF protection, audit and write authorization. See [saving](saving.md).

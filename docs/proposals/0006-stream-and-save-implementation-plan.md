@@ -144,7 +144,7 @@ separately stall an authorization callback until its context expires. Pass only 
 stream terminates within the declared closure limit, measured from revocation/session expiry or
 the start of the stalled check, respectively. Verify callbacks honor the configured check deadline
 and sinks have bounded completion times. Exercise quiet and active streams; cycle-only checks cannot
-meet a bounded quiet-stream revocation target. See [authorization lifecycle](../auth.md#long-streams-short-tokens)
+meet a bounded quiet-stream revocation target. See [authorization lifecycle](../auth.md#session-validity-and-timed-checks)
 for configuration and host responsibilities.
 
 Version-only events, independent content/delivery switches, downstream replay, write tickets,

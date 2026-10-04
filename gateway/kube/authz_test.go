@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -200,5 +201,99 @@ func TestAThrottledReviewKeepsItsRetryHint(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("want %s in:\n%s", want, body)
 		}
+	}
+}
+
+// The review's inputs are a contract: a host that caches decisions keys on exactly them, and a later
+// version that sent another attribute — a label selector, say — would make such a key wrong. So this
+// pins the WHOLE request, field by field, for a named scope and for a scope carrying a selector. A
+// change here is a change hosts must hear about in the release notes.
+func TestSubjectAccessReviewSendsExactlyTheDocumentedAttributes(t *testing.T) {
+	subject := kube.Subject{
+		User:   "alice@example.com",
+		Groups: []string{"devs", "system:authenticated"},
+		UID:    "4b1d-alice",
+		Extra:  map[string]authzv1.ExtraValue{"scopes.example.com/tenant": {"blue"}},
+	}
+	subjectFor := func(gateway.Principal) (kube.Subject, error) { return subject, nil }
+
+	for name, tc := range map[string]struct {
+		scope gateway.Scope
+		want  authzv1.ResourceAttributes // without its verb
+	}{
+		"a named object in a group": {
+			scope: gateway.Scope{Target: "production", Group: "apps", Version: "v1", Resource: "deployments", Namespace: "app", Name: "web"},
+			want:  authzv1.ResourceAttributes{Group: "apps", Version: "v1", Resource: "deployments", Namespace: "app", Name: "web"},
+		},
+		"a collection narrowed by a label selector": {
+			scope: gateway.Scope{Target: "production", Version: "v1", Resource: "configmaps", Namespace: "app", LabelSelector: "tier=web"},
+			// Selectors are omitted from the authorization request.
+			want: authzv1.ResourceAttributes{Version: "v1", Resource: "configmaps", Namespace: "app"},
+		},
+		"every namespace": {
+			scope: gateway.Scope{Version: "v1", Resource: "configmaps"},
+			want:  authzv1.ResourceAttributes{Version: "v1", Resource: "configmaps"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cs, asked := reviewer(func(*authzv1.SubjectAccessReview) (bool, bool) { return true, false })
+			if err := kube.SubjectAccessReviewAuthorizer(cs, subjectFor).Authorize(t.Context(), "alice", tc.scope); err != nil {
+				t.Fatalf("Authorize: %v", err)
+			}
+			if len(*asked) != 2 {
+				t.Fatalf("asked %d reviews, want exactly two: list, then watch", len(*asked))
+			}
+			for i, verb := range []string{"list", "watch"} {
+				ra := tc.want
+				ra.Verb = verb
+				want := authzv1.SubjectAccessReviewSpec{
+					User: subject.User, Groups: subject.Groups, UID: subject.UID, Extra: subject.Extra,
+					ResourceAttributes: &ra,
+				}
+				got := (*asked)[i].Spec
+				if !reflect.DeepEqual(got, want) {
+					t.Errorf("review %d:\n got %+v\nwant %+v", i, got, want)
+				}
+				// Spelled out, so the omissions read as deliberate rather than incidental.
+				if got.ResourceAttributes.LabelSelector != nil || got.ResourceAttributes.FieldSelector != nil {
+					t.Errorf("review %d carried a selector: %+v", i, got.ResourceAttributes)
+				}
+				if got.ResourceAttributes.Subresource != "" || got.NonResourceAttributes != nil {
+					t.Errorf("review %d asked about a subresource or a non-resource URL", i)
+				}
+			}
+		})
+	}
+}
+
+// The adapter stops at the first refusal or failure: a caller refused `list` is never asked about
+// `watch`, and the error names the refused verb.
+func TestSubjectAccessReviewStopsAtTheFirstRefusal(t *testing.T) {
+	for name, fail := range map[string]func(*authzv1.SubjectAccessReview) (bool, bool, error){
+		"refused": func(*authzv1.SubjectAccessReview) (bool, bool, error) { return false, false, nil },
+		"failed":  func(*authzv1.SubjectAccessReview) (bool, bool, error) { return false, false, errors.New("unreachable") },
+	} {
+		t.Run(name, func(t *testing.T) {
+			cs := fake.NewSimpleClientset()
+			var verbs []string
+			cs.PrependReactor("create", "subjectaccessreviews",
+				func(action k8stesting.Action) (bool, runtime.Object, error) {
+					sar, _ := action.(k8stesting.CreateAction).GetObject().(*authzv1.SubjectAccessReview)
+					verbs = append(verbs, sar.Spec.ResourceAttributes.Verb)
+					allowed, denied, err := fail(sar)
+					if err != nil {
+						return true, nil, err
+					}
+					sar.Status = authzv1.SubjectAccessReviewStatus{Allowed: allowed, Denied: denied}
+					return true, sar, nil
+				})
+			err := kube.SubjectAccessReviewAuthorizer(cs, subjectOf).Authorize(t.Context(), alice, configmapScope)
+			if err == nil || !strings.Contains(err.Error(), "list") {
+				t.Fatalf("err = %v, want a refusal naming list", err)
+			}
+			if !reflect.DeepEqual(verbs, []string{"list"}) {
+				t.Errorf("asked about %v, want only list", verbs)
+			}
+		})
 	}
 }
