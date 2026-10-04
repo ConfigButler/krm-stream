@@ -52,15 +52,18 @@ The object a Kubernetes write returns is a *raw* object: `managedFields`, the la
 `status`, and the Secret values your projection withholds. Returning it would hand the browser,
 through your save endpoint, exactly what the stream refuses to send.
 
-Answer 204 instead. The write comes back down the stream as an ordinary `modified` event: projected,
-redacted and three-way merged into the draft the person is still holding. Dirty state is derived from
-`draft` versus `server`, so there is nothing to clear or adopt.
+Answer 204 instead. When the write changes the projected view, it comes back down the stream as an
+ordinary `modified` event: projected, redacted and three-way merged into the draft the person is
+still holding. Dirty state is derived from `draft` versus `server`, so there is nothing to clear or
+adopt. A write that leaves the projected view unchanged (a mutating admission webhook can restore a
+patched field, for example) produces no event; if no echo arrives, reconcile with a guarded projected
+GET, as [on 409](#on-409-reconcile-and-save-again), before treating the draft as saved.
 
 A **receipt-only HTTP 200** is also valid: define and validate a receipt schema containing only
 acknowledgment fields, and keep it out of the resource store. The example editor accepts any
-successful status but does not parse a receipt; add that parsing in the host if you need it. For a Git-backed workflow, Kubernetes
-write acceptance, CommitRequest acceptance and an observed Git commit are separate milestones; a
-receipt must not imply all three.
+successful status but does not parse a receipt; add that parsing in the host if you need it. For a
+Git-backed workflow, Kubernetes write acceptance, CommitRequest acceptance and an observed Git commit
+are separate milestones; a receipt must not imply all three.
 
 ## On 409, reconcile and save again
 
