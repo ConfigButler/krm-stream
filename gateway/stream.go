@@ -99,8 +99,14 @@ type Gateway struct {
 
 	// ReauthorizationInterval rechecks each subscriber independently, even on quiet streams.
 	// Zero disables timed checks; snapshot cycles always reauthorize.
+	//
+	// A timed check waits for the subscriber's delivery in progress, so it can only be as prompt as
+	// the sink lets it be. ServeStream and ServeStreamProjection therefore require a positive
+	// WriteTimeout with it, and panic before writing anything otherwise. Stream and StreamProjection
+	// do not: their sink is the host's, and the host must bound its I/O.
 	ReauthorizationInterval time.Duration
-	// ReauthorizationTimeout bounds a timed check. Zero defaults to 10 seconds.
+	// ReauthorizationTimeout bounds each timed check's Authorizer and projection-policy callbacks,
+	// starting once the check holds the subscriber's delivery gate. Zero defaults to 10 seconds.
 	// Authorizers and projection policies must honor context cancellation.
 	ReauthorizationTimeout time.Duration
 	// now is the clock that decides whether a cycle lasted long enough to count. Nil uses time.Now.

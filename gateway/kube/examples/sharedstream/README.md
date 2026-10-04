@@ -103,7 +103,9 @@ contention to the API server.
 Record real runs in `docs/facts/` with commit, versions, protocols/proxy, workload, limits, commands,
 results and unrun cases. The 30-second recheck, five-second check and 60-second closure target is
 not a library guarantee. Gate waiting, in-flight I/O, callback execution and cleanup contribute to
-revocation time. A write timeout does not bound backend opening or uncooperative callbacks.
+revocation time; see the [revocation budget](../../../../docs/auth.md#revocation-budget). The
+five-second `WriteTimeout` is required by the timed checks, and does not bound backend opening or
+uncooperative callbacks.
 
 A shared watch still transfers a snapshot to each client and consumes per-client memory, connection
 and browser work. Measure sustained load, peak memory/CPU, snapshot bytes and latency distributions

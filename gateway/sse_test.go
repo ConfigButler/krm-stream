@@ -175,6 +175,13 @@ func TestSinkShortWriteAndFailedTerminalDelivery(t *testing.T) {
 
 // Exhaust real socket / HTTP2 stream flow-control buffers. The healthy HTTP2
 // subscriber shares the same client transport and connection with the stalled one.
+//
+// The revocation case is the field report's blocked reader: a timed check cannot run while the
+// stalled write holds the delivery gate, so the write timeout — now required alongside timed checks
+// — is what ends it. Each case must end the stalled request within testBudget and release its shared
+// subscription, while the healthy subscriber keeps receiving. Assumptions: the authorizer answers at
+// once, and scheduling under the race detector stays within the allowance. testBudget is a test
+// tolerance, not a published production guarantee (see docs/auth.md, Revocation budget).
 func TestBlockedHTTPSubscriberReleasesSharedWatch(t *testing.T) {
 	for _, h2 := range []bool{false, true} {
 		for _, trigger := range []string{"write-timeout", "expiry", "revocation"} {
@@ -317,7 +324,26 @@ func TestBlockedHTTPSubscriberReleasesSharedWatch(t *testing.T) {
 					revoked.Store(true)
 				}
 				waitTransport(t, slowDone)
-				t.Logf("%s to slow handler return: %s (write budget %s; 8s test tolerance)", trigger, time.Since(start), g.WriteTimeout)
+				elapsed := time.Since(start)
+				// Timer, then a gate wait of at most one write timeout, then a check of at most the
+				// check timeout, plus a scheduling allowance for a loaded CI runner.
+				testBudget := g.ReauthorizationInterval + g.WriteTimeout + g.ReauthorizationTimeout + 2*time.Second
+				t.Logf("%s to slow handler return: %s (write timeout %s; test budget %s)", trigger, elapsed, g.WriteTimeout, testBudget)
+				if elapsed > testBudget {
+					t.Fatalf("the stalled request took %s to end, over the %s test budget", elapsed, testBudget)
+				}
+				// Its subscription is released by the time its handler returns; the healthy one's is not.
+				shared.mu.Lock()
+				remaining := -1
+				if ss := shared.scopes[scopeKey(sharedScopeUnderTest)]; ss != nil {
+					ss.mu.Lock()
+					remaining = len(ss.subs)
+					ss.mu.Unlock()
+				}
+				shared.mu.Unlock()
+				if remaining != 1 {
+					t.Fatalf("shared subscriptions after the stalled request ended = %d, want only the healthy one", remaining)
+				}
 				b.events <- WatchEvent{Type: WatchAdded, Object: obj("later", "still-live", "2")}
 				waitFast("still-live")
 				if h2 && conns.Load() != 1 {

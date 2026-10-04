@@ -188,6 +188,19 @@ options.Authorizer = kube.SubjectAccessReviewAuthorizer(clientset, subjectFromUs
 options.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 ```
 
+Rechecking on a timer bounds how long a revoked caller keeps a quiet stream. Over HTTP it needs a
+write bound too, because a check waits for the write in progress; `Handler` refuses the interval
+without one:
+
+```go
+options.ReauthorizationInterval = 30 * time.Second
+options.ReauthorizationTimeout = 5 * time.Second
+options.WriteTimeout = 10 * time.Second
+```
+
+Test that your mounted middleware supports flushing and write deadlines, and plan with the
+[revocation budget](auth.md#revocation-budget), which also lists what these settings do not bound.
+
 Read [auth.md](auth.md) before using this configuration. The shared-cache authorizer is a security
 boundary; a per-user backend keeps Kubernetes RBAC as the direct boundary by construction.
 

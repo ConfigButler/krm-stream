@@ -114,10 +114,13 @@ Observers run on stream paths, so they must return promptly.
 See [`docs/operations.md`](../docs/operations.md) for suggested metrics and alerts, and
 [`docs/adopting.md`](../docs/adopting.md) for full host wiring examples.
 
-For shared streams, set `Options.ReauthorizationInterval` (for example, 30 seconds) and
-`Options.ReauthorizationTimeout` (for example, 5 seconds). Each subscriber is rechecked independently,
-including during quiet periods; denial or timeout stops only that subscriber. Zero interval keeps
-cycle-only checks. See [authorization](../docs/auth.md) for callback contracts and capacity planning.
+For shared streams, set `Options.ReauthorizationInterval` (for example, 30 seconds),
+`Options.ReauthorizationTimeout` (for example, 5 seconds) and a positive `Options.WriteTimeout`, which
+HTTP serving requires with timed checks. Each subscriber is rechecked independently, including during
+quiet periods; denial or timeout stops only that subscriber. Zero interval keeps cycle-only checks.
+Transport-neutral `Stream` keeps timed checks with any sink the host bounds itself. See
+[authorization](../docs/auth.md) for callback contracts, capacity planning and the
+[revocation budget](../docs/auth.md#revocation-budget).
 Use `kube.SubjectAccessReviewAuthorizer` for Kubernetes-backed subscriber authorization.
 
 `Options.WriteTimeout` bounds each HTTP header/frame/comment write plus flush. Zero installs no

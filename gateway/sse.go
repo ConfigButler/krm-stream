@@ -181,7 +181,9 @@ func (g *Gateway) ServeStream(w http.ResponseWriter, r *http.Request, principal 
 }
 
 // ServeStreamProjection serves a requested projection under the gateway's policy.
-// With WriteTimeout enabled, unsupported writers abort before a stream opens.
+// With WriteTimeout enabled, unsupported writers abort before a stream opens. A positive
+// ReauthorizationInterval requires a positive WriteTimeout; without one it panics before
+// writing anything, as Handler does at construction.
 func (g *Gateway) ServeStreamProjection(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope, projection Projection) {
 	g.serveHTTP(w, r, func(ctx context.Context, sink *SSESink) {
 		// A terminal frame may itself fail; delivery is not guaranteed on a failed transport.
@@ -189,10 +191,28 @@ func (g *Gateway) ServeStreamProjection(w http.ResponseWriter, r *http.Request, 
 	})
 }
 
-func (g *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request, run func(context.Context, *SSESink)) {
-	if g.WriteTimeout < 0 {
+// validateHTTPServing refuses, with a configuration panic, the settings HTTP serving cannot honour.
+// Handler calls it once at construction; serveHTTP calls it again before any response I/O, so a host
+// calling ServeStream directly meets the same rule rather than a weaker one.
+//
+// Timed reauthorization needs a write bound because a timed check and object delivery share one gate
+// per subscriber (see authorizationSink): the check waits for the write in progress. A browser that
+// stops reading blocks that write once the buffers between fill, and with no deadline it blocks until
+// something else ends the request — so the check, and the revocation it would apply, never runs.
+// Transport-neutral Stream sinks are the host's to bound, and are not checked here.
+func validateHTTPServing(writeTimeout, reauthorizationInterval time.Duration) {
+	switch {
+	case writeTimeout < 0:
 		panic("krm-stream: WriteTimeout must not be negative")
+	case reauthorizationInterval > 0 && writeTimeout == 0:
+		panic("krm-stream: ReauthorizationInterval requires a positive WriteTimeout for HTTP streams — " +
+			"a timed check waits for the write in progress, and a write to a reader that stopped reading " +
+			"never ends without one")
 	}
+}
+
+func (g *Gateway) serveHTTP(w http.ResponseWriter, r *http.Request, run func(context.Context, *SSESink)) {
+	validateHTTPServing(g.WriteTimeout, g.ReauthorizationInterval)
 	if g.WriteTimeout > 0 {
 		if err := CheckHTTPStreaming(w); err != nil {
 			g.observe(Observation{Kind: ObservationHTTPTransportRejected, Code: CodeInternal})

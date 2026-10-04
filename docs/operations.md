@@ -57,7 +57,9 @@ a reconnect loop. It shows as `retryable_error`.
 
 | Control | Default | Use |
 |---|---:|---|
-| `gateway.Options.WriteTimeout` | 0 (no deadline) | set a positive per-operation write-plus-flush budget for bounded HTTP delivery |
+| `gateway.Options.WriteTimeout` | 0 (no deadline) | set a positive per-operation write-plus-flush budget for bounded HTTP delivery; required with `ReauthorizationInterval` |
+| `gateway.Options.ReauthorizationInterval` | 0 (cycle checks only) | recheck each subscriber on quiet streams; see the [revocation budget](auth.md#revocation-budget) |
+| `gateway.Options.ReauthorizationTimeout` | 10 seconds | bound each periodic check's callbacks once it holds the delivery gate |
 | `gateway.Options.HeartbeatInterval` | 20 seconds | set below the shortest proxy idle timeout |
 | `gateway.SharedOptions.QueueDepth` | 256 live events | tune after measuring; it bounds memory per slow subscriber |
 | `ScopePolicy.AllowLabelSelector` | false | enable only for an endpoint that deliberately supports caller narrowing |
@@ -91,7 +93,10 @@ metrics available on the tested Kubernetes version; the shared-host fixture uses
 ## Bounded HTTP delivery
 
 Set `WriteTimeout` explicitly; zero preserves no library-installed deadline and negative values
-are rejected. Each header, event or heartbeat write and flush shares one deadline. Successful
+are rejected. A positive `ReauthorizationInterval` requires a positive `WriteTimeout`: `Handler`
+panics at construction without one, and direct `ServeStream` calls panic before writing. A timed
+check waits for the write in progress, so the write bound is part of the
+[revocation budget](auth.md#revocation-budget). Each header, event or heartbeat write and flush shares one deadline. Successful
 operations clear it, so quiet streams can outlive many timeout periods. A failed operation cancels
 its stream and cannot be retried as a terminal frame. Flush success does not acknowledge browser
 receipt. Generic `Stream` sinks remain responsible for bounded I/O.

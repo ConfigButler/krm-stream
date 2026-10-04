@@ -82,12 +82,18 @@ type Options struct {
 
 	// WriteTimeout bounds each HTTP write-plus-flush operation. Zero installs no deadline.
 	// Positive values require a writer supporting flush and write deadlines; negative values panic.
+	// Required (positive) whenever ReauthorizationInterval is: see below.
 	WriteTimeout time.Duration
 
 	// ReauthorizationInterval rechecks each subscriber independently, even on quiet streams.
 	// Zero disables timed checks; snapshot cycles always reauthorize.
+	//
+	// A positive interval requires a positive WriteTimeout, and Handler panics without one. A timed
+	// check waits for that subscriber's write in progress, and a write to a browser that stopped
+	// reading only ends at its deadline. The revocation budget is documented in docs/auth.md.
 	ReauthorizationInterval time.Duration
-	// ReauthorizationTimeout bounds a timed check. Zero defaults to 10 seconds.
+	// ReauthorizationTimeout bounds each timed check's Authorizer and projection-policy callbacks,
+	// starting once the check holds the subscriber's delivery gate. Zero defaults to 10 seconds.
 	// Authorizers and projection policies must honor context cancellation.
 	ReauthorizationTimeout time.Duration
 }
@@ -102,9 +108,8 @@ type Options struct {
 // what stops EventSource from reconnecting forever. Unsupported bounded transports instead
 // abort before streaming and report ObservationHTTPTransportRejected.
 func Handler(o Options) http.Handler {
+	validateHTTPServing(o.WriteTimeout, o.ReauthorizationInterval)
 	switch {
-	case o.WriteTimeout < 0:
-		panic("krm-stream: WriteTimeout must not be negative")
 	case o.Principal == nil:
 		panic("krm-stream: Options.Principal is required — the library must never assume who the caller is")
 	case o.Authorizer == nil:

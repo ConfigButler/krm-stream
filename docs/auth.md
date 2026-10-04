@@ -76,19 +76,30 @@ verifying that caller may read the resource.
 
 The gateway rechecks authorization and projection policy on every snapshot cycle and calls `Clients`
 again so the host can provide refreshing credentials. Cycle-only checks do not bound revocation time
-on a quiet stream. Set a timed recheck when the host needs that bound:
+on a quiet stream. Set a timed recheck when the host needs that bound, together with a write bound:
 
 ```go
-options.ReauthorizationInterval = 30 * time.Second
-options.ReauthorizationTimeout = 5 * time.Second
+options.ReauthorizationInterval = 30 * time.Second // how often each subscriber is rechecked
+options.ReauthorizationTimeout = 5 * time.Second   // budget for each periodic check's callbacks
+options.WriteTimeout = 10 * time.Second            // required over HTTP with timed checks
 ```
 
-Timed checks run per subscriber and pause that subscriber's object delivery. Denial, timeout, policy
-failure or a changed projection terminates only that stream; other subscribers continue. A
-SubjectAccessReview that cannot reach the API server ends the stream with a non-terminal
-`UPSTREAM_UNAVAILABLE`, so the client may reconnect once it is back. Zero
-interval keeps cycle-only checks; zero timeout uses 10 seconds. The bound assumes callbacks honor
-context cancellation and sinks do not block indefinitely.
+Timed checks run per subscriber and share that subscriber's delivery gate: while a check runs, the
+subscriber receives no objects, and a check waits for the delivery already in progress. Denial,
+timeout, policy failure or a changed projection terminates only that stream; other subscribers
+continue. A SubjectAccessReview that cannot reach the API server ends the stream with a non-terminal
+`UPSTREAM_UNAVAILABLE`, so the client may reconnect once it is back. Zero interval keeps cycle-only
+checks; zero timeout uses 10 seconds.
+
+Library-owned HTTP serving requires a positive `WriteTimeout` with a positive
+`ReauthorizationInterval`. `Handler` panics at construction without one, and direct `ServeStream` and
+`ServeStreamProjection` calls panic before writing anything. A write to a browser that has stopped
+reading blocks once the buffers between fill, and without a deadline it would hold the gate, and the
+revocation behind it, until something else ended the request. The mounted middleware must support
+flushing and write deadlines; test it with the
+[capability-check recipe](../gateway/kube/examples/sharedstream/README.md#middleware-capability-test).
+Transport-neutral `Stream` and `StreamProjection` keep timed checks with any sink: there the host
+owns the sink and must bound its I/O.
 
 Checks use the principal captured at stream open. Resolve current session/account validity inside the
 host authorizer. Timed checks do not invoke `Clients`; credential refresh remains per snapshot cycle
@@ -97,6 +108,39 @@ or inside the supplied client.
 With 200 subscribers, a 30-second interval adds roughly 13 SubjectAccessReviews per second (list and
 watch per subscriber), plus opening/cycle checks. Choose intervals for the host's revocation budget
 and API-server capacity; checks are not cached across identities.
+
+### Revocation budget
+
+The revocation budget is how long a stream keeps delivering after access is withdrawn. With timed
+checks over HTTP it is made of these parts, in order:
+
+| Part | Bounded by | What it covers |
+|---|---|---|
+| Decision freshness | the host | Time until the host's authorizer can see the change: session stores, identity-provider group sync, and any decision cache the host adds. The rest of the budget starts only then. |
+| Timer | `ReauthorizationInterval` | Up to one interval until that subscriber's next check. Each subscriber has its own timer. |
+| Gate wait | one `WriteTimeout` | The check waits for the delivery in progress, which completes or fails at its write deadline. |
+| Check | `ReauthorizationTimeout` | Starts once the check holds the gate, and covers the `Authorizer` and projection-policy callbacks. |
+| Termination and cleanup | one `WriteTimeout`, then the host | The refusal is written as the stream's terminal frame, a write with its own deadline. The request then returns, releasing its shared subscription. |
+
+Interval + check timeout + write timeout is a planning figure, not an unconditional bound. Scheduling
+delay, a heartbeat or terminal write competing for the same response, callbacks that ignore
+cancellation, host middleware and cleanup can all add time. Declare the total for your deployment,
+then measure it under the intended load.
+
+Revocation ends three things at different times:
+
+- **New object delivery** stops when the check holds the gate. A denied check releases the gate
+  only after ending the stream, so no further object is written.
+- **The request** returns after the terminal frame is written or fails, and cleanup completes.
+- **The browser** receives the refusal only if the transport delivers it. A reader that stopped
+  reading may never see it, and the request ends at the write deadline instead.
+
+Bytes already written to the socket, or buffered by a proxy, cannot be recalled. Revocation stops
+further disclosure; it does not retract earlier disclosure.
+
+`ReauthorizationTimeout` covers periodic checks only. Opening and snapshot-cycle authorization run
+under the request's context, so give host callbacks their own deadlines. A generic `Stream` sink
+takes the place of `WriteTimeout` in the table, with whatever bound the host gives it.
 
 ## Shared-watch authorization
 
@@ -134,10 +178,8 @@ SelfSubjectReview helper using participant credentials, service-account SARs and
 fixed scope, session/token expiry and bounded HTTP delivery. Identity resolution is an example,
 not a public library authentication API. It does not re-resolve identity on every timed check.
 
-`ReauthorizationTimeout` applies to periodic callbacks after acquiring the delivery gate. Opening
-and cycle authorization need their own host callback deadlines. Do not put a short callback deadline
-on the entire healthy stream. Write bounds limit in-flight HTTP I/O, not all gate waiting, backend
-operations or callback work; declare and measure the total revocation budget under the intended load.
+Do not put a short callback deadline on the entire healthy stream. Write bounds limit in-flight
+HTTP I/O, not backend operations or callback work; see the [revocation budget](#revocation-budget).
 For 200 allowed participants, opening can issue 400 SARs plus 200 SSRs. Timers can align, recovery
 adds checks, and client-side throttling consumes callback budgets. Neither the example's rate settings
 nor Voter's reported rehearsal results are production defaults or supported-version evidence.
