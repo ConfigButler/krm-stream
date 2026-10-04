@@ -18,6 +18,9 @@ priority 4 forms the stream track. Deliver them independently. Complete the brow
 before expanding the editor's public API; it does not block gateway fixes, real-API evidence or
 upstream continuation.
 
+[Proposal 0010](0010-gateway-api-cleanup.md) owns separate Go API cleanup. Use its final serving and
+configuration names once implemented; it adds no acceptance gate to the behavioral work here.
+
 ## Baseline and order
 
 Use the [adoption guide](../adopting.md), [saving guide](../saving.md) and
@@ -43,6 +46,12 @@ Keep the existing [user-facing outcomes](../saving.md#what-the-person-editing-se
 [receipt contract](../saving.md#answer-204-or-a-receipt-and-let-the-watch-echo-it) in the saving guide.
 The remaining work is executable guidance, using existing store and Vue example tests.
 
+When implementing after proposal 0009, use its event-only store input, consolidated connector and
+guarded response contract. Successful creates/deletes remain host-owned pending confirmations until
+their echo or a completed snapshot confirms state; do not restore unguarded adoption or optimistic
+store deletion in a recipe. Keep server acceptance separate from confirmation to avoid duplicate
+submissions when an echo is delayed or arrives before the response.
+
 ### Deletion recovery copy
 
 Demonstrate a host subscription that snapshots detached `store.draft(uid)` on each notification while
@@ -58,8 +67,9 @@ recovery copy is not another reconciler. Link the tested recipe from the saving 
 ### Explicit keep-local resolution
 
 Demonstrate capturing the chosen local value (including absence), resolving that path with
-`takeTheirs`, then synchronously reapplying it through `setValue` or `removeKey`. Verify the recipe
-against current behavior before publishing executable guidance.
+`revert`, then synchronously reapplying it through `setValue` or `removeKey`. Proposal 0009 removes
+the equivalent `takeTheirs` alias. Verify the recipe against current behavior before publishing
+executable guidance.
 
 **Acceptance:** cover nested paths, deletion, whole-array replacement and policy/redaction refusal;
 preserve unrelated edits and conflicts. Capture a fresh save intent after review. Add a small helper

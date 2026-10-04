@@ -85,182 +85,195 @@ sequenceDiagram
 A merge is only as correct as its inputs. The stream supplies an authoritative base under a defined
 identity, projection and recovery contract:
 
-- Each `added` or `modified` event carries a complete projected object and replaces the base.
-  Within the visible projection, absence can express a removed field. Projection rules and redaction
-  records distinguish withheld values; they must never become inferred deletions in a save patch.
-  Partial updates would require their own explicit rules for omission and deletion.
-- Resources are keyed by `uid`. A delete followed by a recreate with the same name is a new
-  resource, so an old draft is never merged into a different object.
-- Snapshot cycles re-establish bases for resources still present after a reconnect; an interrupted
-  cycle prunes nothing. Drafts of surviving resources remain in the store across reconnects. A
-  completed snapshot can remove a deleted resource and its draft; retaining a copy is host-owned.
-- Save capture binds an editable merge patch to the base UID and `resourceVersion`. The host
-  validates the patch and adds those preconditions. A stale version can be rejected with 409 even
-  when visible content has not changed. Arrays are replaced as complete values under RFC 7386;
-  this is not a guarantee of writes to individual array elements. See [saving safely](../saving.md).
+- Each resource update replaces the visible server copy, so removed fields do not linger.
+- Resources are keyed by `uid`, so recreating a name never transfers an old draft to a new object.
+- A completed snapshot repairs missed updates after reconnect; surviving resources keep their
+  drafts.
+- A captured save binds the person's patch to the identity and version they reviewed.
+
+Projection and redaction determine what the person may see and edit. Snapshot pruning can remove a
+deleted resource's draft, and merge patches replace arrays as whole values. The
+[client state model](../client-state-model.md) and [saving guide](../saving.md) explain those
+limits.
 
 The live editor consumes the protocol's state; transport does not depend on the editor. The editor
 can also reconcile directly supplied server objects without opening a connection. The current
 connectors do not show that boundary: a list page must construct an editing store to use them. This
-proposal makes transport deliver protocol events, adds a small read-only store for lists and viewers,
+proposal makes transport deliver protocol events, adds a small read-only store for lists and
+viewers,
 and keeps the editor as the layer a live form adds. Both stores use the same stream contract.
 
-## Current coupling
+## Current coupling and scope
 
-The [protocol](../../spec/v1.md#41-added--modified--replacement-not-merge) already distinguishes
-replacement of authoritative objects from optional reconciliation of a local draft. Its
-[consumer conformance rules](../../spec/v1.md#10-conformance) do not require a merge engine.
+The [protocol](../../spec/v1.md#10-conformance) already makes editing optional. Today all three
+connectors take a concrete `LiveResourceStore`, and transport produces editor-specific
+`StreamChange` results. The managed connector also detects reset through the editor's `onChange`
+callback. The [root entry](../../packages/krm-stream/src/index.ts) exports transport and editing
+alongside implementation utilities.
 
-The browser API does not yet express that boundary:
-
-- All three connectors in [sse.ts](../../packages/krm-stream/src/sse.ts) and
-  [connection.ts](../../packages/krm-stream/src/connection.ts) take a concrete `LiveResourceStore`.
-- `StreamOptions.onChange` receives `StreamChange`, including editor-specific `flashed` and
-  `conflicts` fields. The managed connection detects snapshot reset through this callback.
-- `LiveResourceStore` owns authoritative objects, snapshot membership, drafts, edit policy,
-  conflicts and save capture. A read-only policy disables editing but still loads that machinery.
-- The [package entry point](../../packages/krm-stream/src/index.ts) exports transport and editing
-  together, and the published single-file bundle contains both.
-
-The connectors import `LiveResourceStore` only as a TypeScript type, so they already have no runtime
-import of the editor store. The remaining coupling is their parameter and result contracts plus
-event application inside transport. Separate entry files, package exports and an emitted dependency
-check can preserve the runtime separation after those contracts change.
-
-The goal is an independent stream consumer and a convenient editor composition. Do not extract a
-generic three-way merge library, redesign the gateway, or change merge behavior during this work.
+The connector imports of the store are type-only and disappear from JavaScript. The work is to
+separate their contracts and state application, expose a read-only store, and simplify the public
+browser API while touching these modules. Preserve merge behavior, gateway behavior and v1 wire
+framing. [Proposal 0010](0010-gateway-api-cleanup.md) owns separate Go API cleanup.
 
 ## Ownership and dependencies
 
 ```mermaid
 flowchart LR
-  gateway["Go gateway"] --> transport["Browser transport"]
-  transport -->|"Protocol events"| resources["ResourceStore"]
-  transport -->|"Protocol events"| editor["LiveResourceStore"]
+  gateway["Go gateway"] --> transport["Browser connector"]
+  transport -->|"State events"| resources["ResourceStore"]
+  transport -->|"State events"| editor["LiveResourceStore"]
   resources --> viewer["Live list or viewer"]
   editor --> form["Live form with drafts and conflicts"]
 ```
 
-The two store paths are alternatives for a view. Both receive the same protocol events.
+| Layer | Owns |
+|---|---|
+| Gateway | Authorization enforcement, projection, watches, framing and SSE delivery |
+| Browser connector | Decoding, sequence checks, connection state, errors and bounded retries |
+| Read-only store | Complete projected objects, redactions, UID membership and snapshot pruning |
+| Editor store | Authoritative base, drafts, reconciliation, edit policy, conflicts and patch capture |
+| Host | Credentials, identity, authorization policy, UI, writes and retention of deleted drafts |
 
-| Layer | Owns | Depends on |
-|---|---|---|
-| Go gateway and Kubernetes adapter | Authorization enforcement, projection, upstream watches, snapshot framing and SSE delivery | Existing host callbacks and backend seams |
-| Browser transport | Byte decoding, sequence checks, error reporting, connection state and reconnect policy | Wire types; no store or merge implementation |
-| Read-only resource store | Latest projected objects, redaction records, UID membership and snapshot pruning | Wire types and small shared state primitives |
-| Editor store | Authoritative base, local drafts, three-way reconciliation, edit policy, conflicts and patch capture | Wire types and the same small state primitives |
-| Host application | Credentials, identity, authorization policy, UI, saves and draft retention after deletion | The layers it chooses |
+A view chooses one active store. An editor keeps its own authoritative base; it does not mirror a
+`ResourceStore`. Both stores use the same internal snapshot tracker, with a separate instance per
+store. Share small value and dispatch helpers where useful. Keep framework adapters and a generic
+merge library outside this work.
 
-One view uses one active store. An editor does not maintain a read-only store and copy its contents
-into `LiveResourceStore`. The editor's authoritative base remains inside its own store so live events
-and guarded save reconciliation use the same base. Both stores must use one internal snapshot
-tracker, specified below. Keep their resource records separate and share event dispatch where useful;
-do not introduce a second reconciler, mirrored cache, public inheritance hierarchy or plugin framework.
+## One public connector
+
+Make the existing managed fetch connector the only public connector, named `connectResourceStream`.
+Move the existing single-connection fetch loop behind it as a private implementation. Remove
+`connectManagedResourceStream` and `connectWithEventSource` rather than forwarding their old names.
+Fetch already supports both same-origin cookies and bearer headers; a second public transport is
+unnecessary for either authentication case.
+
+The native EventSource helper closes on a sequence gap without arranging a new snapshot connection,
+and leaves reconnect timing to the browser instead of enforcing the protocol's retry hints. This
+is a limitation of that helper, not a reason to remove native SSE support from the gateway.
+
+The proposed public signature is:
+
+```ts
+type ResourceEventConsumer = (event: ResourceStateEvent) => void;
+
+function connectResourceStream(
+  url: string,
+  consume: ResourceEventConsumer,
+  options?: ResourceStreamOptions,
+): ResourceStreamHandle;
+```
+
+`ResourceStreamHandle` keeps `state`, `subscribe`, `close` and `closed`. `ResourceStreamOptions`
+keeps `onError`, `signal`, injected fetch, credentials, headers and the existing retry settings.
+Remove public `onOpen`, `onSynced`, `onGap`, `onStateChange` and `onChange`. Observe connection
+state
+through `state` plus `subscribe`, and errors through `onError`. Store results or subscriptions drive
+rendering. A consumer already receives `synced` when it needs per-snapshot work.
+
+Keep the existing statuses: `connecting`, `syncing`, `live`, `retrying`, `closed`, `terminal` and
+`exhausted`. Defer opening until the handle exists so subscribers can observe the initial
+transition.
+Read `state` for initial presentation; `subscribe` observes subsequent publications. Preserve a
+`live` publication after every completed snapshot, including when the previous status was live.
+A sequence gap must remain diagnosable: add an optional `gap: { expected: number; received: number
+}`
+to the `retrying` state caused by that gap, clearing it on the next attempt. Keep other diagnostics
+in `onError`; do not add another lifecycle callback or a general retry telemetry API.
+
+### Delivery and completion
+
+1. Decode and check the per-connection sequence before delivering state. On a gap, discard the
+   event beyond the gap, close the connection and request a fresh snapshot through bounded retry.
+2. Observe `reset` directly in transport: enter `syncing` and clear the healthy-period timer before
+   state application. This must not depend on what a store returns.
+3. Deliver recognized state events exactly once and synchronously, in stream order. Unknown wire
+   event types still participate in sequence accounting and are then ignored. Error events go only
+   to `onError`. Discard an upsert or deletion without its required object or identity; this
+   preserves
+   current no-op state behavior and is not comprehensive object schema validation.
+4. Apply `synced` through the consumer before publishing `live` and starting the healthy-period
+   timer. Pruning already precedes `live` today; rendering moves from the old `onChange`, which ran
+   afterwards, into state application before `live`.
+5. Preserve retry hints, exhaustion, terminal refusal and in-band `RESYNC_REQUIRED` recovery.
+   A retryable error does not itself restart an open connection; reconnect when that connection
+   ends.
+6. After close or abort, deliver no later events from the same decoded chunk. If the consumer closes
+   during `synced`, publish no later `live` transition. The existing fetch loop already checks abort
+   between events; preserve this and test it.
+
+The consumer must complete state application synchronously. Both stores expose `applyStreamEvent`
+as a bound arrow field, so passing `store.applyStreamEvent` directly is safe and preserves `this`.
+Verify direct method passing as well as wrapped consumers that render the returned change.
+
+If a consumer throws, retain that exception even when the consumer first calls `close()`. The
+current
+fetch loop ignores errors after abort and swallows its completion rejection; neither rule may hide a
+consumer exception. Capture it at invocation, finish reader/listener/timer cleanup, publish `closed`
+and reject `closed` with the original exception. Do not retry it or classify it as a Kubernetes
+error.
+Ordinary network failure still follows the existing retry policy. Callers await `closed` or attach a
+rejection handler; tests explicitly observe failure, including close-then-throw. Completion settles
+only after the consumer returns and cleanup finishes. This does not authorize redesigning exceptions
+from unrelated observer callbacks.
+
+### Protocol version diagnostics
+
+On a successful streaming response, inspect `X-KRM-Stream-Protocol` before consuming events.
+A present value other than the supported version is a terminal local `INTERNAL` error with a clear
+protocol-mismatch message: cancel the response body, publish `terminal` and do not retry. A missing
+header is accepted because [v1 versioning](../../spec/v1.md#0-versioning) makes this diagnostic
+header
+optional. HTTP refusals retain their existing classification. No version negotiation or new wire
+error is introduced. Keep the protocol constant internal and its Go/TypeScript consistency test.
+Keep public `VERSION`: build provenance has an established use for vendored assets.
+
+## One public stream input per store
+
+Export `ResourceStateEvent`, a discriminated union of `reset`, `added`, `modified`, `deleted` and
+`synced` state events. Upserts require `object` and may carry wire-shaped `Redaction[]`; deletion
+requires `identity`. Reset keeps target, scope and projection metadata. This input does not require
+`seq` and carries no transport error fields. The connector retains wire sequencing privately and
+passes state events; hosts can supply the same state shapes directly without opening a connection.
+
+Both stores expose a bound `applyStreamEvent(event)` method. In `LiveResourceStore`, make
+`beginSnapshot`, `endSnapshot`, `applyServerEvent` and `removeResource` private. Remove the
+standalone
+`applyStreamEvent(store, event)` export and fold public `ApplyResult` into `StreamChange`. Remove
+`ApplyOptions`: direct state input accepts only the wire redaction shape, while stored/read
+redactions
+may still use parsed path segments. Tests must use the public event input for behavior; private
+helpers remain available for the editor's guarded reconciliation implementation.
 
 ### Shared snapshot tracking
 
-Extract the editor's `#seen` and `#snapshotRevision` behavior into one small internal `SnapshotTracker`
-before adding the read-only store. Each store gets its own tracker instance. It owns the active
-membership pass, seen UIDs and a generation counter; it never owns objects, drafts or notifications.
-Its proposed operations are `begin()`, `markSeen(uid)` and `finish(currentUIDs)`, with read access to
-`active` and `generation`:
+Extract `#seen` and `#snapshotRevision` into one internal `SnapshotTracker` before adding
+`ResourceStore`. It owns only the active membership pass, seen UIDs and generation:
 
-- `begin` increments the generation and starts a fresh seen set, including when it replaces a
-  partial pass. It removes no resources.
-- `markSeen` records a UID only during an active pass. Authoritative stream upserts use it.
-- `finish` returns unseen current UIDs and closes the pass before the store removes those resources
-  and notifies subscribers. Without an active pass it returns an empty list. This is the only
-  implementation of the rule that selects snapshot removals for either store.
+- `begin()` increments generation and starts a fresh seen set, even when replacing a partial pass.
+- `markSeen(uid)` records membership only during an active pass.
+- `finish(currentUIDs)` returns unseen UIDs and ends the pass before removal and notification.
+  Without an active pass it returns an empty list. This is the shared implementation of pruning.
 
-Guarded editor reconciliation captures the generation and refuses a response while a pass is active
-or when the generation has changed, even if the newer pass has already completed. Keep per-resource
-revision and UID checks in the editor. A reconciliation GET must never mark snapshot membership.
-Preserve direct `beginSnapshot`/`endSnapshot` callers and existing save-adoption behavior through
-this helper; this extraction does not redefine their semantics.
+Only `applyStreamEvent` upserts mark membership. Guarded reads follow a separate private update path
+and never mark a UID as seen. Reconciliation captures generation and rejects while a pass is active
+or after generation changed, including after a completed newer pass. Preserve per-resource revision
+and UID checks in the editor. Use both stores to verify interrupted and restarted snapshots; use the
+editor to verify late reads before, during and after a recovery cycle. Keep tracker internals
+private.
 
-Verify snapshot membership and restarted partial passes through both stores. In the editor, also
-test a GET captured before reset and returned after synced, and a GET returned during a snapshot.
-The tracker remains internal; its representation and naming are implementation choices, not a new
-public abstraction.
+### Read-only store
 
-## Proposed transport API
-
-Retain the existing connector names and handles. Change their second argument from a store to a
-synchronous event consumer:
-
-```ts
-type ResourceEventConsumer = (event: StreamEvent) => void;
-
-connectResourceStream(url, consume, options?): StreamHandle;
-connectManagedResourceStream(url, consume, options?): ManagedStreamHandle;
-connectWithEventSource(url, consume, options?): StreamHandle;
-```
-
-`StreamOptions` retains `onOpen`, `onError`, `onGap`, `onSynced`, `signal`, fetch injection,
-credentials and headers where supported. Managed options retain retry controls and `onStateChange`.
-Remove `onChange` from transport options. Store changes are produced by the selected consumer.
-Give both stores an `applyStreamEvent(event)` method. Move the existing editor event switch and
-`StreamChange` out of transport into the editor module. Remove the standalone
-`applyStreamEvent(store, event)` export and migrate its callers to the method. No separate adapter
-API is needed.
-
-The consumer receives recognized state events: `reset`, `added`, `modified`, `deleted` and `synced`.
-Wire and HTTP errors go through `onError`; they are not delivered twice through the state consumer.
-Unknown event types remain ignored after sequence accounting. Preserve existing decoding and
-payload acceptance behavior; this refactor does not promise comprehensive runtime schema validation.
-
-### Delivery and callback ordering
-
-Specify and test the following ordering across fetch and native EventSource:
-
-1. Check the event sequence before delivering a state event. A gap calls `onGap` and closes that
-   connection; the event beyond the gap is never applied.
-2. For `reset`, the managed handle enters `syncing` and clears its healthy-period timer before
-   calling the consumer. It observes the wire event directly, independently of store output.
-3. Call the consumer exactly once, synchronously, for each accepted state event, in stream order.
-4. For `synced`, complete consumer application before the managed handle enters `live`, starts its
-   healthy-period timer and calls `onSynced`. Observers of `live` must see completed pruning.
-5. A terminal error calls `onError`, ends the connection and prevents managed retries. Preserve
-   retry hints, retry exhaustion, in-band `RESYNC_REQUIRED`, and native EventSource's existing
-   automatic reconnect behavior for ordinary transport interruptions.
-6. Closing or aborting from a consumer prevents later events in the same decoded chunk from being
-   delivered. If it closes while processing `synced`, do not publish a later `live` transition.
-
-The current store already applies `synced` and prunes before `onSynced` and the managed `live`
-notification. What moves is rendering: the old `onChange` callback runs after those notifications;
-rendering inside the new consumer runs before them. Keep pruning-before-live behavior. The fetch
-loop also already stops later events in a chunk after an abort; preserve and test that behavior.
-
-Consumers must finish state application synchronously; asynchronous UI work can follow separately.
-Document this on the callback type. If a consumer throws, close the connection and reject `closed`
-with that exception. The managed connector must clean up and stop with status `closed`, preserving
-the rejection; it must not turn an application exception into a network retry or an authorization
-error. Implement this separately at each transport's callback boundary:
-
-- Fetch currently swallows failures through `closed.catch(() => {})`. Track consumer exceptions
-  separately so they reject `closed` without changing the existing network-retry behavior.
-- Native EventSource currently invokes the consumer inside `es.onmessage`, outside a promise chain.
-  Catch consumer exceptions there, close EventSource, remove its abort listener and reject `closed`.
-  The exception must not escape solely to the browser's global error handler. Give the handle a
-  rejection path as well as its existing resolution path. Settle completion after the consumer
-  returns so a callback that closes the handle and then throws still exposes its failure.
-
-Callers must await `closed` or attach a rejection handler when using a consumer that can throw. An
-unhandled rejection is an application error and can fail `node --test`; tests must observe the
-rejection and cleanup explicitly. This rule concerns the new consumer callback, not a general
-rewrite of other callback failures.
-
-## Read-only resource store
-
-Add `ResourceStore` for the concrete read-only resource list in the
-[vanilla browser example](../../examples/vanilla-browser/README.md). Extend that example with a
-viewer of live resource identities, status and redaction metadata that offers no editing controls.
-This is the reference use case and executed adoption evidence, not a claim that an external viewer
-has requested the API. Its proposed public surface is deliberately limited:
+Add a read-only list to the [vanilla browser example](../../examples/vanilla-browser/README.md),
+which
+currently demonstrates editing. Show resource identity, status and redaction metadata without edit
+controls. This is the concrete reference use case for `ResourceStore`; it is not an asserted
+external
+consumer request. Its public surface is:
 
 ```ts
 class ResourceStore {
-  applyStreamEvent(event: StreamEvent): ResourceChange;
+  applyStreamEvent: (event: ResourceStateEvent) => ResourceChange;
   ids(): string[];
   server(uid: string): KRMObject;
   redactions(uid: string): { path: Path; rev: number }[];
@@ -268,80 +281,46 @@ class ResourceStore {
 }
 
 interface ResourceChange {
-  type: EventType;
+  type: ResourceStateEvent["type"];
   uid?: string;
   added: boolean;
-  removed: string[]; // includes UIDs pruned by synced
+  removed: string[];
 }
 ```
 
-`LiveResourceStore(readOnlyPolicy)` still retains a draft copy, runs reconciliation on incoming
-objects and exposes edit methods that refuse changes. `ResourceStore` holds only authoritative
-objects and redactions and has no editor runtime dependency. Once it exists, remove the named
-`readOnlyPolicy` export and definition, and migrate the read-only invariant test. Preserve coverage
-that a custom editor policy can refuse all edits through the existing `regionPolicy([])` primitive;
-an editor policy and a read-only resource store serve different purposes.
+Replace complete projected objects, never deep-merge them. Reset removes nothing, upserts mark seen,
+and only synced prunes. Replayed events are idempotent. A new UID under the same name starts a
+separate entry. Copy incoming objects/redactions and return detached reads using existing
+missing-UID
+conventions. Notify after object or membership changes; connection state comes from the handle.
+Each store belongs to one target and scope. Independent streams must use independent store
+instances.
 
-Use the existing store's conventions for detached reads and missing UIDs. Incoming objects and
-redaction records must also be copied so caller mutation cannot change stored state. Notifications
-occur after applied object or membership changes; a no-op may omit notification. Connection state
-continues to come from the connection handle.
-
-Authoritative objects are replaced completely, never deep-merged. `reset` starts a membership pass,
-upserts mark UIDs seen, and `synced` prunes unseen UIDs. An interrupted pass prunes nothing; a later
-`reset` starts a new pass. Applying `synced` without an open pass prunes nothing. Same-name replacement
-under a different UID creates a distinct entry. Preserve redaction metadata without interpreting it
-as an editable placeholder. The store has no draft, conflict, edit-policy or write API.
-
-As with the existing editor store, bind each instance to one target and one stream scope. Use separate
-instances for separate streams; combining their independent snapshot membership would be incorrect.
-Do not add a public multi-target aggregator in this increment.
-
-### Read-only composition
+`LiveResourceStore(readOnlyPolicy)` still retains a draft and runs reconciliation. Remove the named
+`readOnlyPolicy` definition/export once `ResourceStore` exists. Preserve all-read-only editor policy
+coverage through `regionPolicy([])`; a read-only editor policy and a resource viewer remain
+different
+uses. `ResourceStore` loads no merge engine and exposes no editing API.
 
 ```ts
-import { ResourceStore, connectManagedResourceStream } from "@configbutler/krm-stream/stream";
+import { ResourceStore, connectResourceStream } from "@configbutler/krm-stream/stream";
 
 const resources = new ResourceStore();
 const stopRendering = resources.subscribe(renderResources);
-const connection = connectManagedResourceStream(url, (event) => {
-  resources.applyStreamEvent(event);
-});
+const connection = connectResourceStream(url, resources.applyStreamEvent);
+const stopConnection = connection.subscribe(renderConnection);
 void connection.closed.catch(reportApplicationError);
 
 // On view disposal:
 stopRendering();
+stopConnection();
 connection.close();
 ```
 
-Frameworks with an existing resource cache can consume events directly instead. The guide must link
-the snapshot and redaction requirements for such consumers; reconnect and sequence handling still
-belong to the connector.
+### Editor store and save results
 
-## Editor composition
-
-Keep `LiveResourceStore` and its current editing and saving primitives. Add its
-`applyStreamEvent(event): StreamChange` method so both stores consume events the same way:
-
-```ts
-import { connectManagedResourceStream } from "@configbutler/krm-stream/stream";
-import { LiveResourceStore } from "@configbutler/krm-stream/editor";
-
-const editor = new LiveResourceStore();
-const connection = connectManagedResourceStream(url, (event) => {
-  const change = editor.applyStreamEvent(event);
-  renderEditor(change);
-});
-void connection.closed.catch(reportApplicationError);
-
-editor.setValue(uid, ["spec", "replicas"], 3);
-const intent = editor.captureSave(uid);
-// The host validates and applies a captured intent through its own save endpoint.
-```
-
-Applications can instead subscribe to the editor store when they only need to rerender. The method
-keeps `StreamChange` for highlighting, structural changes and conflicts, and extends it with the
-same removal reporting as the read-only store:
+Keep drafts, policies, conflicts, keyed-list reconciliation, changes, patch capture and guarded
+reconciliation. `LiveResourceStore.applyStreamEvent` returns:
 
 ```ts
 interface StreamChange extends ResourceChange {
@@ -351,123 +330,158 @@ interface StreamChange extends ResourceChange {
 }
 ```
 
-Define `ResourceChange` with shared protocol types so the editor does not import `ResourceStore`.
-Both results report `removed: [uid]` for an existing resource deleted by an event, `removed` containing
-the UIDs actually pruned by `synced`, and `removed: []` otherwise. Repeated deletion or synced events
-report no second removal. The editor's `synced` result has `structural: true` when pruning removed a
-resource. Keep existing highlighting, conflict and upsert results. This lets lists in editor pages
-observe snapshot removals too.
+Both stores report UIDs actually removed by deleted or synced events. Repetition produces no second
+removal. The editor reports `structural: true` on snapshot pruning that removes resources and keeps
+its current upsert/highlight/conflict results. Define common change types independently of either
+store so the editor does not import `ResourceStore`.
 
-Keep save capture, guarded GET reconciliation, projection restrictions, keyed-list merging and
-deletion behavior unchanged. Draft retention after deletion remains a host recipe in proposal 0006.
-The editor remains usable with direct server events and without a connector. The proposed method
-performs state application; sequencing and transport errors remain connector responsibilities.
+Remove `adoptSaved`. It is unguarded and also marks membership during recovery. A baseline
+reproduction
+shows an old save response adopted after reset survives an empty synced snapshot, retaining a
+deleted
+UID. Add regression evidence while removing the unsafe input, rather than preserving that behavior
+in the extracted tracker. Remove public optimistic `removeResource` alongside the other direct
+inputs.
 
-## Package boundaries
+Successful edits normally return 204 and converge through the watch echo. For an existing UID, a
+host
+returning an object uses `captureReconciliation(uid)` captured before the request. The guard refuses
+newer bases, deleted/recreated UIDs and snapshot overlap; it does not insert a new resource. Creates
+wait for their added echo. A host tracks successful creates as pending confirmation so they cannot
+be submitted twice, correlating an echo with server-assigned identity/receipt when available. Handle
+an echo arriving before the create response as well as after it. Pending deletes likewise wait for
+stream absence, rather than removing authoritative state optimistically. Snapshot completion can
+confirm missed echoes. Host write status and host confirmation state are separate from store data.
+Use a small host-state recipe and executed tests; this does not add create/delete endpoints to the
+library or turn the replay demo into a CRUD backend.
 
-Add two explicit ESM entry points to the existing npm package:
+Simplify `ReconciliationOptions` to `{ redactedPaths?: string[] }`. Omission preserves current
+protections; an explicit list removes absent paths, preserves known revisions and rejects unknown
+paths rather than inventing revision counters. Remove the `redacted` response branch from the
+conditional editor example and revise its tests. Stream input still carries wire redaction
+revisions;
+a stateless GET does not. Preserve edits made while a save/read was pending.
+
+Remove `takeTheirs`; `revert` already implements that operation. Remove the unused `status(uid)`
+convenience method; read `server(uid).status`. Update the keep-local recipe in
+[proposal 0006](0006-stream-and-save-implementation-plan.md) to use `revert`.
+
+```ts
+import { connectResourceStream } from "@configbutler/krm-stream/stream";
+import { LiveResourceStore } from "@configbutler/krm-stream/editor";
+
+const editor = new LiveResourceStore();
+const connection = connectResourceStream(url, (event) => {
+  renderEditor(editor.applyStreamEvent(event));
+});
+void connection.closed.catch(reportApplicationError);
+
+editor.setValue(uid, ["spec", "replicas"], 3);
+const intent = editor.captureSave(uid);
+// The host validates and applies the captured intent through its save endpoint.
+```
+
+## Package boundaries and public exports
 
 | Import | Exports |
 |---|---|
-| `@configbutler/krm-stream/stream` | Transport, connection types, wire types, URL builder and `ResourceStore` |
-| `@configbutler/krm-stream/editor` | `LiveResourceStore`, `StreamChange`, edit policies, schema helpers and editing utilities/types |
-| `@configbutler/krm-stream` | Combined convenience exports using the same implementations |
-| `@configbutler/krm-stream/bundle` | Existing single-file combined build using the same implementations |
+| `@configbutler/krm-stream/stream` | Connector, lifecycle types, resource state/wire types, URL builder, `ResourceStore`, version stamp |
+| `@configbutler/krm-stream/editor` | `LiveResourceStore`, change/save/reconciliation types, edit policies and schema helpers |
+| `@configbutler/krm-stream` | Combined convenience exports from those implementations |
+| `@configbutler/krm-stream/bundle` | Existing single-file combined build |
 
-The stream entry's emitted runtime module graph must not reach the editor store, `merge`, edit
-policies or schema-based keyed-list code. This is a dependency guarantee, not a bundle-size claim. Shared value,
-path and snapshot utilities are acceptable when they do not import editor code. Editor imports must
-not open connections or import the managed connector. Keep declarations usable from each entry.
+Retain stream/editor subpaths. An unbundled browser importing the combined root loads its whole
+module graph; bundler tree-shaking does not solve that supported use case. The stream entry loads no
+editor store, merge, edit-policy or schema implementation. Editor modules load no connector. Assert
+the emitted module graph and declarations rather than claiming a bundle-size improvement. The
+combined bundle still contains both layers. Defer a stream-only single-file bundle until needed.
 
-Retain the combined root and bundle as supported convenience entries, not compatibility shims for
-the old connector signatures. A host that vendors the combined bundle still gets one file and loads
-both layers. A host using the stream ESM entry avoids the editor module graph. A separate stream-only
-single-file build is deferred until a consumer needs it; do not claim that the existing bundle shrinks.
-
-Use existing module emission and packaging. No second npm package, release train, framework adapter,
-generic merge export, store-to-store bridge or new runtime dependency is required.
+Remove public exports of `clone`, `deepEqual`, `get`, `has`, `isPrefix`, `parsePointer`, `pathKey`,
+`SSEDecoder` and `StreamSequence`; they remain internal helpers and package-test imports as needed.
+Retain useful policies, schema helpers and public domain types. Verify repository and available host
+imports before implementing removals; unavailable host source is not evidence of no users. Add
+`sideEffects: false` only after auditing top-level effects; it can assist bundlers but does not
+replace
+explicit entry boundaries. Keep one npm package, zero runtime dependencies and existing ESM
+emission.
 
 ## Implementation order and migration
 
-Deliver three reviewable changes in this order. Each updates the callers and tests affected by its
-own change; do not leave main with an invalid intermediate API.
+Deliver three reviewable changes, keeping each intermediate commit buildable:
 
 | Change | Deliver | Acceptance evidence |
 |---|---|---|
-| 1 | Event consumers for all connectors; editor `applyStreamEvent` method and shared change types; consistent removal results | Existing editor fixtures, save tests and reconnect tests pass through the new boundary; ordering, removal and consumer-failure tests pass |
-| 2 | Shared snapshot tracker, `ResourceStore`, removal of `readOnlyPolicy`, explicit stream/editor exports and packaging | Both stores use the tracker; read-only convergence and guarded editor reconciliation pass; packed stream entry loads without editor modules |
-| 3 | Read-only browser view, adoption guidance and package description | Go-wire and browser checks cover both compositions, including EventSource and the combined bundle; docs and metadata describe optional editing |
+| 1 | One managed connector, event consumers, consolidated lifecycle observation, consumer exceptions and version diagnostics | Plain callbacks recover on gaps, respect retry policy and expose exceptions after cleanup; all connector callers migrated |
+| 2 | Store methods/state types, shared tracker, read-only store, guarded save-only reconciliation, smaller exports and entry points | Both stores converge; late-save/snapshot regression passes; published stream entry loads without editor code |
+| 3 | Read-only example, revised editor/create/delete guidance, metadata and protocol wording | Browser and Go-wire checks exercise both stores and raw native SSE compatibility; docs match the public API |
 
-This work changes the published browser API. Use `feat!:` and a `BREAKING CHANGE:` footer for API
-removals, with a short release note covering callback signatures, the new store method, removal of
-`readOnlyPolicy`, render ordering and rejecting `closed` on consumer failure. Keep the existing
-lockstep release process. Publication means migration information remains useful even when known
-callers are maintained by the same team.
+Use `feat!:` and short `BREAKING CHANGE:` notes for public removals. List connector/name/options
+changes, store input removals, response-redaction simplification, utility exports and completion
+rejections. Remove old names and signatures without overloads or forwarding aliases. Keep the
+current
+lockstep release process; generated versions and changelogs remain Release Please's responsibility.
 
-The caller changes are mechanical: pass `(event) => store.applyStreamEvent(event)` to each connector;
-move render code from `onChange` into that callback or a store subscription; replace standalone event
-application with the store method; use `ResourceStore` for viewers; handle the `closed` rejection.
-Do not retain old signatures through overloads or forwarding functions.
+Migrate tests, conditional-save and Vue examples, browser example, READMEs,
+adoption/state-model/save
+and Vue guides, `url.ts` examples, and package metadata. Fix stale native EventSource descriptions
+and
+read-only policy/type comments. Lead with streaming and describe editing as optional; retain useful
+merge keywords. A save success must not clear edits made while it was in flight.
 
-Update repository test callers, the conditional-save and Vue examples, browser example, root README,
-package README, adoption and state-model guides. In change 3 also update `package.json`'s description
-and keywords and the `index.ts` overview comment to lead with streaming and describe editing as
-optional. Retain relevant merge keywords for discovery. Present read-only usage first and editor
-composition second in the adoption guide.
+Update [spec §7](../../spec/v1.md#7-transport--authentication) to say the reference connector uses
+fetch
+for cookies and headers, and [consumer rule 9](../../spec/v1.md#10-conformance) to require closing
+the
+connection on terminal refusal rather than naming a JavaScript class. Keep gateway native SSE/cookie
+support and a raw `EventSource` browser check. That check verifies framing, cookies, fresh snapshots
+on native reconnect and terminal shutdown through test-owned handling; it is not another official
+connector and does not claim browser-native retry timing satisfies the reference retry policy.
+These are implementation-neutral wording changes, not a new wire version. Keep documented v1 event
+fields and error codes, including `SLOW_CONSUMER`; their removal is separate protocol scope.
 
 ## Verification and completion
 
-Extend existing suites instead of duplicating the entire test setup:
+Extend existing suites with observable outcomes:
 
-- In `connection.test.ts` and `wire.test.ts`, drive a plain callback with no store. Cover chunked
-  framing, sequence gaps, terminal refusal, retry hints, exhausted retries, aborts, repeated snapshot
-  cycles, ignored unknown events, callback ordering and consumer exceptions. Use an injected fetch
-  and explicit synchronization where possible. Cover closing and then throwing from the same
-  consumer, rejection with the original exception, and disposal of pending retries and listeners.
-- Add read-only store tests for complete replacement and field removal, interrupted snapshots,
-  deletion during disconnection, same-name/new-UID replacement, repeated replay, redaction changes
-  and detached values. Include `synced` without reset and restarted partial cycles. Assert state
-  outcomes, not the internal helper structure. Verify matching `removed` results from both stores
-  for explicit deletion, snapshot pruning and repeated application.
-- Run authoritative-state conformance and convergence cases against both stores, using the existing
-  shared fixture corpus and its visible comparison. Keep draft/conflict fixtures specific to the
-  editor. Compare complete projected content and redactions; do not require a suppressed RV update.
-- Preserve the existing editor and saving suites, including later typing during saves, refused late
-  reads, snapshot overlap, conflict retention, and keyed-list behavior. Use an edited draft across
-  reconnect to prove that the consumer boundary preserves work. Verify generation-based refusal
-  of GETs across a completed or restarted snapshot after extracting shared tracking.
-- Check the emitted dependency graph and packed exports, including TypeScript declarations, in the
-  existing build/pack checks. A read-only application must import and run with editor modules absent.
-  Import the combined bundle in the real browser and demonstrate both compositions.
-- Extend existing Go-wire and Chromium examples to show a read-only list and an editor using the
-  same gateway protocol. Verify native EventSource reconnect and terminal shutdown after migration,
-  plus caught consumer failure, rejected completion and no later events or global callback error.
+- Plain consumer, including a bound store method: chunked framing, ignored unknown events, gap
+  discard and recovery, terminal refusal, retry hints/exhaustion, abort and repeated snapshot
+  cycles.
+  Verify state subscriptions replace lifecycle callbacks and gap context appears on retrying state.
+- Close from synced without a later live publication; close then throw without losing the original
+  exception; no retries after consumer failure; no pending reader, timer or listener after cleanup.
+- Matching, missing and mismatched protocol headers: mismatches apply no events and never retry.
+- Both stores: replacement/field removal, detached data, redaction changes, repeated replay,
+  deletion while disconnected, same-name/new-UID replacement, partial/restarted snapshots, synced
+  without reset, and matching removal reports. Use authoritative-state conformance and convergence
+  fixtures for both stores and keep edit/conflict fixtures specific to the editor.
+- Editor: late GETs during and across completed recovery cycles, later typing during saves, refused
+  replacement UIDs, redaction-path omissions/unknown paths, conflict retention and keyed lists.
+  Reproduce the adopted-save ghost before removal; show that a guarded late response never counts
+  as membership and an empty completed snapshot prunes the UID.
+- Host examples: no synthetic adoption/deletion, create confirmation in either echo/response order,
+  pending-confirmation entries cannot be resubmitted, and a failed write leaves authoritative state
+  unchanged. No reconciliation guard inserts a resource it did not capture.
+- Packed exports, declarations and emitted graph: stream imports run with editor modules absent;
+  root and combined bundle expose the intended API. Real Go-wire and Chromium checks cover both
+  stores through the public connector and direct raw EventSource compatibility.
 
-For runtime implementation PRs run `task fixtures-check`, `task test`, `task lint`, `task e2e-wire`,
-`task e2e-browser` and `task pack-client`. Inspect CI on the final pushed commit. Protocol fixtures
-may gain consumers but must not change wire output merely to support this separation. If a wire
-change proves necessary, stop and review that as separate scope. A real-cluster campaign or capacity
-benchmark is not an acceptance gate for this browser API separation.
+For runtime PRs run `task fixtures-check`, `task test`, `task lint`, `task e2e-wire`,
+`task e2e-browser` and `task pack-client`, and inspect final-commit CI. Existing goldens must retain
+wire behavior. Real-cluster/capacity campaigns are not a browser-separation merge gate. Report the
+final tested commit, results, unrun host checks and limitations.
 
-This proposal is complete when a read-only example uses no editing API and loads no editor modules
-through the stream entry, a live editor retains its existing merge and save behavior, both consume
-the same v1 stream, published entries work, and migration guidance matches the implemented signatures
-and callback ordering. Record tested commit, commands, outcomes and remaining limitations. A passing
-planning review alone does not mark the implementation complete.
+Completion means a read-only view loads no editor modules through the stream entry, a live editor
+preserves draft/save guarantees, one public connector serves both, published artifacts work and
+migration guidance matches the implementation. This document alone is not implementation evidence.
 
 ## Relationship to the remaining roadmap
 
-Proposal 0006 keeps its existing acceptance criteria. Its work falls into two independently
-deliverable tracks:
-
-- **Editor:** deletion-recovery and keep-local recipes, plus real-API save composition and UID races.
-- **Stream:** measured upstream continuation, recovery continuity and authorization lifecycle.
-
-Implement this separation before expanding the browser editor's public API. It is not a prerequisite
-for urgent gateway fixes, real-API evidence or upstream continuation. Shared-watch hardening from
-[proposal 0008](0008-shared-watch-hardening.md) remains completed; its deferred authorization trigger
-and caching APIs are not reopened by this plan.
-
-The next stream improvement should follow a demonstrated consumer need. The next editor improvement
-should follow a demonstrated editing need. This preserves the project's purpose while giving each
-consumer a smaller starting point.
+[Proposal 0006](0006-stream-and-save-implementation-plan.md) retains its behavioral follow-ups:
+editor recovery/keep-local recipes and real-API save races, plus independently deliverable measured
+upstream continuation. Align its recipes with this proposal's smaller API. Implement separation
+before expanding editor public surface; it does not block gateway fixes or real-API evidence.
+[Proposal 0010](0010-gateway-api-cleanup.md) owns Go cleanup and can proceed independently.
+[Proposal 0008](0008-shared-watch-hardening.md) remains completed; deferred authorization triggers
+and
+caches are not reopened. Let demonstrated stream and editing needs drive their respective
+follow-ups.
