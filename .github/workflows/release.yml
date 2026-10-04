@@ -26,7 +26,7 @@ jobs:
     name: prepare the release
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 40
     permissions:
       contents: write
       pull-requests: write
@@ -56,6 +56,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ inputs.version || steps.release.outputs['packages/krm-stream--version'] }}
         run: node .github/scripts/release.mjs resolve
+
+      - name: wait for Go release checksum records
+        if: steps.target.outputs.needed == 'true'
+        env:
+          VERSION: ${{ steps.target.outputs.version }}
+        run: node .github/scripts/release.mjs go-ready
 
   ci:
     name: ci

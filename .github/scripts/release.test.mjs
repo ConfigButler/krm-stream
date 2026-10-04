@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { needsPublish, packageName, publishWithRecovery, registryMetadata, releaseTags, validatePackage, validateRelease } from './release.mjs';
+import { goReleaseReady, needsPublish, packageName, publishWithRecovery, registryMetadata, releaseTags, validatePackage, validateRelease, waitForGoRelease } from './release.mjs';
 
 const sha = 'a'.repeat(40);
 const manifest = { 'packages/krm-stream': '0.3.0', gateway: '0.3.0', 'gateway/kube': '0.3.0' };
@@ -111,4 +111,82 @@ test('unconfirmed duplicate publication has bounded reads and remains a failure'
 test('registry outage during duplicate confirmation remains a failure', async () => {
   await assert.rejects(publishWithRecovery({ version: '0.3.0', integrity,
     publish: async () => { throw duplicate(); }, fetcher: async () => response(503) }), /HTTP 503/);
+});
+
+const goResponse = (status, body = '') => ({ status, ok: status === 200, text: async () => body });
+const missingGoTag = (path = 'gateway', version = '0.3.0') =>
+  `not found: github.com/ConfigButler/krm-stream/${path}@v${version}: invalid version: unknown revision ${path}/v${version}`;
+
+test('Go readiness checks both release modules and validates the version before any request', async () => {
+  const urls = [];
+  const fetcher = async url => { urls.push(url); return goResponse(200); };
+  assert.equal(await goReleaseReady('0.3.0', fetcher), true);
+  assert.deepEqual(urls, [
+    'https://sum.golang.org/lookup/github.com/!config!butler/krm-stream/gateway@v0.3.0',
+    'https://sum.golang.org/lookup/github.com/!config!butler/krm-stream/gateway/kube@v0.3.0',
+  ]);
+  await assert.rejects(goReleaseReady('0.3.0/../../main', async () => assert.fail('unexpected request')));
+});
+
+test('only an exact missing-tag response for the requested module is a propagation delay', async () => {
+  for (const path of ['gateway', 'gateway/kube']) {
+    for (const status of [404, 410]) {
+      assert.equal(await goReleaseReady('0.3.0', async url => url.endsWith(`/${path}@v0.3.0`)
+        ? goResponse(status, missingGoTag(path)) : goResponse(200)), false);
+    }
+  }
+  for (const [status, body] of [
+    [404, ''], [404, missingGoTag('gateway', '0.2.1')], [404, missingGoTag('unrelated')],
+    [404, `${missingGoTag()}\nchecksum mismatch`], [403, missingGoTag()], [503, missingGoTag()],
+  ]) {
+    await assert.rejects(goReleaseReady('0.3.0', async () => goResponse(status, body)), /Go checksum lookup/);
+  }
+});
+
+test('a missing tag in one module cannot hide an unrelated error in the other', async () => {
+  for (const missingPath of ['gateway', 'gateway/kube']) {
+    await assert.rejects(waitForGoRelease('0.3.0', {
+      fetcher: async url => url.endsWith(`/${missingPath}@v0.3.0`)
+        ? goResponse(404, missingGoTag(missingPath)) : goResponse(503, 'service unavailable'),
+      wait: async () => assert.fail('unrelated errors must not wait'),
+    }), /HTTP 503/);
+  }
+  await assert.rejects(waitForGoRelease('0.3.0', {
+    fetcher: async () => { throw new Error('network down'); },
+    wait: async () => assert.fail('network errors must not wait'),
+  }), /network down/);
+});
+
+test('release preparation proceeds as soon as both checksum records are visible', async () => {
+  let reads = 0;
+  const waits = [];
+  await waitForGoRelease('0.3.0', {
+    fetcher: async () => ++reads === 1 ? goResponse(404, missingGoTag()) : goResponse(200),
+    wait: async ms => waits.push(ms),
+  });
+  assert.equal(reads, 4);
+  assert.deepEqual(waits, [60_000]);
+});
+
+test('ready releases do not wait', async () => {
+  await waitForGoRelease('0.3.0', {
+    fetcher: async () => goResponse(200),
+    wait: async () => assert.fail('ready records must not wait'),
+  });
+});
+
+test('the readiness deadline includes request time and never waits beyond the remaining budget', async () => {
+  let time = 0;
+  const waits = [];
+  await assert.rejects(waitForGoRelease('0.3.0', {
+    now: () => time,
+    fetcher: async url => {
+      time += 7_000;
+      return goResponse(404, missingGoTag(url.includes('/gateway/kube@') ? 'gateway/kube' : 'gateway'));
+    },
+    wait: async ms => { waits.push(ms); time += ms; },
+  }), /still missing after 30 minutes/);
+  assert.ok(waits.every(ms => ms > 0 && ms <= 60_000));
+  assert.ok(waits.at(-1) < 60_000);
+  assert.ok(waits.reduce((sum, ms) => sum + ms, 0) < 30 * 60_000);
 });
