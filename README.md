@@ -207,6 +207,7 @@ browser. Use [`gateway.ValidateMergePatch`](gateway/patch.go) in the host save h
 - [Client state model](docs/client-state-model.md): drafts, conflicts, redactions, and keyed lists.
 - [Alternatives and prior art](docs/alternatives.md): how this differs from Kubernetes clients, browser dashboards, and config-as-data systems.
 - [Releasing](docs/releasing.md): release workflow and publication prerequisites.
+- [Upgrading from 0.7](docs/migrating.md): the one browser connector and the gateway's shared stream configuration.
 
 ## Requirements and maturity
 

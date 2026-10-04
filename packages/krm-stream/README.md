@@ -47,7 +47,8 @@ Chromium. Neither has a runtime dependency.
 ## Status
 
 Install `@configbutler/krm-stream`. This project is pre-1.0: the protocol and API may still change
-before 1.0. Renamed APIs are removed rather than retained as compatibility aliases. See the repository [README](../../README.md),
+before 1.0. Renamed APIs are removed rather than retained as compatibility aliases; see
+[upgrading from 0.7](../../docs/migrating.md). See the repository [README](../../README.md),
 [client state model](../../docs/client-state-model.md), and [release guide](../../docs/releasing.md).
 
 ## Connections and conditional saves
