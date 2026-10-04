@@ -20,8 +20,9 @@ Nothing in it needs editing by hand.
    `@configbutler/krm-stream`.
 3. Merge the release pull request. `release.yml` then:
    1. lets Release Please create the tags and select the release commit;
-   2. validates and packs that commit once in CI, including a clean consumer of the public Go tag;
-   3. publishes to npm the tarball produced by that CI run.
+   2. waits for both Go modules' checksum records to become available;
+   3. validates and packs that commit once in CI, including a clean consumer of the public Go tag;
+   4. publishes to npm the tarball produced by that CI run.
 
 If a step fails, see [recovering a failed release](#recovering-a-failed-release).
 
@@ -99,7 +100,11 @@ npm version is published. Then:
   SHA-512 integrity matches the validated tarball. Other publish failures, unavailable metadata and
   mismatched artifacts still fail.
 - **The Go checksum database does not know the new tag yet** (`unknown revision gateway/vX.Y.Z`
-  shortly after tagging). Wait and rerun; do not bypass checksum verification.
+  shortly after tagging). Release preparation checks both modules' checksum lookups once a minute
+  for up to 30 minutes, covering the [Go module mirror's cache window](https://sum.golang.org/).
+  Only the exact response identifying a missing release tag is treated as a propagation delay;
+  other lookup errors fail immediately. The consumer check runs once with checksum verification
+  enabled. If the delay outlasts that window, wait and rerun the failed job.
 - **The tarball has expired.** Tarballs are kept for 30 days, matching
   [GitHub's job retry window](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs).
   An explicit recovery run rebuilds and validates once:

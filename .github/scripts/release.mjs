@@ -64,6 +64,38 @@ export function validatePackage(pkg, version) {
   assert.equal(pkg.version, version, 'tarball version disagrees with release');
 }
 
+// A successful lookup means the release is visible; Go still verifies the signed checksums in CI.
+// Only the exact missing-tag response is a propagation delay. Inspect both modules so an unrelated
+// failure cannot be mistaken for a delay in the other module.
+export async function goReleaseReady(version, fetcher = fetch) {
+  releaseTags(version);
+  const states = await Promise.all(['gateway', 'gateway/kube'].map(async path => {
+    const module = `github.com/ConfigButler/krm-stream/${path}`;
+    const response = await fetcher(`https://sum.golang.org/lookup/github.com/!config!butler/krm-stream/${path}@v${version}`, {
+      signal: AbortSignal.timeout(30_000),
+    });
+    const body = (await response.text()).trim();
+    if (response.ok) return true;
+    const missing = `not found: ${module}@v${version}: invalid version: unknown revision ${path}/v${version}`;
+    assert.ok((response.status === 404 || response.status === 410) && body === missing,
+      `Go checksum lookup for ${module}@v${version} failed: HTTP ${response.status}: ${body}`);
+    return false;
+  }));
+  return states.every(Boolean);
+}
+
+export async function waitForGoRelease(version, { fetcher = fetch,
+  wait = ms => new Promise(resolve => setTimeout(resolve, ms)), now = Date.now } = {}) {
+  const deadline = now() + 30 * 60_000;
+  while (!await goReleaseReady(version, fetcher)) {
+    const remaining = deadline - now();
+    assert.ok(remaining > 0, `Go checksum records for v${version} are still missing after 30 minutes`);
+    console.log(`Waiting for Go checksum records for v${version}; checking again in ${Math.min(60_000, remaining) / 1_000} seconds.`);
+    await wait(Math.min(60_000, remaining));
+  }
+  console.log(`Go checksum records for v${version} are ready.`);
+}
+
 // A registry read may lag a successful upload. Only recover npm's explicit immutable-version
 // rejection, and only when the registry confirms exactly the validated artifact's bytes.
 export async function publishWithRecovery({ version, integrity, publish, fetcher = fetch,
@@ -94,6 +126,13 @@ const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const output = (key, value) => appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
 
 async function main() {
+  // Readiness uses the version already resolved and validated by release preparation.
+  // Require it explicitly so local manifest contents cannot flow into an outbound request.
+  if (process.argv[2] === 'go-ready') {
+    assert.ok(process.env.VERSION, 'go-ready requires an explicit VERSION from release preparation');
+    await waitForGoRelease(process.env.VERSION);
+    return;
+  }
   const version = process.env.VERSION || JSON.parse(readFileSync('.release-please-manifest.json'))['packages/krm-stream'];
   const tags = releaseTags(version);
   if (process.argv[2] === 'resolve') {
@@ -139,7 +178,7 @@ async function main() {
     } });
     console.log(`${packageName}@${version}: ${result}.`);
   } else {
-    throw new Error('usage: release.mjs resolve|verify|publish');
+    throw new Error('usage: release.mjs resolve|go-ready|verify|publish');
   }
 }
 
