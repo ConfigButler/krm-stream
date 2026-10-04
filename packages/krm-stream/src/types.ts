@@ -94,6 +94,15 @@ export interface StreamEvent {
   retryAfterMs?: number | null;
 }
 
+/** Resource state as a store consumes it: the state events of spec §4 without the per-connection
+ * `seq` or transport errors, which the connector keeps to itself. A host can also build these
+ * directly, with no connection at all. */
+export type ResourceStateEvent =
+  | { type: "reset"; target?: string; scope?: Scope; projection?: Projection }
+  | { type: "added" | "modified"; object: KRMObject; redacted?: Redaction[] }
+  | { type: "deleted"; identity: Identity }
+  | { type: "synced" };
+
 /** One pending edit, derived by comparing the draft to the last server object. Never cached — a
  * cached dirty set goes stale on the next watch event, which is regression R-DERIVED. */
 export interface Change {

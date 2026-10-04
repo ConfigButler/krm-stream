@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { applyStreamEvent, LiveResourceStore, SSEDecoder } from "../src/index.ts";
+import { LiveResourceStore, SSEDecoder } from "../src/index.ts";
 import { body } from "./conformance.ts";
+import { deliver } from "./expect.ts";
 
 for (const scenario of [
   {
@@ -27,7 +28,7 @@ for (const scenario of [
       ["reset", "added", "synced"],
     );
     const store = new LiveResourceStore();
-    for (const event of events) applyStreamEvent(store, event);
+    for (const event of events) deliver(store, event);
 
     const upstream = body(scenario.upstream);
     const uid = upstream.metadata.uid;
@@ -63,7 +64,7 @@ test("a final Secret rotation converges over redaction records at each delivered
   const uid = "secret-token-0001";
   let upserts = 0;
   for (const event of events) {
-    applyStreamEvent(store, event);
+    deliver(store, event);
     if (event.type !== "added" && event.type !== "modified") continue;
     upserts++;
     const upstream = body(upserts === 1 ? "secret-token.v1" : "secret-token.v2");

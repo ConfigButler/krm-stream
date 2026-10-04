@@ -110,25 +110,28 @@ There are two halves, and they are usually two different people.
 
 ### The browser half
 
-No bundler, no framework, no Kubernetes client. The managed connector uses fetch, and the store is plain ESM:
+No bundler, no framework, no Kubernetes client. The connector uses fetch and hands each resource
+event to a callback; the store is plain ESM:
 
 ```ts
-import { LiveResourceStore, connectManagedResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
+import { LiveResourceStore, applyStreamEvent, connectResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
 
 const store = new LiveResourceStore();
 
-const connection = connectManagedResourceStream(
+const connection = connectResourceStream(
   resourceStreamURL("/resource-stream/v1", {
     target: "production",
     version: "v1",
     resource: "configmaps",
     namespace: "app",
   }),
-  store,
-  {
-    onChange: (change) => render(change.uid), // what moved, and which resource it moved on
+  (event) => {
+    const change = applyStreamEvent(store, event);
+    render(change.uid); // what moved, and which resource it moved on
   },
 );
+connection.subscribe((state) => renderConnection(state.status)); // connecting, syncing, live, retrying…
+connection.closed.catch(reportApplicationError); // the callback threw, and the stream stopped
 
 // The user edits. The server keeps changing underneath them. Neither wins by accident.
 store.setValue(uid, ["spec", "replicas"], 3);

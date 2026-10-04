@@ -1,5 +1,5 @@
-// The top of the ladder that needs no cluster: a REAL browser, a REAL EventSource, a REAL unbundled
-// ESM import, against the REAL gateway.
+// The top of the ladder that needs no cluster: a REAL browser, a REAL unbundled ESM import, and a REAL
+// EventSource, against the REAL gateway.
 //
 // Everything below this rung feeds the store bytes. That proves the protocol and the merge, and it
 // cannot prove any of the following — each of which breaks the product, and each of which is
@@ -7,13 +7,14 @@
 //
 //   - the published ESM actually imports in a browser with NO BUNDLER (dist/index.js imports
 //     ./store.js imports ./merge.js…). Node importing it proves nothing: Node is not a browser.
-//   - native EventSource works at all — it is the same-origin cookie path, the v1 baseline (spec §7),
-//     and the only transport a plain <script type="module"> can use.
+//   - the gateway works with native EventSource at all — the same-origin cookie path, the v1 baseline
+//     (spec §7). The library connects with fetch; a raw EventSource below keeps the gateway honest.
 //   - a read-only region actually FLASHES. "Read-only is not ignored" is the entire product thesis,
 //     and it is a DOM fact, not a data-structure fact.
 //   - a user can type into a field while the server changes the object underneath them, and keep
 //     what they typed.
 
+import type { Page, Request } from "@playwright/test";
 import { expect, test } from "./fixtures.ts";
 
 const path = (...segments: (string | number)[]) => JSON.stringify(segments);
@@ -132,7 +133,7 @@ test("a named object that does not exist renders as empty, not as a ghost and no
   await expect(page.getByTestId("patch")).toHaveText("null");
 });
 
-test("managed fetch recovers a sequence gap and preserves the browser draft", async ({ page, entry }) => {
+test("the fetch connector recovers a sequence gap and preserves the browser draft", async ({ page, entry }) => {
   let attempts = 0;
   const object = {
     apiVersion: "v1",
@@ -166,49 +167,111 @@ test("managed fetch recovers a sequence gap and preserves the browser draft", as
       store.applyServerEvent(object);
       store.setValue("managed", ["data", "value"], "draft");
       const states: string[] = [];
-      const handle = lib.connectManagedResourceStream("/managed-test", store, {
-        maxRetries: 1,
-        retryDelayMs: 0,
-        onStateChange: (state: { status: string }) => states.push(state.status),
-        onSynced: () => handle.close(),
+      let gap: unknown;
+      const handle = lib.connectResourceStream(
+        "/managed-test",
+        (event: unknown) => lib.applyStreamEvent(store, event),
+        { maxRetries: 1, retryDelayMs: 0 },
+      );
+      handle.subscribe((state: { status: string; gap?: unknown }) => {
+        states.push(state.status);
+        if (state.status === "retrying") gap = state.gap;
+        if (state.status === "live") handle.close();
       });
       await handle.closed;
-      return { states, draft: store.draft("managed").data.value, status: handle.state.status };
+      return { states, gap, draft: store.draft("managed").data.value, status: handle.state.status };
     },
     { entry, object },
   );
   expect(attempts).toBe(2);
   expect(result.draft).toBe("draft");
-  expect(result.states).toContain("retrying");
-  expect(result.states).toContain("live");
+  expect(result.gap).toEqual({ expected: 2, received: 3 });
+  expect(result.states).toEqual(["connecting", "syncing", "syncing", "retrying", "connecting", "syncing", "syncing", "live", "closed"]);
   expect(result.status).toBe("closed");
 });
 
-test("native EventSource resets its sequence on a browser reconnect", async ({ page, entry }) => {
-  let attempts = 0;
-  await page.route("**/native-reconnect-test", (route) => {
-    attempts++;
-    return route.fulfill({
-      contentType: "text/event-stream",
-      body: 'retry: 1\n\ndata: {"seq":1,"type":"reset"}\n\ndata: {"seq":2,"type":"synced"}\n\n',
-    });
+// The library connects with fetch, but a v1 gateway must still serve native EventSource with nothing
+// but a session cookie (spec §7). These two read the REAL gateway with a raw EventSource and
+// test-owned handling — they are not another connector. Each prepends one SSE field to the
+// gateway's own bytes, `retry: 50`, so a native reconnect happens in 50ms instead of the browser's
+// default of seconds.
+async function serveWithFastReconnect(page: Page, fixture: string, onRequest: (request: Request) => Promise<void>) {
+  const matches = (url: URL) => url.pathname === "/resource-stream/v1" && url.searchParams.get("fixture") === fixture;
+  await page.route(matches, async (route) => {
+    await onRequest(route.request());
+    const response = await route.fetch();
+    await route.fulfill({ response, body: `retry: 50\n\n${await response.text()}` });
+  });
+}
+
+test("a raw EventSource reads the gateway with its session cookie, and a native reconnect gets a fresh snapshot", async ({
+  page,
+  context,
+  baseURL,
+}) => {
+  await context.addCookies([{ name: "session", value: "opaque", url: baseURL! }]);
+  const cookies: (string | null)[] = [];
+  await serveWithFastReconnect(page, "snapshot-then-deltas", async (request) => {
+    cookies.push(await request.headerValue("cookie"));
   });
   await page.goto("/");
-  const result = await page.evaluate(async (entry) => {
-    const lib = await import(`/krm-stream/${entry === "bundle" ? "krm-stream" : "index"}.js`);
-    let synced = 0;
-    let gaps = 0;
-    const handle = lib.connectWithEventSource("/native-reconnect-test", new lib.LiveResourceStore(), {
-      onSynced: () => {
-        if (++synced === 2) handle.close();
-      },
-      onGap: () => gaps++,
-    });
-    await handle.closed;
-    return { synced, gaps };
-  }, entry);
-  expect(attempts).toBe(2);
-  expect(result).toEqual({ synced: 2, gaps: 0 });
+  const connections = await page.evaluate(
+    () =>
+      new Promise<{ seq: number; type: string }[][]>((resolve, reject) => {
+        const es = new EventSource("/resource-stream/v1?fixture=snapshot-then-deltas&pace=0ms");
+        const seen: { seq: number; type: string }[][] = [];
+        es.onopen = () => seen.push([]);
+        es.onmessage = (message) => {
+          const { seq, type } = JSON.parse(message.data);
+          seen.at(-1)!.push({ seq, type });
+          if (seen.length === 2 && type === "synced") {
+            es.close();
+            resolve(seen);
+          }
+        };
+        setTimeout(() => {
+          es.close();
+          reject(new Error(`no second snapshot: ${JSON.stringify(seen)}`));
+        }, 10_000);
+      }),
+  );
+  // Framing: one JSON event per data frame, numbered from 1 on every physical connection.
+  expect(connections[0]).toEqual([
+    { seq: 1, type: "reset" },
+    { seq: 2, type: "added" },
+    { seq: 3, type: "added" },
+    { seq: 4, type: "synced" },
+    { seq: 5, type: "modified" },
+  ]);
+  // The browser's own reconnect is a NEW connection, so it starts with a complete snapshot.
+  expect(connections[1]).toEqual(connections[0]!.slice(0, 4));
+  expect(cookies).toEqual(["session=opaque", "session=opaque"]);
+});
+
+test("a raw EventSource closed on a terminal error never reconnects", async ({ page }) => {
+  let requests = 0;
+  await serveWithFastReconnect(page, "resourceversion-unorderable", async () => {
+    requests++;
+  });
+  await page.goto("/");
+  const result = await page.evaluate(
+    () =>
+      new Promise<{ events: string[]; readyState: number }>((resolve) => {
+        const es = new EventSource("/resource-stream/v1?fixture=resourceversion-unorderable&pace=0ms");
+        const events: string[] = [];
+        es.onmessage = (message) => {
+          const event = JSON.parse(message.data);
+          events.push(`${event.type}${event.terminal ? " terminal" : ""}`);
+          if (event.type !== "error" || event.terminal !== true) return;
+          // The consumer's half of the rule: a terminal error closes for good. Left open, the browser
+          // would be back in 50ms, and forever after.
+          es.close();
+          setTimeout(() => resolve({ events, readyState: es.readyState }), 500);
+        };
+      }),
+  );
+  expect(result).toEqual({ events: ["reset", "error terminal"], readyState: 2 });
+  expect(requests).toBe(1);
 });
 
 test("the visible editor recovers and retains typing during a reconnect", async ({ page, visit }) => {

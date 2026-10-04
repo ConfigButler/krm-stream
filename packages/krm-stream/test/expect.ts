@@ -17,9 +17,17 @@
 //                            NOT flash a read-only field that moved. See docs §3.
 
 import assert from "node:assert/strict";
-import type { LiveResourceStore } from "../src/index.ts";
-import type { Path } from "../src/types.ts";
+import { applyStreamEvent, type LiveResourceStore, type StreamChange } from "../src/index.ts";
+import { toStateEvent } from "../src/sse.ts";
+import type { Path, StreamEvent } from "../src/types.ts";
 import { body, type FixtureEdit, type FixtureExpect } from "./conformance.ts";
+
+/** Feed one wire event to a store the way connectResourceStream does: the state it carries, if any,
+ * goes to the store, and an error or unknown event goes nowhere. */
+export function deliver(store: LiveResourceStore, wire: StreamEvent): StreamChange | null {
+  const event = toStateEvent(wire);
+  return event ? applyStreamEvent(store, event) : null;
+}
 
 /** `path` in a fixture edit always addresses the FIELD, not its container — even for the two ops
  * whose store signature takes the map plus a key. Keeping the fixture format uniform is worth the one

@@ -14,8 +14,8 @@ configuration. Raw watch objects include fields such as Secret values and manage
 must decide which scopes and fields it can disclose before sending them to the browser.
 
 The gateway uses a host-supplied Kubernetes client, applies the selected projection and emits
-`reset` … `synced` snapshots followed by live updates. The managed connector handles bounded browser
-reconnection; a new connection receives a fresh snapshot. See the
+`reset` … `synced` snapshots followed by live updates. The browser connector, `connectResourceStream`,
+handles bounded reconnection; a new connection receives a fresh snapshot. See the
 [architecture diagram](../README.md#how-it-fits) and [protocol](../spec/v1.md).
 
 ## Optional watch sharing

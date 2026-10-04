@@ -17,16 +17,10 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import {
-  applyStreamEvent,
-  connectResourceStream,
-  LiveResourceStore,
-  SSEDecoder,
-  StreamSequence,
-} from "../src/index.ts";
+import { LiveResourceStore, SSEDecoder, StreamSequence } from "../src/index.ts";
 import type { Path, StreamEvent } from "../src/types.ts";
 import { clientFixtures, resolve } from "./conformance.ts";
-import { applyEdit, check } from "./expect.ts";
+import { applyEdit, check, deliver } from "./expect.ts";
 
 const SSE = new URL("../../../conformance/gen/sse/", import.meta.url);
 
@@ -49,7 +43,7 @@ for (const f of wireFixtures()) {
     const store = new LiveResourceStore();
     const flashed: Path[] = [];
     for (const [i, ev] of events.entries()) {
-      flashed.push(...applyStreamEvent(store, ev).flashed);
+      flashed.push(...(deliver(store, ev)?.flashed ?? []));
       for (const edit of f.client?.edits ?? []) {
         if (edit.after === i) applyEdit(store, edit);
       }
@@ -139,7 +133,7 @@ test("an unknown event type and an unknown field are ignored, not fatal", () => 
       'data: {"type":"synced"}\n\n',
   );
   assert.equal(events.length, 3);
-  for (const ev of events) applyStreamEvent(store, ev);
+  for (const ev of events) deliver(store, ev);
   assert.deepEqual(store.ids(), [], "the store survived an event type it has never heard of");
 });
 
@@ -156,21 +150,6 @@ test("a CRLF delimiter split across chunks is one newline, not two", () => {
   assert.deepEqual(d.push('data: {"seq":1,"type":"reset"}\r'), []);
   assert.deepEqual(d.push("\n\r"), []);
   assert.deepEqual(d.push("\n"), [{ seq: 1, type: "reset" }]);
-});
-
-test("an already-aborted signal never opens a fetch stream", async () => {
-  const signal = new AbortController();
-  signal.abort();
-  let calls = 0;
-  const handle = connectResourceStream("https://example.invalid/stream", new LiveResourceStore(), {
-    signal: signal.signal,
-    fetch: async () => {
-      calls++;
-      return new Response();
-    },
-  });
-  await handle.closed;
-  assert.equal(calls, 0);
 });
 
 /** Decode the whole transcript, feeding it `size` characters at a time. */

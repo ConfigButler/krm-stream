@@ -17,7 +17,57 @@ import { clone, deepEqual, isPlainObject } from "./deep.ts";
 import { type MergeState, type Regions, reconcile } from "./merge.ts";
 import { get, has, isPrefix, parsePointer, pathKey, removeAt, setAt } from "./path.ts";
 import { defaultPolicy } from "./policy.ts";
-import type { Change, Conflict, EditabilityPolicy, KRMObject, Path, Redaction } from "./types.ts";
+import type { Change, Conflict, EditabilityPolicy, KRMObject, Path, Redaction, ResourceStateEvent } from "./types.ts";
+
+/** What one stream event did to the store.
+ *
+ * This is the whole ApplyResult and the uid it belongs to, because anything less makes a host
+ * reimplement the stream loop to get the rest back. A UI rendering more than ONE resource per stream
+ * — which is most of them — cannot use a bare list of paths: it knows what moved and not what moved.
+ *
+ * Each field answers a question a renderer actually has:
+ *
+ *   uid         which resource. Absent only on reset/synced, which are about the stream, not an object.
+ *   added       an arrival, not a change. Animate it in; do not flash it as if a value moved.
+ *   structural  keys or rows appeared or disappeared. REBUILD the list; re-reading values is not enough.
+ *   flashed     the paths the server moved. Highlight these.
+ *   conflicts   the paths now conflicted, complete — not just the new ones.
+ */
+export interface StreamChange {
+  type: ResourceStateEvent["type"];
+  uid?: string;
+  added: boolean;
+  structural: boolean;
+  flashed: Path[];
+  conflicts: Path[];
+}
+
+/** What a stream event does to a store. This is the consumer's half of the event table (spec §4), and
+ * it is exported because it IS the protocol — a host feeding a store, from connectResourceStream or
+ * from its own source of state, should not have to reimplement the switch and get `synced` subtly
+ * wrong. */
+export function applyStreamEvent(store: LiveResourceStore, event: ResourceStateEvent): StreamChange {
+  switch (event.type) {
+    case "reset":
+      store.beginSnapshot();
+      return { type: event.type, added: false, structural: false, flashed: [], conflicts: [] };
+    case "added":
+    case "modified": {
+      const result = store.applyServerEvent(event.object, { redacted: event.redacted });
+      return { type: event.type, uid: event.object.metadata.uid, ...result };
+    }
+    case "deleted": {
+      const uid = event.identity.uid;
+      store.removeResource(uid);
+      // A removal IS structural: a row left the collection, and a UI that only re-reads values would
+      // keep rendering it.
+      return { type: event.type, uid, added: false, structural: true, flashed: [], conflicts: [] };
+    }
+    case "synced":
+      store.endSnapshot();
+      return { type: event.type, added: false, structural: false, flashed: [], conflicts: [] };
+  }
+}
 
 /** What one server event did, for a host that wants to animate it. `flashed` is an OUTPUT, not
  * state: the host highlights those paths and forgets them. */

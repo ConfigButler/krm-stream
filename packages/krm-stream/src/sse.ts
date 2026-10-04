@@ -1,20 +1,20 @@
 // The transport, consumer side. Everything else in this package is pure logic; this is the only file
 // that knows a stream is made of bytes.
 //
-// Two ways in, because there are two authentication stories (spec §7) and neither is optional:
+// One connection at a time, over fetch: fetch sends the same-origin session cookie a v1 gateway must
+// accept (spec §7) and, unlike native EventSource, can also send `Authorization: Bearer`. It also
+// works in Node, so it is what the conformance suite drives. connection.ts owns everything that spans
+// connections — retries, lifecycle state and the public handle — and is the only caller.
 //
-//   connectResourceStream    fetch-based. Needed for `Authorization: Bearer`, because native
-//                            EventSource cannot send a custom header. Works in Node, so it is what
-//                            the conformance suite drives.
-//   connectWithEventSource   native EventSource. Needed for the same-origin session-cookie case,
-//                            which is the BASELINE a v1 gateway must support.
+// The rule that is easy to get wrong: on a TERMINAL error, close the connection and do not come back.
+// A client that reconnects anyway will hammer a scope it can never be allowed to see — forever, from
+// every open tab.
 //
-// The rule both must obey, and the one that is easy to get wrong: on a TERMINAL error, close the
-// connection. EventSource reconnects automatically otherwise, and will hammer a scope it can never
-// be allowed to see — forever, from every open tab.
+// Nothing here knows about a store. State events go to a consumer, and what it does with them is its
+// own business.
 
-import type { LiveResourceStore } from "./store.ts";
-import type { ErrorCode, EventType, Path, StreamEvent } from "./types.ts";
+import type { ErrorCode, ResourceStateEvent, StreamEvent } from "./types.ts";
+import { PROTOCOL_VERSION } from "./version.ts";
 
 /** Incremental SSE parser. Bytes arrive in whatever chunks the network feels like — a frame can be
  * split down the middle, and it WILL be, under exactly the load where you least want to debug it —
@@ -88,101 +88,122 @@ function parseFrame(frame: string): StreamEvent | null {
   }
 }
 
-/** What a stream event does to a store. This is the consumer's half of the event table (spec §4), and
- * it is exported because it IS the protocol — a host feeding a store from its own transport should
- * not have to reimplement the switch and get `synced` subtly wrong.
- *
- * Returns the complete StreamChange — which resource, and what happened to it. */
-export function applyStreamEvent(store: LiveResourceStore, ev: StreamEvent): StreamChange {
-  switch (ev.type) {
+/** The state a decoded wire event carries, or null when it carries none: an error, a type this
+ * client does not know (spec §0), or an upsert or deletion without the object or identity it needs.
+ * This checks presence only; it is not schema validation of the object. */
+export function toStateEvent(wire: StreamEvent): ResourceStateEvent | null {
+  switch (wire.type) {
     case "reset":
-      store.beginSnapshot();
-      return { type: ev.type, added: false, structural: false, flashed: [], conflicts: [] };
+      return {
+        type: "reset",
+        ...(wire.target === undefined ? {} : { target: wire.target }),
+        ...(wire.scope === undefined ? {} : { scope: wire.scope }),
+        ...(wire.projection === undefined ? {} : { projection: wire.projection }),
+      };
     case "added":
-    case "modified": {
-      if (!ev.object) return { type: ev.type, added: false, structural: false, flashed: [], conflicts: [] };
-      const result = store.applyServerEvent(ev.object, { redacted: ev.redacted });
-      return { type: ev.type, uid: ev.object.metadata.uid, ...result };
-    }
-    case "deleted": {
-      const uid = ev.identity?.uid;
-      if (uid) store.removeResource(uid);
-      // A removal IS structural: a row left the collection, and a UI that only re-reads values would
-      // keep rendering it.
-      return { type: ev.type, uid, added: false, structural: true, flashed: [], conflicts: [] };
-    }
+    case "modified":
+      if (!wire.object) return null;
+      return {
+        type: wire.type,
+        object: wire.object,
+        ...(wire.redacted === undefined ? {} : { redacted: wire.redacted }),
+      };
+    case "deleted":
+      if (!wire.identity?.uid) return null;
+      return { type: "deleted", identity: wire.identity };
     case "synced":
-      store.endSnapshot();
-      return { type: ev.type, added: false, structural: false, flashed: [], conflicts: [] };
+      return { type: "synced" };
     default:
-      // An unknown event type MUST be ignored, not treated as an error (spec §0). That is what lets
-      // the gateway add an optional event type later without breaking a browser nobody can update.
-      return { type: ev.type, added: false, structural: false, flashed: [], conflicts: [] };
+      return null;
   }
 }
 
-/** What one stream event did to the store.
- *
- * This is the whole ApplyResult and the uid it belongs to, because anything less makes a host
- * reimplement the stream loop to get the rest back. A UI rendering more than ONE resource per stream
- * — which is most of them — cannot use a bare list of paths: it knows what moved and not what moved.
- *
- * Each field answers a question a renderer actually has:
- *
- *   uid         which resource. Absent only on reset/synced, which are about the stream, not an object.
- *   added       an arrival, not a change. Animate it in; do not flash it as if a value moved.
- *   structural  keys or rows appeared or disappeared. REBUILD the list; re-reading values is not enough.
- *   flashed     the paths the server moved. Highlight these.
- *   conflicts   the paths now conflicted, complete — not just the new ones.
- */
-export interface StreamChange {
-  type: EventType;
-  uid?: string;
-  added: boolean;
-  structural: boolean;
-  flashed: Path[];
-  conflicts: Path[];
+/** What one connection reports to connectResourceStream. A host observes the same moments through
+ * the handle's state, and the events themselves through its consumer. */
+export interface ConnectionHooks {
+  /** Receives each state event synchronously, in stream order. */
+  consume: (event: ResourceStateEvent) => void;
+  /** The gateway accepted the stream. Its snapshot has not started yet. */
+  opened(): void;
+  /** A `reset` arrived. Called before the consumer sees it. */
+  reset(): void;
+  /** The consumer has applied `synced` and the connection is still open. */
+  synced(): void;
+  /** A missing or duplicated event. The event beyond the gap was discarded; the connection ends. */
+  gap(expected: number, received: number): void;
+  /** A protocol or HTTP error. A terminal one ends the connection. */
+  error(code: ErrorCode, message: string, terminal: boolean, retryAfterMs?: number): void;
 }
 
-export interface StreamOptions {
-  /** Transport connected; the snapshot may still be incomplete. */
-  onOpen?: () => void;
+export interface ConnectionOptions {
   /** Defaults to same-origin; use include for a cross-origin cookie gateway. */
   credentials?: RequestCredentials;
-  /** Called for protocol and HTTP errors. A terminal error ends the connection without retry.
-   * `retryAfterMs` is the server's hint for a retryable error: an error event's `retryAfterMs`, or
-   * an HTTP `Retry-After`. */
-  onError?: (code: ErrorCode, message: string, terminal: boolean, retryAfterMs?: number) => void;
-  /** Called at the end of every snapshot cycle. The store is now consistent: a good moment to paint. */
-  onSynced?: () => void;
-  /** Called after any change, with what the event did and which resource it did it to. */
-  onChange?: (change: StreamChange) => void;
-  /** A missing or duplicated event was observed. The connection is closed; reconnect for a snapshot. */
-  onGap?: (expected: number, received: number) => void;
-  /** Abort the stream from outside. */
-  signal?: AbortSignal;
   /** Injectable for tests. Defaults to the global fetch. */
   fetch?: typeof globalThis.fetch;
   headers?: Record<string, string>;
 }
 
-export interface StreamHandle {
-  close(): void;
-  /** Resolves when the stream ends: closed, aborted, or terminated by a terminal error. */
-  closed: Promise<void>;
+/** The consumer's exception, boxed so that even `throw undefined` cannot pass for a clean end. */
+export interface ConsumerFailure {
+  error: unknown;
 }
 
-/** Consume a resource stream over fetch, feeding a store. Use this when the gateway authenticates
- * with a bearer token — native EventSource cannot send the header. */
-export function connectResourceStream(url: string, store: LiveResourceStore, opts: StreamOptions = {}): StreamHandle {
-  if (opts.signal?.aborted) return { close: () => {}, closed: Promise.resolve() };
+/** Open one fetch connection and deliver its state events until it ends: EOF, a network failure, a
+ * refusal, a terminal error, a sequence gap, `signal`, or an exception from the consumer.
+ *
+ * It resolves in every case, after the reader and listeners are released, because whether to come
+ * back is the caller's decision. Only the consumer's own exception is returned. It is captured where
+ * it was thrown, so neither a close() from inside the consumer nor the clean-up after it can turn it
+ * into an ordinary ending. */
+export async function streamOnce(
+  url: string,
+  hooks: ConnectionHooks,
+  signal: AbortSignal,
+  opts: ConnectionOptions = {},
+): Promise<ConsumerFailure | undefined> {
   const controller = new AbortController();
-  const fetchImpl = opts.fetch ?? globalThis.fetch;
   const abort = () => controller.abort();
-  opts.signal?.addEventListener("abort", abort, { once: true });
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) abort();
+  const sequence = new StreamSequence();
+  // Called detached, so a consumer never sees this hooks object as `this`.
+  const { consume } = hooks;
+  let failure: ConsumerFailure | undefined;
 
-  const closed = (async () => {
-    const res = await fetchImpl(url, {
+  /** Check and deliver one decoded event; false when the connection must end. */
+  const deliver = (wire: StreamEvent): boolean => {
+    // Sequence first, for every event, known or not: a gap makes everything after it uncertain.
+    const gap = sequence.observe(wire);
+    if (gap) {
+      hooks.gap(gap.expected, gap.received);
+      return false;
+    }
+    if (wire.type === "error") {
+      const hint = typeof wire.retryAfterMs === "number" && wire.retryAfterMs >= 0 ? wire.retryAfterMs : undefined;
+      hooks.error(wire.code ?? "INTERNAL", wire.message ?? "", wire.terminal ?? false, hint);
+      return wire.terminal !== true;
+    }
+    const event = toStateEvent(wire);
+    if (!event) return true;
+    // Observed here, not inferred from what a consumer did with it: the connection is resyncing.
+    if (event.type === "reset") {
+      hooks.reset();
+      if (controller.signal.aborted) return false;
+    }
+    try {
+      consume(event);
+    } catch (error) {
+      failure = { error };
+      return false;
+    }
+    // A consumer that closed the stream while applying `synced` gets no later `live`.
+    if (event.type === "synced" && !controller.signal.aborted) hooks.synced();
+    return true;
+  };
+
+  try {
+    if (controller.signal.aborted) return undefined;
+    const res = await (opts.fetch ?? globalThis.fetch)(url, {
       signal: controller.signal,
       headers: { Accept: "text/event-stream", ...opts.headers },
       // The stream IS the response body; a cached one is a stream that never moves.
@@ -200,16 +221,29 @@ export function connectResourceStream(url: string, store: LiveResourceStore, opt
               : "INTERNAL";
       const terminal = res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429;
       const message = (await statusMessage(res, controller.signal)) ?? `stream: HTTP ${res.status}`;
-      if (controller.signal.aborted) return; // closed while reading the refusal: report nothing
-      opts.onError?.(code, message, terminal, retryAfter(res.headers.get("Retry-After")));
-      return;
+      if (controller.signal.aborted) return undefined; // closed while reading the refusal: report nothing
+      hooks.error(code, message, terminal, retryAfter(res.headers.get("Retry-After")));
+      return undefined;
+    }
+    if (controller.signal.aborted) {
+      await res.body.cancel().catch(() => {});
+      return undefined;
+    }
+    // The header is optional (spec §0), and a cross-origin response may hide it. Only a version
+    // that is present and different is refused, before a single event of it is applied.
+    const protocol = res.headers.get("X-KRM-Stream-Protocol");
+    if (protocol !== null && protocol.trim() !== String(PROTOCOL_VERSION)) {
+      await res.body.cancel().catch(() => {});
+      if (controller.signal.aborted) return undefined;
+      hooks.error(
+        "INTERNAL",
+        `stream: protocol mismatch: the gateway speaks X-KRM-Stream-Protocol ${JSON.stringify(protocol)}, this client speaks ${PROTOCOL_VERSION}`,
+        true,
+      );
+      return undefined;
     }
 
-    if (controller.signal.aborted) {
-      await res.body.cancel();
-      return;
-    }
-    opts.onOpen?.();
+    hooks.opened();
     const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
     const cancelReader = () => {
       void reader.cancel().catch(() => {});
@@ -217,31 +251,30 @@ export function connectResourceStream(url: string, store: LiveResourceStore, opt
     controller.signal.addEventListener("abort", cancelReader, { once: true });
     if (controller.signal.aborted) cancelReader();
     const decoder = new SSEDecoder();
-    const sequence = new StreamSequence();
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (done || controller.signal.aborted) return;
+        if (done || controller.signal.aborted) return failure;
         for (const ev of decoder.push(value)) {
-          if (controller.signal.aborted) return;
-          if (feed(store, sequence, ev, opts)) {
-            controller.abort(); // terminal: stop, and do NOT come back
-            return;
+          // One chunk can hold many events. Nothing after a close is delivered.
+          if (controller.signal.aborted) return failure;
+          if (!deliver(ev)) {
+            controller.abort(); // gap, terminal error or consumer failure: stop this connection
+            return failure;
           }
         }
       }
-    } catch (err) {
-      if (!controller.signal.aborted) throw err;
     } finally {
       controller.signal.removeEventListener("abort", cancelReader);
       await reader.cancel().catch(() => {});
     }
-  })();
-
-  return {
-    close: () => controller.abort(),
-    closed: closed.catch(() => {}).finally(() => opts.signal?.removeEventListener("abort", abort)),
-  };
+  } catch {
+    // The network failed, or an observer threw. Either way this connection is over and the caller
+    // decides about the next. A consumer exception never lands here: deliver() captured it.
+    return failure;
+  } finally {
+    signal.removeEventListener("abort", abort);
+  }
 }
 
 /** The largest refusal body read in search of a Kubernetes Status message. */
@@ -309,74 +342,4 @@ export function retryAfter(header: string | null, now = Date.now()): number | un
   if (/^\d+$/.test(value)) return Number(value) * 1000;
   const at = Date.parse(value);
   return Number.isNaN(at) ? undefined : Math.max(0, at - now);
-}
-
-/** Consume a resource stream with the browser's native EventSource. This is the same-origin
- * session-cookie path — the baseline a v1 gateway MUST support, because a cookie is the only
- * credential EventSource can carry. */
-export function connectWithEventSource(
-  url: string,
-  store: LiveResourceStore,
-  opts: Omit<StreamOptions, "fetch" | "headers" | "credentials"> = {},
-): StreamHandle {
-  if (opts.signal?.aborted) return { close: () => {}, closed: Promise.resolve() };
-  const es = new EventSource(url, { withCredentials: true });
-  let sequence = new StreamSequence();
-  let stopped = false;
-  let resolve: () => void;
-  const closed = new Promise<void>((r) => {
-    resolve = r;
-  });
-
-  const shut = () => {
-    stopped = true;
-    es.close();
-    opts.signal?.removeEventListener("abort", shut);
-    resolve();
-  };
-
-  es.onopen = () => {
-    if (stopped) return;
-    sequence = new StreamSequence();
-    opts.onOpen?.();
-  };
-
-  es.onmessage = (e: MessageEvent<string>) => {
-    if (stopped) return;
-    let ev: StreamEvent;
-    try {
-      ev = JSON.parse(e.data) as StreamEvent;
-    } catch {
-      return; // an unparseable frame is not a reason to tear down a live stream
-    }
-    if (feed(store, sequence, ev, opts)) shut();
-  };
-
-  // EventSource's `error` is also fired on a transport hiccup, where its OWN reconnect is the
-  // correct behaviour and we must not interfere. Terminal protocol errors and sequence gaps close
-  // this low-level handle. Use connectManagedResourceStream for managed gap recovery.
-  es.onerror = () => {
-    if (es.readyState === EventSource.CLOSED) shut();
-  };
-
-  opts.signal?.addEventListener("abort", shut, { once: true });
-  return { close: shut, closed };
-}
-
-/** Apply one event; returns true if the stream must now be closed. */
-function feed(store: LiveResourceStore, sequence: StreamSequence, ev: StreamEvent, opts: StreamOptions): boolean {
-  const gap = sequence.observe(ev);
-  if (gap) {
-    opts.onGap?.(gap.expected, gap.received);
-    return true;
-  }
-  if (ev.type === "error") {
-    const hint = typeof ev.retryAfterMs === "number" && ev.retryAfterMs >= 0 ? ev.retryAfterMs : undefined;
-    opts.onError?.(ev.code ?? "INTERNAL", ev.message ?? "", ev.terminal ?? false, hint);
-    return ev.terminal === true;
-  }
-  const change = applyStreamEvent(store, ev);
-  if (ev.type === "synced") opts.onSynced?.();
-  opts.onChange?.(change);
-  return false;
 }

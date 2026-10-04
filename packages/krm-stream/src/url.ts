@@ -18,7 +18,7 @@ export type ScopeQuery = Omit<Scope, "target"> & { target?: string; projection?:
  * ```ts
  * connectResourceStream(resourceStreamURL("/resource-stream/v1", {
  *   version: "v1", resource: "configmaps", namespace: "app",
- * }), store);
+ * }), (event) => applyStreamEvent(store, event));
  * ```
  *
  * The field order is FIXED — target, group, version, resource, namespace, name, labelSelector — so
