@@ -97,27 +97,6 @@ func ScopeFromQuery(q url.Values) (Scope, error) {
 	return s, nil
 }
 
-// Query renders a scope as the CANONICAL query string — one fixed field order, so a URL is stable,
-// cacheable and diffable, and so the client's output is byte-comparable with what this parser
-// accepts. It is the Go twin of the client's resourceStreamURL(), and conformance/scopes.yaml is
-// what keeps the two honest.
-func (s Scope) Query() url.Values {
-	q := url.Values{}
-	set := func(k, v string) {
-		if v != "" {
-			q.Set(k, v)
-		}
-	}
-	set("target", s.Target)
-	set("group", s.Group)
-	set("version", s.Version)
-	set("resource", s.Resource)
-	set("namespace", s.Namespace)
-	set("name", s.Name)
-	set("labelSelector", s.LabelSelector)
-	return q
-}
-
 // isDNSName accepts the shape every one of these fields actually has in Kubernetes: a DNS subdomain.
 // Lowercase alphanumerics, '-' and '.', starting and ending alphanumeric. It exists so that a value
 // like `../../kube-system` is rejected AT THE EDGE rather than carried around inside a Scope that

@@ -50,6 +50,9 @@ tasks:
       - conformance/scopes.yaml
       - conformance/generate.sh
       - gateway/*.go
+      # The harness that replays each fixture into the goldens: change how a script is played, and the
+      # bytes it records can change with it.
+      - gateway/internal/conformance/*.go
       # The generator's own command line lives in this file, so it is a source too: changing WHICH
       # golden tests run, and then being told "up to date", is a trap I walked into writing this line.
       - Taskfile.yml

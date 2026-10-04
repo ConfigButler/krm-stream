@@ -156,10 +156,10 @@ func TestHTTPFailuresCancelQuietStream(t *testing.T) {
 func TestSinkShortWriteAndFailedTerminalDelivery(t *testing.T) {
 	w := &failingHTTPWriter{header: make(http.Header), short: true}
 	s := NewSSESink(w)
-	if err := s.Comment("x"); !errors.Is(err, io.ErrShortWrite) {
+	if err := s.comment(t.Context(), "x"); !errors.Is(err, io.ErrShortWrite) {
 		t.Fatal(err)
 	}
-	_ = s.Comment("again")
+	_ = s.comment(t.Context(), "again")
 	if w.writes != 1 || w.flushes != 0 {
 		t.Fatal("failed sink was reused")
 	}

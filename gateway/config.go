@@ -46,9 +46,9 @@ type StreamConfig struct {
 	// not carry. It must not block. Nil discards it.
 	Diagnostics Diagnostics
 
-	// HeartbeatInterval is how often an idle HTTP stream sends an SSE heartbeat comment. Zero uses
-	// HeartbeatInterval (20 seconds); set a positive value to match a proxy's idle timeout. It has no
-	// effect on the transport-neutral Stream method.
+	// HeartbeatInterval is how often an idle HTTP stream sends an SSE heartbeat comment. Zero uses 20
+	// seconds, under the 30–60s idle timeout of common proxies; set a positive value to match yours.
+	// It has no effect on the transport-neutral Stream method.
 	HeartbeatInterval time.Duration
 
 	// WriteTimeout bounds each HTTP write-plus-flush operation. Zero installs no deadline. Positive

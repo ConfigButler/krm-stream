@@ -1,17 +1,23 @@
-package gateway
+// Package conformance is the repository's test harness for the shared corpus in conformance/: the
+// fixture loader and the scripted fake Kubernetes watch that the gateway's conformance and golden
+// tests and the replay server all drive. It is internal on purpose. The production gateway never
+// imports it, so serving a stream never involves reading a corpus from disk.
+package conformance
 
 import (
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/ConfigButler/krm-stream/gateway"
 )
 
 // The conformance loader. The Go and TypeScript suites read the SAME generated JSON — that shared
 // read is the entire reason this is one repository. Keep the two loaders' semantics identical; if
 // they drift, the contract is no longer a contract.
 //
-// Source of truth is ../conformance/{bodies,fixtures}/*.yaml. `task fixtures` builds the JSON; CI
+// Source of truth is conformance/{bodies,fixtures}/*.yaml. `task fixtures` builds the JSON; CI
 // fails if it is stale.
 
 // Fixture is one scenario, end to end: what the watch does, what must therefore appear on the wire,
@@ -22,8 +28,8 @@ type Fixture struct {
 	Why    string   `json:"why"`
 	Suites []string `json:"suites"`
 
-	Scope      *Scope     `json:"scope"`
-	Projection Projection `json:"projection"`
+	Scope      *gateway.Scope     `json:"scope"`
+	Projection gateway.Projection `json:"projection"`
 
 	// Watch is the gateway's input: a scripted fake Kubernetes watch. No cluster required.
 	Watch []WatchOp `json:"watch"`
@@ -68,12 +74,12 @@ type WatchOp struct {
 // FixtureEvent is an Event with its object given by REFERENCE into bodies/, so a scenario stays
 // readable. Resolve() turns it into the real thing.
 type FixtureEvent struct {
-	Type     EventType   `json:"type"`
-	Body     string      `json:"body"`
-	Redacted []Redaction `json:"redacted"`
-	Identity *Identity   `json:"identity"`
-	Code     ErrorCode   `json:"code"`
-	Terminal bool        `json:"terminal"`
+	Type     gateway.EventType   `json:"type"`
+	Body     string              `json:"body"`
+	Redacted []gateway.Redaction `json:"redacted"`
+	Identity *gateway.Identity   `json:"identity"`
+	Code     gateway.ErrorCode   `json:"code"`
+	Terminal bool                `json:"terminal"`
 }
 
 // Suite reports whether this fixture is one the given suite must run.
@@ -91,13 +97,13 @@ func (f Fixture) Suite(name string) bool {
 
 // Corpus is the loaded conformance suite: the bodies (KRM objects) and the fixtures that use them.
 type Corpus struct {
-	Bodies   map[string]KRMObject
+	Bodies   map[string]gateway.KRMObject
 	Fixtures []Fixture
 }
 
 // Body returns a KRM object by its bodies/ reference. It is a hard error to miss: a fixture that
 // names an object which does not exist is a broken contract, not a skippable test.
-func (c Corpus) Body(ref string) (KRMObject, error) {
+func (c Corpus) Body(ref string) (gateway.KRMObject, error) {
 	obj, ok := c.Bodies[ref]
 	if !ok {
 		return nil, fmt.Errorf("conformance: no such body %q", ref)
@@ -106,41 +112,41 @@ func (c Corpus) Body(ref string) (KRMObject, error) {
 }
 
 // Resolve turns a fixture event into the Event that must actually appear on the wire.
-func (c Corpus) Resolve(scope *Scope, projection Projection, fe FixtureEvent) (Event, error) {
-	ev := Event{Type: fe.Type}
+func (c Corpus) Resolve(scope *gateway.Scope, projection gateway.Projection, fe FixtureEvent) (gateway.Event, error) {
+	ev := gateway.Event{Type: fe.Type}
 	switch fe.Type {
-	case EventReset:
+	case gateway.EventReset:
 		ev.Scope = scope
 		ev.Projection = projection
 		if scope != nil {
 			ev.Target = scope.Target
 		}
-	case EventAdded, EventModified:
+	case gateway.EventAdded, gateway.EventModified:
 		obj, err := c.Body(fe.Body)
 		if err != nil {
-			return Event{}, err
+			return gateway.Event{}, err
 		}
 		ev.Object = obj
 		// The protocol requires the array to be PRESENT, never merely optional — so a nil one
 		// becomes empty here rather than vanishing from the JSON.
 		ev.Redacted = fe.Redacted
 		if ev.Redacted == nil {
-			ev.Redacted = []Redaction{}
+			ev.Redacted = []gateway.Redaction{}
 		}
-	case EventDeleted:
+	case gateway.EventDeleted:
 		ev.Identity = fe.Identity
-	case EventError:
+	case gateway.EventError:
 		ev.Code = fe.Code
 		ev.Terminal = fe.Terminal
-	case EventSynced:
+	case gateway.EventSynced:
 	default:
-		return Event{}, fmt.Errorf("conformance: unknown event type %q", fe.Type)
+		return gateway.Event{}, fmt.Errorf("conformance: unknown event type %q", fe.Type)
 	}
 	return ev, nil
 }
 
-// LoadCorpus reads the generated conformance JSON. dir is the repo's conformance/ directory;
-// LoadConformance() finds it relative to this package.
+// LoadCorpus reads the generated conformance JSON. dir is the repository's conformance/ directory;
+// callers name it explicitly (the replay server's --corpus flag, a test's relative path).
 func LoadCorpus(dir string) (Corpus, error) {
 	var c Corpus
 	if err := readJSON(filepath.Join(dir, "gen", "bodies.json"), &c.Bodies); err != nil {
@@ -152,13 +158,8 @@ func LoadCorpus(dir string) (Corpus, error) {
 	return c, nil
 }
 
-// LoadConformance loads the corpus from the repository's conformance/ directory.
-func LoadConformance() (Corpus, error) {
-	return LoadCorpus(filepath.Join("..", "conformance"))
-}
-
 func readJSON(path string, into any) error {
-	b, err := os.ReadFile(path) //nolint:gosec // a fixed, in-repo path
+	b, err := os.ReadFile(path) //nolint:gosec // the caller's own corpus directory
 	if err != nil {
 		return fmt.Errorf("conformance: %w (run `task fixtures`)", err)
 	}
@@ -166,4 +167,27 @@ func readJSON(path string, into any) error {
 		return fmt.Errorf("conformance: %s: %w", path, err)
 	}
 	return nil
+}
+
+// Connections cuts a watch script at each `disconnect` into the scripts of successive SSE
+// connections, dropping empty ones. A `disconnect` ends the CONNECTION — the browser went away and
+// will come back for a fresh snapshot — which is not the same thing as a `relist`, where upstream
+// continuity is lost on a healthy connection. Tests and the replay server both split here, so they
+// agree on what each connection serves.
+func Connections(ops []WatchOp) [][]WatchOp {
+	conns := [][]WatchOp{{}}
+	for _, op := range ops {
+		if op.Op == "disconnect" {
+			conns = append(conns, []WatchOp{})
+			continue
+		}
+		conns[len(conns)-1] = append(conns[len(conns)-1], op)
+	}
+	out := conns[:0]
+	for _, c := range conns {
+		if len(c) > 0 {
+			out = append(out, c)
+		}
+	}
+	return out
 }

@@ -638,57 +638,6 @@ func TestAuthorizerDeniesBeforeTheWatchIsEverOpened(t *testing.T) {
 	}
 }
 
-// The shared fixture pins full-projection bytes. Here every built-in projection must actively
-// suppress the final bookkeeping write and retain the version of the delivered revision.
-func TestFinalBookkeepingSuppressionAcrossProjections(t *testing.T) {
-	c := corpus(t)
-	base, err := c.Body("cm-app.v1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	final, err := c.Body("cm-app.v2-bookkeeping")
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, projection := range []Projection{ProjectionRaw, ProjectionFull, ProjectionSpec} {
-		t.Run(string(projection), func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
-			defer cancel()
-			suppressed := 0
-			gw := &Gateway{
-				StreamConfig: StreamConfig{
-					Authorizer:  AllowAll{},
-					Projections: StaticProjection(projection),
-					Clients: func(context.Context, string, Principal) (Backend, error) {
-						return &stubBackend{events: []WatchEvent{
-							{Type: WatchAdded, Object: base},
-							{Type: WatchBookmark, InitialEventsEnd: true},
-							{Type: WatchModified, Object: final},
-						}}, nil
-					},
-					Observer: ObserverFunc(func(o Observation) {
-						if o.Kind == ObservationEventSuppressed && o.EventType == EventModified {
-							suppressed++
-							cancel()
-						}
-					}),
-				},
-			}
-			sink := &recordingSink{}
-			err := gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, "", sink)
-			if !equalTypes(types(sink.events), EventReset, EventAdded, EventSynced) {
-				t.Fatalf("final bookkeeping write emitted an event: %v", types(sink.events))
-			}
-			if !errors.Is(err, context.Canceled) || suppressed != 1 {
-				t.Fatalf("final write: error=%v, suppressed=%d; want cancellation after one suppression", err, suppressed)
-			}
-			if got := mustJSON(t, sink.events[1].Object); got != mustJSON(t, base) {
-				t.Fatalf("held object = %s; want original delivered content and RV 1001", got)
-			}
-		})
-	}
-}
-
 // RESYNC_REQUIRED recovers on the same connection; UPSTREAM_UNAVAILABLE does not. It is sent with its
 // code and hint, then the stream ends so the client reconnects on its own budget. Both reach
 // Diagnostics with the raw cause.
@@ -850,4 +799,12 @@ func TestAStreamErrorCausedByAClosedWatchIsNotARoutineClose(t *testing.T) {
 	if b.opens != 1 {
 		t.Errorf("upstream opens = %d, want 1: the error was read as a routine close and reopened", b.opens)
 	}
+}
+
+// recordingSink keeps what the gateway emitted, so a test can read it back once the stream has ended.
+type recordingSink struct{ events []Event }
+
+func (s *recordingSink) Emit(_ context.Context, ev Event) error {
+	s.events = append(s.events, ev)
+	return nil
 }

@@ -102,10 +102,10 @@ func TestCanonicalQueryRoundTrips(t *testing.T) {
 				t.Errorf("scope = %+v, want %+v", got, c.Scope)
 			}
 
-			// …and the Go twin of the builder agrees, so a host constructing a URL server-side (a
-			// redirect, a link in a rendered page) produces the same bytes the client would.
-			if enc := c.Scope.Query().Encode(); enc != mustCanonical(t, c.Canonical) {
-				t.Errorf("Scope.Query() = %q, want %q", enc, mustCanonical(t, c.Canonical))
+			// …and the canonical form is exactly the scope's fields, in the builder's field order, so
+			// what the client builds is a function of the scope and of nothing else.
+			if enc := canonicalQuery(c.Scope).Encode(); enc != mustCanonical(t, c.Canonical) {
+				t.Errorf("canonical query for %+v = %q, want %q", c.Scope, enc, mustCanonical(t, c.Canonical))
 			}
 		})
 	}
@@ -120,4 +120,23 @@ func mustCanonical(t *testing.T, canonical string) string {
 		t.Fatalf("canonical query does not parse: %v", err)
 	}
 	return q.Encode()
+}
+
+// canonicalQuery renders a scope as the client's resourceStreamURL() does: every non-empty field, in
+// one fixed order. It is test support; a host building a stream URL server-side follows the same rule.
+func canonicalQuery(s gateway.Scope) url.Values {
+	q := url.Values{}
+	set := func(k, v string) {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	set("target", s.Target)
+	set("group", s.Group)
+	set("version", s.Version)
+	set("resource", s.Resource)
+	set("namespace", s.Namespace)
+	set("name", s.Name)
+	set("labelSelector", s.LabelSelector)
+	return q
 }
