@@ -1,7 +1,12 @@
 # Proposal 0007: Shared-stream transport correctness
 
-**Status: implemented; unreleased.** The transport, observation and example increments below have
-landed. The manual real-cluster scenario has been run at 2 and 200 identities and recorded in
+**Status: historical implementation plan; implemented and released in 0.4.0.** It is kept as the
+record of what was decided and why. Its instructions are not adopter guidance, and "current" below
+describes the code at the time (`e450334`), not today's. For current guidance see
+[authorization](../auth.md), [operations](../operations.md#bounded-http-delivery) and the
+[shared ConfigMap host](../../gateway/kube/examples/sharedstream/README.md).
+
+The transport, observation and example increments below have landed. The manual real-cluster scenario has been run at 2 and 200 identities and recorded in
 [docs/facts/shared-host-rehearsal.md](../facts/shared-host-rehearsal.md); 200 subscribers cost
 exactly one additional API-server watch. That is one run on one disposable cluster, without a proxy,
 browsers or resource limits, and is not a capacity guarantee.

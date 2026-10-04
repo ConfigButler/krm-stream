@@ -1,6 +1,12 @@
 # Proposal 0008 Shared watch hardening implementation plan
 
-**Status: selected scope implemented; asks 11 and 12 deferred.**
+**Status: historical implementation plan; selected scope implemented, asks 11 and 12 deferred.**
+It is kept as the record of what was decided and why; its instructions were for the implementer and
+are not adopter guidance. For current guidance see
+[session validity and timed checks](../auth.md#session-validity-and-timed-checks), the
+[revocation budget](../auth.md#revocation-budget),
+[what the SubjectAccessReview asks](../auth.md#what-the-subjectaccessreview-asks) and
+[shared backends](../../gateway/README.md#shared-backends).
 
 This is the implementer handoff for the [second krm-foyer field report](../field-reports/second-fieldreport.md).
 Implement ask 9, the explicit HTTP configuration validation option from ask 10, and the
