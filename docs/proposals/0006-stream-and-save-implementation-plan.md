@@ -148,6 +148,89 @@ do not label by UID, username or opaque RV. One shared watch still incurs a snap
 browser reconciliation per subscriber; measure those costs rather than inferring capacity from
 upstream watch count.
 
+### Proposed design (for review before implementation)
+
+Nothing below is implemented. It answers the questions this section requires settled first: the
+client-go assessment, the checkpoint and boundary rules, the exhaustion transition and the
+authorization consequences.
+
+**Where.** In `gateway/kube`, inside the watcher the backend returns. The gateway core, its snapshot
+loop and `SharedBackend` do not change: to them a continued watch is one upstream watch that never
+ended. One reopen therefore serves every subscriber of a shared scope, and nothing new reaches the
+browser: no event, no reset, no replay protocol.
+
+**Why not client-go's `RetryWatcher` (v0.36.0).** It has the reopen mechanics but conflicts with
+three requirements here. It needs a concrete initial resourceVersion, so it cannot own the streaming
+list's initial snapshot and could only take over after the boundary. It retries every failure except
+410 and authorization indefinitely, "leaving it up to the user to timeout", where this plan requires
+bounded failure. And it turns 401/403 into terminal error events, where this design wants a fresh
+cycle so the host's `Clients` can supply refreshed credentials. Wrapping it to impose those rules
+would be larger than a small loop in `backend.go` that reuses `translate`, `classify` and the
+existing bookmark handling.
+
+**Checkpoint.** The resourceVersion of the last event the API server delivered on this watch: added,
+modified, deleted, a routine bookmark or the initial-events-end bookmark. It is recorded in the
+backend, before the gateway projects or suppresses anything, so a suppressed update still advances
+it. It is never derived from a browser object, an SSE `seq` or a projected or shared view. Bookmarks
+only move it forward sooner; no bookmark cadence is assumed.
+
+**Boundary.** Continuation is armed only once the snapshot boundary is established: the
+initial-events-end bookmark on the streaming-list path, the list's resourceVersion on
+list-then-watch. A close before that returns `ErrWatchClosed` as today, so a partial snapshot is
+never relabeled as live or complete.
+
+**Reopen.** When an armed watch closes cleanly (the API server's routine timeout, 30 to 60 minutes
+by default), the watcher reopens `Watch` with the scope's selectors, `allowWatchBookmarks` and
+`resourceVersion` set to the checkpoint, and without `sendInitialEvents`. Both initialization paths
+reopen the same way. The reopened watch's events continue the stream, and the gateway never sees the
+seam.
+
+| Reopen outcome | Result |
+|---|---|
+| 410 Gone or `Expired`, when opening or as a watch error event | `ResyncRequired`: history is gone, so a fresh snapshot follows, as today |
+| 401 or 403 | `ErrWatchClosed`: a fresh cycle reauthorizes and asks `Clients` again, so expired credentials are replaced; a refusal there is terminal, exactly as at opening today |
+| Network failure, 429, 5xx or timeout | retry within the bound below |
+| Context cancelled, or `Stop` | return at once, abandoning a reopen in progress |
+
+**Exhaustion transition.** At most three consecutive failed reopens, with jittered backoff of
+roughly 250 ms, 1 s and 4 s, so a dead upstream is noticed within about six seconds. A reopened
+watch that closes again before delivering any event, bookmarks included, counts as a failure, so a
+server that accepts and immediately drops watches cannot loop. The count resets when a reopened
+watch delivers an event. At the bound the watcher returns `ErrWatchClosed`: the gateway starts a
+fresh cycle, its existing rule turns a second early end into `UPSTREAM_UNAVAILABLE` and closes the
+connection, and the client's own bounded retry budget takes over. Subscribers never report `live`
+over a dead upstream for longer than that, and no public retry setting is added.
+
+**Authorization and credentials.** Each routine upstream close used to start a cycle, and with it a
+cycle authorization check and a `Clients` call. With continuation those happen far less often. That
+cadence was never a revocation bound: quiet streams already relied on `ReauthorizationInterval`,
+whose timed checks run per subscriber and keep running through an upstream reopen, because the cycle
+they belong to has not ended. What does change is credential lifetime: a per-user backend is now
+used for the whole stream rather than for one routine watch period. The 401 fallback above refreshes
+credentials instead of ending the stream, and the [authorization guide](../auth.md) must say that a
+backend's credentials should refresh themselves (client-go token sources do) or be renewed through a
+fresh cycle. Open question for review: whether to also cap continuation age, so that a fresh cycle
+still happens periodically. The proposal is not to, because timed checks and the 401 fallback cover
+the cases a cap would; measurements may say otherwise.
+
+**Shared watches.** `SharedBackend` wraps the upstream backend, so continuation happens beneath its
+cache: one reopen per scope and no resnapshot for any subscriber, which also removes a
+SubjectAccessReview per subscriber per routine close. Its single-subscriber overflow recovery and
+early-end backoff are unchanged and still apply to the fallbacks. The last subscriber leaving stops
+the upstream watcher, which cancels a reopen in progress.
+
+**Evidence plan.** Unit tests with a fake dynamic client cover each row above, the checkpoint on a
+suppressed update and on a routine bookmark, deletion during the interruption, a close during the
+initial snapshot, exhaustion, cancellation and subscriber departure during backoff, and two shared
+subscribers seeing one reopen and no reset. Against the real API server, a package-internal test
+sets a short watch `timeoutSeconds` so routine closes happen in seconds, on both the streaming-list
+path and the aggregated API's list-then-watch path. Measurements use the same workload before and
+after on the spike cluster, with counts from the gateway's Observer and a counting backend: upstream
+reopens, downstream resets by cause, snapshot bytes and duration, the browser store's time to apply
+a snapshot (the node driver times it), recovery latency, SubjectAccessReview rate and latency, and
+the save 409 rate with the share of 409s that carry no field conflicts. Labels stay bounded: no UID,
+user or resourceVersion.
+
 **Acceptance:** retained-history recycling preserves downstream continuity, lost history still
 recovers safely, retries stop correctly, and authorization/credential lifecycle expectations remain
 explicit. No new SSE events or downstream replay protocol.
