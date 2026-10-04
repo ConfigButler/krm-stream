@@ -1,5 +1,8 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 import { goReleaseReady, needsPublish, packageName, publishWithRecovery, registryMetadata, releaseTags, validatePackage, validateRelease, waitForGoRelease } from './release.mjs';
 
 const sha = 'a'.repeat(40);
@@ -116,6 +119,16 @@ test('registry outage during duplicate confirmation remains a failure', async ()
 const goResponse = (status, body = '') => ({ status, ok: status === 200, text: async () => body });
 const missingGoTag = (path = 'gateway', version = '0.3.0') =>
   `not found: github.com/ConfigButler/krm-stream/${path}@v${version}: invalid version: unknown revision ${path}/v${version}`;
+
+test('Go readiness CLI requires an explicit release version before reading any local manifest', () => {
+  const env = { ...process.env };
+  delete env.VERSION;
+  const result = spawnSync(process.execPath, [fileURLToPath(new URL('./release.mjs', import.meta.url)), 'go-ready'], {
+    env, cwd: tmpdir(), encoding: 'utf8', timeout: 5_000,
+  });
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /go-ready requires an explicit VERSION from release preparation/);
+});
 
 test('Go readiness checks both release modules and validates the version before any request', async () => {
   const urls = [];

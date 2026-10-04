@@ -126,6 +126,13 @@ const git = (...args) => execFileSync('git', args, { encoding: 'utf8' }).trim();
 const output = (key, value) => appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
 
 async function main() {
+  // Readiness uses the version already resolved and validated by release preparation.
+  // Require it explicitly so local manifest contents cannot flow into an outbound request.
+  if (process.argv[2] === 'go-ready') {
+    assert.ok(process.env.VERSION, 'go-ready requires an explicit VERSION from release preparation');
+    await waitForGoRelease(process.env.VERSION);
+    return;
+  }
   const version = process.env.VERSION || JSON.parse(readFileSync('.release-please-manifest.json'))['packages/krm-stream'];
   const tags = releaseTags(version);
   if (process.argv[2] === 'resolve') {
@@ -147,8 +154,6 @@ async function main() {
     output('version', version);
     output('needed', await needsPublish(version));
     console.log(`Release ${version} resolves to ${sha}.`);
-  } else if (process.argv[2] === 'go-ready') {
-    await waitForGoRelease(version);
   } else if (process.argv[2] === 'verify') {
     const tarball = `/tmp/npm/configbutler-krm-stream-${version}.tgz`;
     const pkg = JSON.parse(execFileSync('tar', ['-xOf', tarball, 'package/package.json'], { encoding: 'utf8' }));
