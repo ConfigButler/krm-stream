@@ -227,7 +227,7 @@ func TestSubjectAccessReviewSendsExactlyTheDocumentedAttributes(t *testing.T) {
 		},
 		"a collection narrowed by a label selector": {
 			scope: gateway.Scope{Target: "production", Version: "v1", Resource: "configmaps", Namespace: "app", LabelSelector: "tier=web"},
-			// The selector is NOT asked about: the review covers the whole collection.
+			// Selectors are omitted from the authorization request.
 			want: authzv1.ResourceAttributes{Version: "v1", Resource: "configmaps", Namespace: "app"},
 		},
 		"every namespace": {
