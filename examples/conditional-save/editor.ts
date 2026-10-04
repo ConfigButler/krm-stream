@@ -65,6 +65,8 @@ export function conditionalEditor(
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(intent),
         });
+        // Deleted after the preflight read: the watch will remove it too, so it is not a host error.
+        if (result.status === 404) return "unavailable";
         if (result.status === 409) {
           if (!store.ids().includes(uid)) return "unavailable";
           return await refresh();
