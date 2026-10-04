@@ -87,10 +87,42 @@ type SharedBackend struct {
 	queueDepth int
 	observer   Observer
 
-	mu      sync.Mutex
-	scopes  map[string]*sharedScope
-	backoff map[string]*sharedBackoff
-	now     func() time.Time
+	mu       sync.Mutex
+	scopes   map[string]*sharedScope
+	openings map[string]*sharedOpening
+	backoff  map[string]*sharedBackoff
+	now      func() time.Time
+}
+
+// sharedOpening is one scope's upstream watch while it is being opened: registered under the
+// backend's lock, opened without it, and settled under it again.
+//
+// It exists because opening is a network round trip of unknown length, and the backend's lock is
+// taken by every scope. Holding the lock across it let one slow API server hold up every unrelated
+// namespace, and gave a caller nothing to abandon: its own context was not the opening's, and nothing
+// else could cancel it. Now the lock covers only the bookkeeping, and an opening belongs to whoever
+// is waiting for it, counted, so the last one to leave cancels it.
+type sharedOpening struct {
+	key   string
+	scope Scope
+	// ctx is the upstream watch's own context: cancelled when the last waiter abandons the opening,
+	// and otherwise handed on to the scope it becomes, whose last subscriber cancels it.
+	ctx    context.Context
+	cancel context.CancelFunc
+	// done is closed, under the backend's lock, once the opening has settled for its waiters.
+	done chan struct{}
+
+	// Guarded by the backend's lock.
+	//
+	// waiters counts the callers still waiting. It changes only before done is closed; after that,
+	// every waiter takes one of subs (or err) on its way out, however it leaves.
+	waiters int
+	// subs holds one subscription per waiter when the opening succeeds, attached to the new scope
+	// at the moment it is published. A waiter therefore never has to subscribe after the fact, and
+	// there is no instant at which the scope holds an upstream watch and nobody who will release it.
+	subs []*subscriber
+	// err is the opening's failure, shared by every waiter.
+	err error
 }
 
 // sharedBackoff is one scope's failed attempts to open its upstream watch.
@@ -120,6 +152,7 @@ func NewSharedBackendWithOptions(upstream Backend, options SharedOptions) *Share
 		queueDepth: depth,
 		observer:   options.Observer,
 		scopes:     map[string]*sharedScope{},
+		openings:   map[string]*sharedOpening{},
 		backoff:    map[string]*sharedBackoff{},
 		now:        time.Now,
 	}
@@ -135,33 +168,136 @@ var _ Backend = (*SharedBackend)(nil)
 
 // Watch joins the shared watch for this scope, opening it if this is the first subscriber.
 //
-// The caller's context is deliberately IGNORED, and that is the one surprising line in this file. It
-// is the context of ONE browser's request; the upstream watch belongs to ALL of them. Honouring it
-// here would mean the whole shared watch — and everyone else's stream — dies the moment whichever
-// tab happened to open it goes away. A subscriber's own lifetime is bounded by Stop() instead, and
-// the last one out cancels the upstream (see leave).
-func (b *SharedBackend) Watch(_ context.Context, scope Scope) (Watcher, error) {
+// The caller's context bounds only the caller's WAIT, never the upstream watch. It is the context of
+// ONE browser's request; the upstream watch belongs to ALL of them. Handing it to the upstream would
+// mean the whole shared watch — and everyone else's stream — dies the moment whichever tab happened to
+// open it goes away. So the upstream gets a context of its own, owned by the scope:
+//
+//   - while it is opening, by everyone waiting for it. Each may give up through its own context, and
+//     returns at once; the last to give up cancels the opening.
+//   - once it is open, by its subscribers. Each one's lifetime is bounded by Stop(), and the last one
+//     out cancels the upstream (see leave).
+//
+// The backend's lock is never held across the upstream's Watch, so a scope that is slow to open holds
+// up only the callers waiting for that scope.
+func (b *SharedBackend) Watch(ctx context.Context, scope Scope) (Watcher, error) {
+	// A caller that has already gone must not start, or join, an opening it would at once abandon.
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	key := scopeKey(scope)
 
 	b.mu.Lock()
-	s, ok := b.scopes[key]
+	if s, ok := b.scopes[key]; ok {
+		b.mu.Unlock()
+		return s.subscribe()
+	}
+	op, ok := b.openings[key]
 	if !ok {
 		if wait := b.backoffRemainingLocked(key); wait > 0 {
 			b.mu.Unlock()
 			return nil, UpstreamUnavailable("the upstream is unavailable; retry later", wait)
 		}
-		var err error
-		s, err = b.startScope(scope, key)
-		if err != nil {
-			b.recordFailureLocked(key, err)
-			b.mu.Unlock()
-			return nil, err
-		}
-		b.scopes[key] = s
+		op = b.beginOpeningLocked(key, scope)
 	}
+	op.waiters++
 	b.mu.Unlock()
 
-	return s.subscribe()
+	select {
+	case <-op.done:
+		return b.collect(op)
+	case <-ctx.Done():
+		b.abandon(op)
+		return nil, ctx.Err()
+	}
+}
+
+// beginOpeningLocked registers a scope's opening and starts it. Called with b.mu held; the upstream
+// call itself runs on its own goroutine, without the lock.
+func (b *SharedBackend) beginOpeningLocked(key string, scope Scope) *sharedOpening {
+	ctx, cancel := context.WithCancel(context.Background())
+	op := &sharedOpening{key: key, scope: scope, ctx: ctx, cancel: cancel, done: make(chan struct{})}
+	b.openings[key] = op
+	go func() {
+		w, err := b.upstream.Watch(ctx, scope)
+		b.settle(op, w, err)
+	}()
+	return op
+}
+
+// settle publishes an opening's result to its waiters, if it still has any.
+//
+// An opening every waiter abandoned is discarded whole: its watcher is stopped, and it touches
+// neither the scope map, nor the backoff, nor whatever opening has since replaced it. Its failure, if
+// it failed, is most likely the cancellation its waiters caused, and in any case nobody asked.
+func (b *SharedBackend) settle(op *sharedOpening, w Watcher, err error) {
+	b.mu.Lock()
+	if b.openings[op.key] != op { // its last waiter left, and unregistered it
+		b.mu.Unlock()
+		op.cancel()
+		if w != nil {
+			w.Stop()
+		}
+		return
+	}
+	delete(b.openings, op.key)
+	if err != nil {
+		op.cancel()
+		b.recordFailureLocked(op.key, err) // once, however many are waiting
+		op.err = err
+	} else {
+		s := newSharedScope(b, op.key, op.scope, w, op.cancel)
+		b.scopes[op.key] = s
+		// Attach every waiter before the scope is visible to anyone else, so it is never without the
+		// subscribers whose departure will cancel it.
+		s.mu.Lock()
+		for range op.waiters {
+			op.subs = append(op.subs, s.attachLocked())
+		}
+		s.mu.Unlock()
+		go s.pump(op.ctx)
+	}
+	close(op.done)
+	b.mu.Unlock()
+}
+
+// collect hands a waiter its share of a settled opening: the failure, or one of the subscriptions
+// attached on its behalf.
+func (b *SharedBackend) collect(op *sharedOpening) (Watcher, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if op.err != nil {
+		return nil, op.err
+	}
+	sub := op.subs[len(op.subs)-1]
+	op.subs = op.subs[:len(op.subs)-1]
+	return &sharedWatcher{scope: sub.scope, sub: sub}, nil
+}
+
+// abandon withdraws a waiter whose context ended. Before the opening settles, the waiter simply stops
+// being counted, and the last one cancels the opening and unregisters it, so the next Watch starts
+// afresh. After it settles — the two raced — the waiter still owns a subscription, and releases it
+// exactly as a subscriber would.
+func (b *SharedBackend) abandon(op *sharedOpening) {
+	b.mu.Lock()
+	select {
+	case <-op.done: // settled first: done is closed under b.mu, so this is decided
+		b.mu.Unlock()
+		if w, err := b.collect(op); err == nil {
+			w.Stop()
+		}
+		return
+	default:
+	}
+	op.waiters--
+	last := op.waiters == 0
+	if last && b.openings[op.key] == op {
+		delete(b.openings, op.key)
+	}
+	b.mu.Unlock()
+	if last {
+		op.cancel() // the upstream's Watch returns when it honours this; settle discards what it returns
+	}
 }
 
 func (b *SharedBackend) backoffRemainingLocked(key string) time.Duration {
@@ -204,22 +340,13 @@ func (b *SharedBackend) recordFailureLocked(key string, err error) {
 	bo.until = now.Add(wait)
 }
 
-// startScope opens the one upstream watch for a scope and pumps it. Called with b.mu held.
-//
-// The upstream watch gets its OWN context, deliberately detached from the subscriber whose arrival
-// happened to open it. Tying the shared watch to one browser's request context would mean that when
-// that particular tab closes, everyone else's stream dies with it — a bug that would be invisible
-// with one subscriber and baffling with two.
-func (b *SharedBackend) startScope(scope Scope, key string) (*sharedScope, error) {
-	ctx, cancel := context.WithCancel(context.Background())
-
-	w, err := b.upstream.Watch(ctx, scope)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-
-	s := &sharedScope{
+// newSharedScope wraps an opened upstream watch. Its context and cancel are the opening's: the
+// watch's own, detached from whichever subscriber's arrival happened to open it. Tying the shared
+// watch to one browser's request context would mean that when that particular tab closes, everyone
+// else's stream dies with it — a bug that would be invisible with one subscriber and baffling with
+// two.
+func newSharedScope(b *SharedBackend, key string, scope Scope, w Watcher, cancel context.CancelFunc) *sharedScope {
+	return &sharedScope{
 		backend: b,
 		key:     key,
 		scope:   scope,
@@ -228,8 +355,6 @@ func (b *SharedBackend) startScope(scope Scope, key string) (*sharedScope, error
 		cache:   map[string]KRMObject{},
 		subs:    map[*subscriber]struct{}{},
 	}
-	go s.pump(ctx)
-	return s, nil
 }
 
 // scopeEnd is how a shared upstream watch ended, for the backoff.
@@ -374,7 +499,12 @@ func (s *sharedScope) subscribe() (Watcher, error) {
 		// stream loop will begin a new cycle, and that cycle opens a fresh shared scope.
 		return nil, ErrWatchClosed
 	}
+	sub := s.attachLocked()
+	return &sharedWatcher{scope: s, sub: sub}, nil
+}
 
+// attachLocked adds one subscriber to a live scope. Called with s.mu held.
+func (s *sharedScope) attachLocked() *subscriber {
 	sub := &subscriber{
 		scope:    s,
 		ch:       make(chan WatchEvent, s.backend.queueDepth),
@@ -390,8 +520,7 @@ func (s *sharedScope) subscribe() (Watcher, error) {
 	if s.synced {
 		s.deliverSnapshotLocked(sub)
 	}
-
-	return &sharedWatcher{scope: s, sub: sub}, nil
+	return sub
 }
 
 // deliverSnapshotLocked hands one subscriber the whole cache as a snapshot, terminated by the

@@ -99,6 +99,12 @@ per-caller access decisions.
 `SharedOptions.QueueDepth` bounds live events per slow subscriber. Overflow triggers a resnapshot;
 it does not permit unbounded memory growth or silently drop events.
 
+Each scope opens its upstream watch independently: a scope that is slow to open delays only the
+callers waiting for that scope. A caller waiting for an opening leaves when its own request context
+ends, and the last one to leave cancels the opening. The upstream `Backend` must honour context
+cancellation for that to stop its work; a result it returns after everyone left is stopped and
+discarded, and cannot affect a newer opening, the cache or the backoff.
+
 ## Operations
 
 `Options.HeartbeatInterval` controls SSE keepalives. `Observer` provides low-cardinality lifecycle

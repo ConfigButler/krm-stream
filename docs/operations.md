@@ -43,6 +43,11 @@ API server's request, where a reconnect would cost every browser a new connectio
 snapshot. The cost is that the browser is not told why it is waiting. A rising `syncing` time,
 without errors, is the signal to look at API-server load.
 
+A shared scope that is slow to open holds up only the streams waiting for that scope. Each of them
+can still end with its request, and when the last one leaves, the opening is cancelled rather than
+left holding a slot. A client-go watch has no response-header timeout of its own, so a stalled
+opening otherwise waits until every caller gives up.
+
 A watch that ends before it is of use (before its snapshot completes, or within a second of it) is
 recovered once on the same connection. A second such end in a row closes the connection with
 `UPSTREAM_UNAVAILABLE`, so an upstream that ends every watch early meets the client's backoff and not
