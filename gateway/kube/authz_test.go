@@ -185,13 +185,15 @@ func TestAThrottledReviewKeepsItsRetryHint(t *testing.T) {
 			return true, nil, apierrors.NewTooManyRequests("priority and fairness", 7)
 		})
 	handler := gateway.Handler(gateway.Options{
-		Principal:  func(*http.Request) (gateway.Principal, error) { return alice, nil },
-		Authorizer: kube.SubjectAccessReviewAuthorizer(cs, subjectOf),
-		Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
-			t.Fatal("a throttled review opened a watch")
-			return nil, nil
+		Principal: func(*http.Request) (gateway.Principal, error) { return alice, nil },
+		Scopes:    gateway.ScopePolicy{Targets: []string{""}, AnyResource: true},
+		StreamConfig: gateway.StreamConfig{
+			Authorizer: kube.SubjectAccessReviewAuthorizer(cs, subjectOf),
+			Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
+				t.Fatal("a throttled review opened a watch")
+				return nil, nil
+			},
 		},
-		Scopes: gateway.ScopePolicy{Targets: []string{""}, AnyResource: true},
 	})
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/s?version=v1&resource=configmaps&namespace=app", nil))

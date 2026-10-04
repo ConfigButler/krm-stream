@@ -54,14 +54,14 @@ func TestCheckHTTPStreamingMountedMiddleware(t *testing.T) {
 
 func TestUnsupportedTransportHasNoStreamLifetime(t *testing.T) {
 	var observations []Observation
-	g := &Gateway{WriteTimeout: time.Second, Observer: ObserverFunc(func(o Observation) { observations = append(observations, o) })}
+	g := &Gateway{StreamConfig: StreamConfig{WriteTimeout: time.Second, Observer: ObserverFunc(func(o Observation) { observations = append(observations, o) })}}
 	func() {
 		defer func() {
 			if got := recover(); got != http.ErrAbortHandler {
 				t.Fatalf("panic = %v", got)
 			}
 		}()
-		g.ServeStream(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil), nil, Scope{})
+		g.ServeStream(httptest.NewRecorder(), httptest.NewRequest("GET", "/", nil), nil, Scope{}, "")
 	}()
 	if len(observations) != 1 || observations[0].Kind != ObservationHTTPTransportRejected {
 		t.Fatalf("observations = %v", observations)
@@ -117,7 +117,7 @@ func (b *transportBackend) Next(ctx context.Context) (WatchEvent, error) {
 }
 func (b *transportBackend) Stop() { b.once.Do(func() { close(b.stopped) }) }
 func transportGateway(b Backend) *Gateway {
-	return &Gateway{Auth: AllowAll{}, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }, WriteTimeout: 300 * time.Millisecond, HeartbeatInterval: 20 * time.Millisecond}
+	return &Gateway{StreamConfig: StreamConfig{Authorizer: AllowAll{}, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }, WriteTimeout: 300 * time.Millisecond, HeartbeatInterval: 20 * time.Millisecond}}
 }
 func waitTransport(t *testing.T, ch <-chan struct{}) {
 	t.Helper()
@@ -137,7 +137,7 @@ func TestHTTPFailuresCancelQuietStream(t *testing.T) {
 			done := make(chan struct{})
 			go func() {
 				defer close(done)
-				g.ServeStream(w, httptest.NewRequest("GET", "/", nil), nil, sharedScopeUnderTest)
+				g.ServeStream(w, httptest.NewRequest("GET", "/", nil), nil, sharedScopeUnderTest, "")
 			}()
 			waitTransport(t, done)
 			if fail > 1 {
@@ -164,8 +164,8 @@ func TestSinkShortWriteAndFailedTerminalDelivery(t *testing.T) {
 		t.Fatal("failed sink was reused")
 	}
 	var kinds []ObservationKind
-	g := &Gateway{Auth: AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("denied") }), Observer: ObserverFunc(func(o Observation) { kinds = append(kinds, o.Kind) })}
-	if err := g.Stream(t.Context(), nil, Scope{}, s); !errors.Is(err, io.ErrShortWrite) {
+	g := &Gateway{StreamConfig: StreamConfig{Authorizer: AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("denied") }), Observer: ObserverFunc(func(o Observation) { kinds = append(kinds, o.Kind) })}}
+	if err := g.Stream(t.Context(), nil, Scope{}, "", s); !errors.Is(err, io.ErrShortWrite) {
 		t.Fatal(err)
 	}
 	if fmt.Sprint(kinds) != "[stream_opened terminal_error stream_closed]" {
@@ -187,13 +187,13 @@ func TestBlockedHTTPSubscriberReleasesSharedWatch(t *testing.T) {
 		for _, trigger := range []string{"write-timeout", "expiry", "revocation"} {
 			t.Run(fmt.Sprintf("http2=%t/%s", h2, trigger), func(t *testing.T) {
 				b := newTransportBackend()
-				shared := NewSharedBackend(b)
+				shared := NewSharedBackend(b, SharedOptions{})
 				g := transportGateway(shared)
 				g.WriteTimeout = 2 * time.Second
 				g.ReauthorizationInterval = 20 * time.Millisecond
 				g.ReauthorizationTimeout = 2 * time.Second
 				var revoked atomic.Bool
-				g.Auth = AuthorizerFunc(func(_ context.Context, p Principal, _ Scope) error {
+				g.Authorizer = AuthorizerFunc(func(_ context.Context, p Principal, _ Scope) error {
 					if p == "slow" && revoked.Load() {
 						return Forbidden("revoked")
 					}
@@ -211,7 +211,7 @@ func TestBlockedHTTPSubscriberReleasesSharedWatch(t *testing.T) {
 					} else {
 						defer close(fastDone)
 					}
-					g.ServeStream(w, r, who, sharedScopeUnderTest)
+					g.ServeStream(w, r, who, sharedScopeUnderTest, "")
 				}))
 				srv.EnableHTTP2 = h2
 				srv.Config.ConnState = func(_ net.Conn, state http.ConnState) {
@@ -366,7 +366,7 @@ func TestHealthyHTTPStreamOutlivesWriteTimeout(t *testing.T) {
 	g.WriteTimeout = 40 * time.Millisecond
 	// Idle longer than a write period between heartbeats: stale deadlines would kill it.
 	g.HeartbeatInterval = 120 * time.Millisecond
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { g.ServeStream(w, r, nil, sharedScopeUnderTest) }))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { g.ServeStream(w, r, nil, sharedScopeUnderTest, "") }))
 	defer srv.Close()
 	client := srv.Client()
 	client.Timeout = 2 * time.Second

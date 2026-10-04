@@ -59,7 +59,7 @@ func Handler(cluster *rest.Config, namespace, name string, sessionFor func(*http
 	if err != nil {
 		return nil, err
 	}
-	shared := gateway.NewSharedBackendWithOptions(kube.NewBackend(data), gateway.SharedOptions{Observer: observer})
+	shared := gateway.NewSharedBackend(kube.NewBackend(data), gateway.SharedOptions{Observer: observer})
 	sar := kube.SubjectAccessReviewAuthorizer(service, func(p gateway.Principal) (kube.Subject, error) {
 		subject, ok := p.(kube.Subject)
 		if !ok {
@@ -92,20 +92,24 @@ func Handler(cluster *rest.Config, namespace, name string, sessionFor func(*http
 			defer cancel()
 			return resolveSubject(ctx, client)
 		},
-		Authorizer: gateway.AuthorizerFunc(func(ctx context.Context, p gateway.Principal, s gateway.Scope) error {
-			if s.Target != "" || s.Group != "" || s.Version != "v1" || s.Resource != "configmaps" || s.Namespace != namespace || s.Name != name || s.LabelSelector != "" {
-				return gateway.Forbidden("outside the fixed stream scope")
-			}
-			// Applies to initial/cycle checks too; the periodic setting alone does not.
-			check, cancel := context.WithTimeout(ctx, 5*time.Second)
-			defer cancel()
-			return sar.Authorize(check, p, s)
-		}),
-		Clients:      func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil },
-		Scopes:       gateway.ScopePolicy{Targets: []string{""}, Resources: []gateway.GroupResource{{Resource: "configmaps", Scope: gateway.ResourceScopeNamespaced}}},
-		Projection:   gateway.ProjectionFull,
-		WriteTimeout: 5 * time.Second, ReauthorizationInterval: 30 * time.Second, ReauthorizationTimeout: 5 * time.Second,
-		Observer: observer,
+		Scopes: gateway.ScopePolicy{Targets: []string{""}, Resources: []gateway.GroupResource{{Resource: "configmaps", Scope: gateway.ResourceScopeNamespaced}}},
+		StreamConfig: gateway.StreamConfig{
+			Authorizer: gateway.AuthorizerFunc(func(ctx context.Context, p gateway.Principal, s gateway.Scope) error {
+				if s.Target != "" || s.Group != "" || s.Version != "v1" || s.Resource != "configmaps" || s.Namespace != namespace || s.Name != name || s.LabelSelector != "" {
+					return gateway.Forbidden("outside the fixed stream scope")
+				}
+				// Applies to initial/cycle checks too; the periodic setting alone does not.
+				check, cancel := context.WithTimeout(ctx, 5*time.Second)
+				defer cancel()
+				return sar.Authorize(check, p, s)
+			}),
+			Clients:                 func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil },
+			Projections:             gateway.StaticProjection(gateway.ProjectionFull),
+			WriteTimeout:            5 * time.Second,
+			ReauthorizationInterval: 30 * time.Second,
+			ReauthorizationTimeout:  5 * time.Second,
+			Observer:                observer,
+		},
 	})
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		session, err := sessionFor(r)

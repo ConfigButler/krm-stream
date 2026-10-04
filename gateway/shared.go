@@ -94,12 +94,8 @@ type sharedBackoff struct {
 
 // NewSharedBackend shares one upstream watch per scope across every consumer of it. The upstream is
 // opened as whatever identity `upstream` carries, so your Authorizer becomes the security boundary.
-func NewSharedBackend(upstream Backend) *SharedBackend {
-	return NewSharedBackendWithOptions(upstream, SharedOptions{})
-}
-
-// NewSharedBackendWithOptions shares one upstream watch per scope with explicit operational limits.
-func NewSharedBackendWithOptions(upstream Backend, options SharedOptions) *SharedBackend {
+// The zero SharedOptions{} uses the default queue depth and no observer.
+func NewSharedBackend(upstream Backend, options SharedOptions) *SharedBackend {
 	depth := options.QueueDepth
 	if depth < 1 {
 		depth = sharedQueueDepth

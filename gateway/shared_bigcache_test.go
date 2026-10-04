@@ -39,7 +39,7 @@ func TestSharedBackendJoinerGetsSnapshotOfLargeScope(t *testing.T) {
 	const n = 300
 
 	up := newFakeUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	first, err := b.Watch(t.Context(), sharedScopeUnderTest)
 	if err != nil {

@@ -35,24 +35,26 @@ func awaitEvent(t *testing.T, events reauthEvents, kind EventType) Event {
 
 func TestTimedRevocationOnlyDisconnectsDeniedSharedSubscriber(t *testing.T) {
 	upstream := newFakeUpstream()
-	shared := NewSharedBackend(upstream)
+	shared := NewSharedBackend(upstream, SharedOptions{})
 	var revoked atomic.Bool
 	g := &Gateway{
-		Auth: AuthorizerFunc(func(_ context.Context, p Principal, _ Scope) error {
-			if p == "alice" && revoked.Load() {
-				return Forbidden("revoked")
-			}
-			return nil
-		}),
-		Clients:                 func(context.Context, string, Principal) (Backend, error) { return shared, nil },
-		ReauthorizationInterval: 5 * time.Millisecond,
+		StreamConfig: StreamConfig{
+			Authorizer: AuthorizerFunc(func(_ context.Context, p Principal, _ Scope) error {
+				if p == "alice" && revoked.Load() {
+					return Forbidden("revoked")
+				}
+				return nil
+			}),
+			Clients:                 func(context.Context, string, Principal) (Backend, error) { return shared, nil },
+			ReauthorizationInterval: 5 * time.Millisecond,
+		},
 	}
 	alice, bob := make(reauthEvents, 32), make(reauthEvents, 32)
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	aDone, bDone := make(chan error, 1), make(chan error, 1)
-	go func() { aDone <- g.Stream(ctx, "alice", sharedScopeUnderTest, alice) }()
-	go func() { bDone <- g.Stream(ctx, "bob", sharedScopeUnderTest, bob) }()
+	go func() { aDone <- g.Stream(ctx, "alice", sharedScopeUnderTest, "", alice) }()
+	go func() { bDone <- g.Stream(ctx, "bob", sharedScopeUnderTest, "", bob) }()
 	upstream.send(WatchEvent{Type: WatchBookmark, InitialEventsEnd: true})
 	awaitEvent(t, alice, EventSynced)
 	awaitEvent(t, bob, EventSynced)
@@ -75,21 +77,24 @@ func TestTimedAuthorizationTimeoutFailsClosed(t *testing.T) {
 	var calls atomic.Int32
 	upstream := newFakeUpstream()
 	g := &Gateway{
-		Auth: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
-			if calls.Add(1) == 1 {
-				return nil
-			}
-			<-ctx.Done()
-			return ctx.Err()
-		}),
-		Clients:                 func(context.Context, string, Principal) (Backend, error) { return upstream, nil },
-		ReauthorizationInterval: time.Millisecond, ReauthorizationTimeout: 5 * time.Millisecond,
+		StreamConfig: StreamConfig{
+			Authorizer: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
+				if calls.Add(1) == 1 {
+					return nil
+				}
+				<-ctx.Done()
+				return ctx.Err()
+			}),
+			Clients:                 func(context.Context, string, Principal) (Backend, error) { return upstream, nil },
+			ReauthorizationInterval: time.Millisecond,
+			ReauthorizationTimeout:  5 * time.Millisecond,
+		},
 	}
 	events := make(reauthEvents, 32)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- g.Stream(ctx, "alice", sharedScopeUnderTest, events) }()
+	go func() { done <- g.Stream(ctx, "alice", sharedScopeUnderTest, "", events) }()
 	ev := awaitEvent(t, events, EventError)
 	if !ev.Terminal || ev.Code != CodeInternal {
 		t.Fatalf("timeout did not fail closed: %+v", ev)
@@ -100,21 +105,23 @@ func TestTimedAuthorizationTimeoutFailsClosed(t *testing.T) {
 func TestTimedProjectionWithdrawalTerminatesStream(t *testing.T) {
 	var checks atomic.Int32
 	g := &Gateway{
-		Auth: AllowAll{},
-		Projections: ProjectionPolicyFunc(func(context.Context, Principal, Scope, Projection) (Projection, error) {
-			if checks.Add(1) == 1 {
-				return ProjectionRaw, nil
-			}
-			return ProjectionFull, nil
-		}),
-		Clients:                 func(context.Context, string, Principal) (Backend, error) { return newFakeUpstream(), nil },
-		ReauthorizationInterval: time.Millisecond,
+		StreamConfig: StreamConfig{
+			Authorizer: AllowAll{},
+			Projections: ProjectionPolicyFunc(func(context.Context, Principal, Scope, Projection) (Projection, error) {
+				if checks.Add(1) == 1 {
+					return ProjectionRaw, nil
+				}
+				return ProjectionFull, nil
+			}),
+			Clients:                 func(context.Context, string, Principal) (Backend, error) { return newFakeUpstream(), nil },
+			ReauthorizationInterval: time.Millisecond,
+		},
 	}
 	events := make(reauthEvents, 32)
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	done := make(chan error, 1)
-	go func() { done <- g.Stream(ctx, "alice", sharedScopeUnderTest, events) }()
+	go func() { done <- g.Stream(ctx, "alice", sharedScopeUnderTest, "", events) }()
 	ev := awaitEvent(t, events, EventError)
 	if ev.Code != CodeForbidden || !ev.Terminal {
 		t.Fatalf("projection change kept old view: %+v", ev)
@@ -128,23 +135,25 @@ func TestTimedCheckPausesDisclosureAndCancellationStopsCheck(t *testing.T) {
 	checking := make(chan struct{})
 	canceled := make(chan struct{})
 	g := &Gateway{
-		Auth: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
-			if calls.Add(1) == 1 {
-				return nil
-			}
-			close(checking)
-			<-ctx.Done()
-			close(canceled)
-			return ctx.Err()
-		}),
-		Clients:                 func(context.Context, string, Principal) (Backend, error) { return upstream, nil },
-		ReauthorizationInterval: time.Millisecond,
+		StreamConfig: StreamConfig{
+			Authorizer: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
+				if calls.Add(1) == 1 {
+					return nil
+				}
+				close(checking)
+				<-ctx.Done()
+				close(canceled)
+				return ctx.Err()
+			}),
+			Clients:                 func(context.Context, string, Principal) (Backend, error) { return upstream, nil },
+			ReauthorizationInterval: time.Millisecond,
+		},
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	events := make(reauthEvents, 32)
 	done := make(chan error, 1)
-	go func() { done <- g.Stream(ctx, "alice", sharedScopeUnderTest, events) }()
+	go func() { done <- g.Stream(ctx, "alice", sharedScopeUnderTest, "", events) }()
 	awaitEvent(t, events, EventReset)
 	select {
 	case <-checking:
@@ -172,11 +181,16 @@ func TestCycleTeardownDoesNotBecomeAuthorizationFailure(t *testing.T) {
 		t.Run(cycleErr.Error(), func(t *testing.T) {
 			checking := make(chan struct{})
 			backend := &reauthClosingBackend{checking: checking, err: cycleErr}
-			g := &Gateway{ReauthorizationInterval: time.Millisecond, Auth: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
-				close(checking)
-				<-ctx.Done()
-				return ctx.Err()
-			})}
+			g := &Gateway{
+				StreamConfig: StreamConfig{
+					ReauthorizationInterval: time.Millisecond,
+					Authorizer: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
+						close(checking)
+						<-ctx.Done()
+						return ctx.Err()
+					}),
+				},
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 			defer cancel()
 			err := g.authorizedCycle(ctx, "alice", sharedScopeUnderTest, "", StaticProjection(ProjectionFull), backend, ProjectionFull, map[string]map[string]redactionState{}, make(reauthEvents, 8))
@@ -207,11 +221,16 @@ func TestExplicitDenialSurvivesConcurrentCycleTeardown(t *testing.T) {
 	checking := make(chan struct{})
 	backend := &reauthClosingBackend{checking: checking, err: ErrWatchClosed}
 	denial := Forbidden("revoked")
-	g := &Gateway{ReauthorizationInterval: time.Millisecond, Auth: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
-		close(checking)
-		<-ctx.Done()
-		return denial
-	})}
+	g := &Gateway{
+		StreamConfig: StreamConfig{
+			ReauthorizationInterval: time.Millisecond,
+			Authorizer: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
+				close(checking)
+				<-ctx.Done()
+				return denial
+			}),
+		},
+	}
 	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
 	defer cancel()
 	err := g.authorizedCycle(ctx, "alice", sharedScopeUnderTest, "", StaticProjection(ProjectionFull), backend, ProjectionFull, map[string]map[string]redactionState{}, make(reauthEvents, 8))
@@ -228,25 +247,27 @@ func TestStreamRecoversAfterTeardownDuringReauthorization(t *testing.T) {
 	var checks, cycles atomic.Int32
 	fresh := newFakeUpstream()
 	g := &Gateway{
-		Auth: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
-			if checks.Add(1) == 2 {
-				close(checking)
-				<-ctx.Done()
-				return ctx.Err()
-			}
-			return nil
-		}),
-		Clients: func(context.Context, string, Principal) (Backend, error) {
-			if cycles.Add(1) == 1 {
-				return &reauthClosingBackend{checking: checking, err: ErrWatchClosed}, nil
-			}
-			return fresh, nil
+		StreamConfig: StreamConfig{
+			Authorizer: AuthorizerFunc(func(ctx context.Context, _ Principal, _ Scope) error {
+				if checks.Add(1) == 2 {
+					close(checking)
+					<-ctx.Done()
+					return ctx.Err()
+				}
+				return nil
+			}),
+			Clients: func(context.Context, string, Principal) (Backend, error) {
+				if cycles.Add(1) == 1 {
+					return &reauthClosingBackend{checking: checking, err: ErrWatchClosed}, nil
+				}
+				return fresh, nil
+			},
+			ReauthorizationInterval: time.Millisecond,
 		},
-		ReauthorizationInterval: time.Millisecond,
 	}
 	events := make(reauthEvents, 32)
 	done := make(chan error, 1)
-	go func() { done <- g.Stream(ctx, "alice", sharedScopeUnderTest, events) }()
+	go func() { done <- g.Stream(ctx, "alice", sharedScopeUnderTest, "", events) }()
 	// The first watcher cannot close until its timed check is in flight.
 	for _, kind := range []EventType{EventReset, EventError, EventReset} {
 		select {

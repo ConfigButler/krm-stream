@@ -27,9 +27,9 @@ import (
 // this resource, in this namespace?" — with a SubjectAccessReview, and let it answer. The boundary is
 // Kubernetes' again. That is the point:
 //
-//	shared := gateway.NewSharedBackend(serviceAccountBackend)   // one watch, one identity
-//	opts.Authorizer = kube.SubjectAccessReviewAuthorizer(clientset, subjectOf) // …but RBAC still decides
-//	opts.Clients    = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
+//	shared := gateway.NewSharedBackend(serviceAccountBackend, gateway.SharedOptions{}) // one watch, one identity
+//	opts.Authorizer = kube.SubjectAccessReviewAuthorizer(clientset, subjectOf)         // …but RBAC still decides
+//	opts.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return shared, nil }
 //
 // Because the gateway re-authorizes on every snapshot cycle (stream.go), this is also how a
 // revocation reaches a stream that is already open.

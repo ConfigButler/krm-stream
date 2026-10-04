@@ -29,18 +29,6 @@ func mount(mux *http.ServeMux, restConfigFor func(*User) *rest.Config) {
         Principal: func(r *http.Request) (gateway.Principal, error) {
             return userFromSession(r)
         },
-        // Deny before opening a watch; rechecked on every snapshot cycle.
-        Authorizer: gateway.AuthorizerFunc(func(ctx context.Context, p gateway.Principal, s gateway.Scope) error {
-            user := p.(*User)
-            if s.Target != user.Target || s.Namespace != user.Namespace {
-                return gateway.Forbidden("scope is not available to this user")
-            }
-            return nil
-        }),
-        // A backend acting as this user.
-        Clients: func(_ context.Context, _ string, p gateway.Principal) (gateway.Backend, error) {
-            return kube.NewBackendForConfig(restConfigFor(p.(*User)))
-        },
         Scopes: gateway.ScopePolicy{
             Targets: []string{"production"},
             Resources: []gateway.GroupResource{
@@ -48,10 +36,26 @@ func mount(mux *http.ServeMux, restConfigFor func(*User) *rest.Config) {
                 {Group: "apps", Resource: "deployments", Scope: gateway.ResourceScopeNamespaced},
             },
         },
-        Projection:   gateway.ProjectionFull,
-        WriteTimeout: 10 * time.Second, // bound each write to a browser that stops reading
-        Diagnostics: func(d gateway.Diagnostic) {
-            slog.Warn("stream error", "code", d.Code, "resource", d.Scope.Resource, "err", redact(d.Err))
+        // Settings a stream needs however it is served; a Gateway embeds the same StreamConfig.
+        StreamConfig: gateway.StreamConfig{
+            // Deny before opening a watch; rechecked on every snapshot cycle.
+            Authorizer: gateway.AuthorizerFunc(func(ctx context.Context, p gateway.Principal, s gateway.Scope) error {
+                user := p.(*User)
+                if s.Target != user.Target || s.Namespace != user.Namespace {
+                    return gateway.Forbidden("scope is not available to this user")
+                }
+                return nil
+            }),
+            // A backend acting as this user.
+            Clients: func(_ context.Context, _ string, p gateway.Principal) (gateway.Backend, error) {
+                return kube.NewBackendForConfig(restConfigFor(p.(*User)))
+            },
+            // One view for everyone. Nil means the same; a ProjectionPolicy can choose per caller.
+            Projections:  gateway.StaticProjection(gateway.ProjectionFull),
+            WriteTimeout: 10 * time.Second, // bound each write to a browser that stops reading
+            Diagnostics: func(d gateway.Diagnostic) {
+                slog.Warn("stream error", "code", d.Code, "resource", d.Scope.Resource, "err", redact(d.Err))
+            },
         },
     })
     mux.Handle("/resource-stream/v1", endWithSession(stream))
@@ -146,7 +150,7 @@ Plan with the [revocation budget](auth.md#revocation-budget).
 the scope:
 
 ```go
-shared := gateway.NewSharedBackendWithOptions(serviceAccountBackend, gateway.SharedOptions{
+shared := gateway.NewSharedBackend(serviceAccountBackend, gateway.SharedOptions{
     QueueDepth: 512,
     Observer:   metrics,
 })
@@ -167,7 +171,7 @@ monitoring and limits.
 ### Errors and diagnostics
 
 A `StreamError` you return keeps its `Message`; its `Cause` never reaches the wire. Any other error
-reaches the browser as `INTERNAL` with the message `internal error`. `Options.Diagnostics` receives
+reaches the browser as `INTERNAL` with the message `internal error`. `StreamConfig.Diagnostics` receives
 the raw error with its principal and scope; log what your policy allows.
 
 `Principal` may return `gateway.Unauthenticated` when signing in again will help, or
@@ -203,7 +207,7 @@ your own tests.
 A `rest.Config.Host` may include a path prefix, such as a kcp workspace URL
 (`https://kcp.example/clusters/root:org:ws`); the dynamic client preserves it.
 `kube.NewBackendForConfig(cfg)` includes the endpoint in upstream errors, which reach
-`Options.Diagnostics` and never the browser. To use `kube.NewBackend(dynamicClient)` instead, build
+`StreamConfig.Diagnostics` and never the browser. To use `kube.NewBackend(dynamicClient)` instead, build
 the client on `kube.HTTPClientFor(cfg)` (`dynamic.NewForConfigAndClient(cfg, httpClient)`), which
 refuses redirects so a user's token is not carried along.
 

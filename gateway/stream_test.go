@@ -65,10 +65,12 @@ func (w *stubWatcher) Stop() {}
 func run(t *testing.T, projection Projection, auth Authorizer, events []WatchEvent, want int) []Event {
 	t.Helper()
 	gw := &Gateway{
-		Auth:       auth,
-		Projection: projection,
-		Clients: func(context.Context, string, Principal) (Backend, error) {
-			return &stubBackend{events: events}, nil
+		StreamConfig: StreamConfig{
+			Authorizer:  auth,
+			Projections: StaticProjection(projection),
+			Clients: func(context.Context, string, Principal) (Backend, error) {
+				return &stubBackend{events: events}, nil
+			},
 		},
 	}
 	// A deadline, not a bare cancel. A gateway that emits FEWER events than the scenario expects
@@ -82,7 +84,7 @@ func run(t *testing.T, projection Projection, auth Authorizer, events []WatchEve
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		_ = gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, sink)
+		_ = gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, "", sink)
 	}()
 
 	select {
@@ -169,34 +171,36 @@ func TestGatewayObserverReportsDeliveredAndSuppressedEvents(t *testing.T) {
 
 	var observations []Observation
 	gw := &Gateway{
-		Auth:       AllowAll{},
-		Projection: ProjectionSpec,
-		Clients: func(context.Context, string, Principal) (Backend, error) {
-			return &stubBackend{events: []WatchEvent{
-				{Type: WatchAdded, Object: KRMObject{
-					"apiVersion": "apps/v1", "kind": "Deployment",
-					"metadata": map[string]any{"uid": "d1", "name": "web", "resourceVersion": "1"},
-					"spec":     map[string]any{"replicas": 1},
-					"status":   map[string]any{"readyReplicas": 0},
-				}},
-				{Type: WatchBookmark, InitialEventsEnd: true},
-				{Type: WatchModified, Object: KRMObject{
-					"apiVersion": "apps/v1", "kind": "Deployment",
-					"metadata": map[string]any{"uid": "d1", "name": "web", "resourceVersion": "2"},
-					"spec":     map[string]any{"replicas": 1},
-					"status":   map[string]any{"readyReplicas": 1},
-				}},
-			}}, nil
+		StreamConfig: StreamConfig{
+			Authorizer:  AllowAll{},
+			Projections: StaticProjection(ProjectionSpec),
+			Clients: func(context.Context, string, Principal) (Backend, error) {
+				return &stubBackend{events: []WatchEvent{
+					{Type: WatchAdded, Object: KRMObject{
+						"apiVersion": "apps/v1", "kind": "Deployment",
+						"metadata": map[string]any{"uid": "d1", "name": "web", "resourceVersion": "1"},
+						"spec":     map[string]any{"replicas": 1},
+						"status":   map[string]any{"readyReplicas": 0},
+					}},
+					{Type: WatchBookmark, InitialEventsEnd: true},
+					{Type: WatchModified, Object: KRMObject{
+						"apiVersion": "apps/v1", "kind": "Deployment",
+						"metadata": map[string]any{"uid": "d1", "name": "web", "resourceVersion": "2"},
+						"spec":     map[string]any{"replicas": 1},
+						"status":   map[string]any{"readyReplicas": 1},
+					}},
+				}}, nil
+			},
+			Observer: ObserverFunc(func(observation Observation) {
+				observations = append(observations, observation)
+				if observation.Kind == ObservationEventSuppressed {
+					cancel()
+				}
+			}),
 		},
-		Observer: ObserverFunc(func(observation Observation) {
-			observations = append(observations, observation)
-			if observation.Kind == ObservationEventSuppressed {
-				cancel()
-			}
-		}),
 	}
 
-	err := gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "deployments"}, &recordingSink{})
+	err := gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "deployments"}, "", &recordingSink{})
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("Stream() error = %v, want context cancellation after suppression", err)
 	}
@@ -214,15 +218,17 @@ func TestGatewayObserverReportsDeliveredAndSuppressedEvents(t *testing.T) {
 func TestGatewayObserverReportsTerminalError(t *testing.T) {
 	var observations []Observation
 	gw := &Gateway{
-		Auth:       AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("no access") }),
-		Projection: ProjectionFull,
-		Clients:    func(context.Context, string, Principal) (Backend, error) { return nil, nil },
-		Observer: ObserverFunc(func(observation Observation) {
-			observations = append(observations, observation)
-		}),
+		StreamConfig: StreamConfig{
+			Authorizer:  AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("no access") }),
+			Projections: StaticProjection(ProjectionFull),
+			Clients:     func(context.Context, string, Principal) (Backend, error) { return nil, nil },
+			Observer: ObserverFunc(func(observation Observation) {
+				observations = append(observations, observation)
+			}),
+		},
 	}
 
-	err := gw.Stream(t.Context(), nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, &recordingSink{})
+	err := gw.Stream(t.Context(), nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, "", &recordingSink{})
 	var streamErr *StreamError
 	if !errors.As(err, &streamErr) || streamErr.Code != CodeForbidden {
 		t.Fatalf("Stream() error = %v, want terminal FORBIDDEN", err)
@@ -364,15 +370,17 @@ func TestStrictOrderingRefusesAnUnorderableResourceVersion(t *testing.T) {
 // it looks exactly like the cluster being slow.
 func TestLenientOrderingDropsNothingItCannotOrder(t *testing.T) {
 	gw := &Gateway{
-		Auth:     AllowAll{},
-		Ordering: OrderingLenient,
-		Clients: func(context.Context, string, Principal) (Backend, error) {
-			return &stubBackend{events: []WatchEvent{
-				{Type: WatchAdded, Object: cm("u1", "opaque-b", map[string]any{"v": "b"})},
-				{Type: WatchBookmark, InitialEventsEnd: true},
-				{Type: WatchModified, Object: cm("u1", "opaque-a", map[string]any{"v": "a"})}, // "older"? unknowable
-				{Type: WatchModified, Object: cm("u1", "opaque-c", map[string]any{"v": "c"})},
-			}}, nil
+		StreamConfig: StreamConfig{
+			Authorizer: AllowAll{},
+			Ordering:   OrderingLenient,
+			Clients: func(context.Context, string, Principal) (Backend, error) {
+				return &stubBackend{events: []WatchEvent{
+					{Type: WatchAdded, Object: cm("u1", "opaque-b", map[string]any{"v": "b"})},
+					{Type: WatchBookmark, InitialEventsEnd: true},
+					{Type: WatchModified, Object: cm("u1", "opaque-a", map[string]any{"v": "a"})}, // "older"? unknowable
+					{Type: WatchModified, Object: cm("u1", "opaque-c", map[string]any{"v": "c"})},
+				}}, nil
+			},
 		},
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
@@ -382,7 +390,7 @@ func TestLenientOrderingDropsNothingItCannotOrder(t *testing.T) {
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
-		_ = gw.Stream(ctx, nil, Scope{Target: "demo"}, sink)
+		_ = gw.Stream(ctx, nil, Scope{Target: "demo"}, "", sink)
 	}()
 	select {
 	case <-sink.done:
@@ -585,9 +593,9 @@ func TestSequenceIsGapFreeAndProjectionRequestIsAuthorized(t *testing.T) {
 	}
 
 	backend := &stubBackend{events: []WatchEvent{{Type: WatchBookmark, InitialEventsEnd: true}}}
-	gw := &Gateway{Auth: AllowAll{}, Projection: ProjectionFull, Clients: func(context.Context, string, Principal) (Backend, error) { return backend, nil }}
+	gw := &Gateway{StreamConfig: StreamConfig{Authorizer: AllowAll{}, Projections: StaticProjection(ProjectionFull), Clients: func(context.Context, string, Principal) (Backend, error) { return backend, nil }}}
 	sink := &recordingSink{}
-	if err := gw.StreamProjection(t.Context(), nil, Scope{Target: "demo"}, ProjectionRaw, sink); err == nil {
+	if err := gw.Stream(t.Context(), nil, Scope{Target: "demo"}, ProjectionRaw, sink); err == nil {
 		t.Fatal("an unauthorized raw projection request succeeded")
 	}
 	if backend.watches != 0 || len(sink.events) != 1 || sink.events[0].Code != CodeForbidden {
@@ -600,13 +608,15 @@ func TestSequenceIsGapFreeAndProjectionRequestIsAuthorized(t *testing.T) {
 func TestAuthorizerDeniesBeforeTheWatchIsEverOpened(t *testing.T) {
 	backend := &stubBackend{events: []WatchEvent{{Type: WatchBookmark, InitialEventsEnd: true}}}
 	gw := &Gateway{
-		Auth: AuthorizerFunc(func(context.Context, Principal, Scope) error {
-			return Forbidden("this scope is not yours")
-		}),
-		Clients: func(context.Context, string, Principal) (Backend, error) { return backend, nil },
+		StreamConfig: StreamConfig{
+			Authorizer: AuthorizerFunc(func(context.Context, Principal, Scope) error {
+				return Forbidden("this scope is not yours")
+			}),
+			Clients: func(context.Context, string, Principal) (Backend, error) { return backend, nil },
+		},
 	}
 	sink := &recordingSink{}
-	err := gw.Stream(t.Context(), nil, Scope{Target: "demo"}, sink)
+	err := gw.Stream(t.Context(), nil, Scope{Target: "demo"}, "", sink)
 
 	if err == nil {
 		t.Fatal("a denied stream must return the error it emitted")
@@ -646,23 +656,26 @@ func TestFinalBookkeepingSuppressionAcrossProjections(t *testing.T) {
 			defer cancel()
 			suppressed := 0
 			gw := &Gateway{
-				Auth: AllowAll{}, Projection: projection,
-				Clients: func(context.Context, string, Principal) (Backend, error) {
-					return &stubBackend{events: []WatchEvent{
-						{Type: WatchAdded, Object: base},
-						{Type: WatchBookmark, InitialEventsEnd: true},
-						{Type: WatchModified, Object: final},
-					}}, nil
+				StreamConfig: StreamConfig{
+					Authorizer:  AllowAll{},
+					Projections: StaticProjection(projection),
+					Clients: func(context.Context, string, Principal) (Backend, error) {
+						return &stubBackend{events: []WatchEvent{
+							{Type: WatchAdded, Object: base},
+							{Type: WatchBookmark, InitialEventsEnd: true},
+							{Type: WatchModified, Object: final},
+						}}, nil
+					},
+					Observer: ObserverFunc(func(o Observation) {
+						if o.Kind == ObservationEventSuppressed && o.EventType == EventModified {
+							suppressed++
+							cancel()
+						}
+					}),
 				},
-				Observer: ObserverFunc(func(o Observation) {
-					if o.Kind == ObservationEventSuppressed && o.EventType == EventModified {
-						suppressed++
-						cancel()
-					}
-				}),
 			}
 			sink := &recordingSink{}
-			err := gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, sink)
+			err := gw.Stream(ctx, nil, Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, "", sink)
 			if !equalTypes(types(sink.events), EventReset, EventAdded, EventSynced) {
 				t.Fatalf("final bookkeeping write emitted an event: %v", types(sink.events))
 			}
@@ -684,26 +697,28 @@ func TestOnlyContinuityLossIsRecoveredInBand(t *testing.T) {
 	var observations []Observation
 	watches := 0
 	gw := &Gateway{
-		Auth:        AllowAll{},
-		Diagnostics: func(d Diagnostic) { diagnostics = append(diagnostics, d) },
-		Observer:    ObserverFunc(func(o Observation) { observations = append(observations, o) }),
-		Clients: func(context.Context, string, Principal) (Backend, error) {
-			return backendFunc(func() (Watcher, error) {
-				watches++
-				if watches == 1 {
-					return &stubWatcher{events: []WatchEvent{
-						{Type: WatchBookmark, InitialEventsEnd: true},
-						{Type: WatchError, Err: ResyncRequired("expired")},
-					}}, nil
-				}
-				se := UpstreamUnavailable("the API server is unavailable", 0)
-				se.Cause = errors.New("dial tcp 10.43.0.1:443: connect: connection refused")
-				return nil, se
-			}), nil
+		StreamConfig: StreamConfig{
+			Authorizer:  AllowAll{},
+			Diagnostics: func(d Diagnostic) { diagnostics = append(diagnostics, d) },
+			Observer:    ObserverFunc(func(o Observation) { observations = append(observations, o) }),
+			Clients: func(context.Context, string, Principal) (Backend, error) {
+				return backendFunc(func() (Watcher, error) {
+					watches++
+					if watches == 1 {
+						return &stubWatcher{events: []WatchEvent{
+							{Type: WatchBookmark, InitialEventsEnd: true},
+							{Type: WatchError, Err: ResyncRequired("expired")},
+						}}, nil
+					}
+					se := UpstreamUnavailable("the API server is unavailable", 0)
+					se.Cause = errors.New("dial tcp 10.43.0.1:443: connect: connection refused")
+					return nil, se
+				}), nil
+			},
 		},
 	}
 	sink := &recordingSink{}
-	err := gw.Stream(t.Context(), nil, Scope{Version: "v1", Resource: "configmaps"}, sink)
+	err := gw.Stream(t.Context(), nil, Scope{Version: "v1", Resource: "configmaps"}, "", sink)
 
 	var se *StreamError
 	if !errors.As(err, &se) || se.Code != CodeUpstreamUnavailable || se.Terminal {
@@ -762,8 +777,8 @@ func streamOver(t *testing.T, b Backend, now func() time.Time) (*recordingSink, 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
 	sink := &recordingSink{}
-	gw := &Gateway{Auth: AllowAll{}, now: now, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }}
-	err := gw.Stream(ctx, nil, Scope{Version: "v1", Resource: "configmaps"}, sink)
+	gw := &Gateway{now: now, StreamConfig: StreamConfig{Authorizer: AllowAll{}, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }}}
+	err := gw.Stream(ctx, nil, Scope{Version: "v1", Resource: "configmaps"}, "", sink)
 	if ctx.Err() != nil {
 		t.Fatalf("the stream did not end: %d events, the gateway is reopening a failing upstream in a loop", len(sink.events))
 	}

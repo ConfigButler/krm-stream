@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,12 +19,14 @@ import (
 
 func testOptions(policy gateway.ScopePolicy) gateway.Options {
 	return gateway.Options{
-		Principal:  func(*http.Request) (gateway.Principal, error) { return "alice", nil },
-		Authorizer: gateway.AllowAll{},
-		Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
-			return &emptyBackend{}, nil
+		Principal: func(*http.Request) (gateway.Principal, error) { return "alice", nil },
+		Scopes:    policy,
+		StreamConfig: gateway.StreamConfig{
+			Authorizer: gateway.AllowAll{},
+			Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
+				return &emptyBackend{}, nil
+			},
 		},
-		Scopes: policy,
 	}
 }
 
@@ -176,9 +179,9 @@ func TestHandlerPanicsOnMissingSeams(t *testing.T) {
 		name string
 		opts gateway.Options
 	}{
-		{"no Principal", gateway.Options{Authorizer: gateway.AllowAll{}, Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return nil, nil }}},
-		{"no Authorizer", gateway.Options{Principal: func(*http.Request) (gateway.Principal, error) { return nil, nil }, Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return nil, nil }}},
-		{"no Clients", gateway.Options{Principal: func(*http.Request) (gateway.Principal, error) { return nil, nil }, Authorizer: gateway.AllowAll{}}},
+		{"no Principal", gateway.Options{StreamConfig: gateway.StreamConfig{Authorizer: gateway.AllowAll{}, Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return nil, nil }}}},
+		{"no Authorizer", gateway.Options{Principal: func(*http.Request) (gateway.Principal, error) { return nil, nil }, StreamConfig: gateway.StreamConfig{Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return nil, nil }}}},
+		{"no Clients", gateway.Options{Principal: func(*http.Request) (gateway.Principal, error) { return nil, nil }, StreamConfig: gateway.StreamConfig{Authorizer: gateway.AllowAll{}}}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			defer func() {
@@ -304,4 +307,34 @@ func TestAnyResourceWithAnAllowlistIsRefused(t *testing.T) {
 		}
 	}()
 	gateway.Handler(testOptions(policy))
+}
+
+// Handler serves with the Options' whole StreamConfig, not a hand-copied subset: the projection policy
+// grants or refuses the view the query asks for, and the observer sees the stream it served.
+func TestHandlerServesWithItsStreamConfig(t *testing.T) {
+	for _, tc := range []struct {
+		requested, want string
+	}{
+		{"", `"projection":"krm-spec/v1"`},
+		{"&projection=krm-spec/v1", `"projection":"krm-spec/v1"`},
+		{"&projection=krm-raw/v1", `"code":"FORBIDDEN"`},
+	} {
+		t.Run(tc.requested, func(t *testing.T) {
+			o := testOptions(configmapsAllowed)
+			o.Projections = gateway.StaticProjection(gateway.ProjectionSpec)
+			var opened atomic.Int32
+			o.Observer = gateway.ObserverFunc(func(ob gateway.Observation) {
+				if ob.Kind == gateway.ObservationStreamOpened {
+					opened.Add(1)
+				}
+			})
+			body := serve(t, o, "/s?version=v1&resource=configmaps&namespace=app"+tc.requested).Body.String()
+			if !strings.Contains(body, tc.want) {
+				t.Errorf("want %s in:\n%s", tc.want, body)
+			}
+			if opened.Load() != 1 {
+				t.Errorf("the observer saw %d stream openings, want 1", opened.Load())
+			}
+		})
+	}
 }

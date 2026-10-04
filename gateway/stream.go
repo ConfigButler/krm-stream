@@ -71,65 +71,25 @@ const (
 
 // Gateway turns a Kubernetes watch into a conforming resource stream. It holds no cluster
 // connection of its own: the host supplies both the authorization decision and the client, through
-// the seams in seams.go.
+// the seams in seams.go, in the embedded StreamConfig.
 type Gateway struct {
-	// Auth decides whether a principal may open a scope, before any watch opens. Required.
-	Auth Authorizer
-	// Clients resolves (target, principal) to an upstream. Required.
-	Clients ClientFor
-	// Projection is what this stream removes and masks. Defaults to krm-full/v1 — the safe one:
-	// a gateway that defaults to raw and streams Secret values because someone forgot a config line
-	// has a vulnerability, not a bug.
-	Projection Projection
-	// Projections selects a projection authorized for this principal and scope. If nil, Projection is
-	// used as a safe static policy (defaulting to krm-full/v1). A browser may request a name but never
-	// supplies the projection rules themselves.
-	Projections ProjectionPolicy
-	// Observer receives low-cardinality lifecycle signals. Nil disables observations.
-	Observer Observer
-	// Diagnostics receives the raw error behind every error event, including detail kept off the
-	// wire. Nil discards it.
-	Diagnostics Diagnostics
-	// HeartbeatInterval controls SSE heartbeats when ServeStream is used. Zero uses the package
-	// default. It has no effect on the transport-neutral Stream method.
-	HeartbeatInterval time.Duration
-	// WriteTimeout bounds each HTTP write-plus-flush operation. Zero installs no deadline.
-	// It does not bound generic Stream sinks, callbacks or time waiting for delivery locks.
-	WriteTimeout time.Duration
+	StreamConfig
 
-	// ReauthorizationInterval rechecks each subscriber independently, even on quiet streams.
-	// Zero disables timed checks; snapshot cycles always reauthorize.
-	//
-	// A timed check waits for the subscriber's delivery in progress, so it can only be as prompt as
-	// the sink lets it be. ServeStream and ServeStreamProjection therefore require a positive
-	// WriteTimeout with it, and panic before writing anything otherwise. Stream and StreamProjection
-	// do not: their sink is the host's, and the host must bound its I/O.
-	ReauthorizationInterval time.Duration
-	// ReauthorizationTimeout bounds each timed check's Authorizer and projection-policy callbacks,
-	// starting once the check holds the subscriber's delivery gate. Zero defaults to 10 seconds.
-	// Authorizers and projection policies must honor context cancellation.
-	ReauthorizationTimeout time.Duration
 	// now is the clock that decides whether a cycle lasted long enough to count. Nil uses time.Now.
 	now func() time.Time
-
-	// Ordering is how far the upstream's resourceVersions may be trusted. The zero value is
-	// OrderingStrict: this library targets Kubernetes 1.35+, where orderability is a conformance
-	// requirement, and it says so rather than degrading quietly on every cluster to accommodate one.
-	Ordering ResourceVersionOrdering
 }
 
 // Stream runs one consumer's stream until the context is done or an error event ends it.
 //
+// requested is the projection name the caller asked for. The Projections policy decides the effective
+// view, and an empty request asks it for its default; a caller never supplies projection rules or
+// bypasses authorization.
+//
 // It returns after emitting a terminal error, or a non-terminal one such as UPSTREAM_UNAVAILABLE
-// that the client must reconnect for; the caller (the SSE handler) must then CLOSE the connection.
-// Only RESYNC_REQUIRED is recovered on the same connection.
-func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, sink Sink) error {
-	return g.StreamProjection(ctx, principal, scope, "", sink)
-}
-
-// StreamProjection runs a stream with a caller-requested projection name. The host policy selects
-// the effective view; callers never provide projection rules or bypass authorization.
-func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, scope Scope, requested Projection, sink Sink) error {
+// that the client must reconnect for; the caller must then CLOSE the connection. Only
+// RESYNC_REQUIRED is recovered on the same connection. The sink is the caller's: it must bound its own
+// delivery and honor cancellation.
+func (g *Gateway) Stream(ctx context.Context, principal Principal, scope Scope, requested Projection, sink Sink) error {
 	sink = &sequenceSink{sink: sink}
 	g.observe(Observation{Kind: ObservationStreamOpened, Scope: scope})
 	defer g.observe(Observation{Kind: ObservationStreamClosed, Scope: scope})
@@ -138,7 +98,7 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 	revisions := map[string]map[string]redactionState{}
 	policy := g.Projections
 	if policy == nil {
-		policy = StaticProjection(g.Projection)
+		policy = StaticProjection(ProjectionFull)
 	}
 
 	// quickEnds counts consecutive cycles that ended before they were of use. One is recovered in
@@ -170,7 +130,7 @@ func (g *Gateway) StreamProjection(ctx context.Context, principal Principal, sco
 		// EventSource reconnects on its own, so a non-terminal refusal would have a revoked user
 		// hammering a forbidden scope forever.
 		//
-		if err := g.Auth.Authorize(ctx, principal, scope); err != nil {
+		if err := g.Authorizer.Authorize(ctx, principal, scope); err != nil {
 			return g.emitError(ctx, sink, principal, scope, "", err)
 		}
 		projection, err := policy.SelectProjection(ctx, principal, scope, requested)
@@ -535,7 +495,7 @@ func unorderable(rv string) error {
 		Message: "upstream served a resourceVersion that cannot be ordered (" + rv + "). " +
 			"Kubernetes 1.35+ requires every resourceVersion to be an orderable decimal, so this " +
 			"upstream is either older than 1.35 or an aggregated API server that does not conform. " +
-			"Set Gateway.Ordering = OrderingLenient to stream it anyway, without per-object monotonicity.",
+			"Set StreamConfig.Ordering = OrderingLenient to stream it anyway, without per-object monotonicity.",
 	}
 }
 

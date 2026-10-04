@@ -56,10 +56,12 @@ func configPanic(t *testing.T, f func()) (msg string) {
 
 func validOptions() Options {
 	return Options{
-		Principal:  func(*http.Request) (Principal, error) { return nil, nil },
-		Authorizer: AllowAll{},
-		Clients:    func(context.Context, string, Principal) (Backend, error) { return nil, nil },
-		Scopes:     ScopePolicy{Targets: []string{""}, AnyResource: true},
+		Principal: func(*http.Request) (Principal, error) { return nil, nil },
+		Scopes:    ScopePolicy{Targets: []string{""}, AnyResource: true},
+		StreamConfig: StreamConfig{
+			Authorizer: AllowAll{},
+			Clients:    func(context.Context, string, Principal) (Backend, error) { return nil, nil },
+		},
 	}
 }
 
@@ -98,26 +100,28 @@ func TestHandlerAcceptsBoundedTimedReauthorizationAndUntimedStreams(t *testing.T
 // write, no deadline, no stream-opening observation, no authorization, no backend.
 func TestDirectHTTPServingRefusesTimedReauthorizationBeforeAnyIO(t *testing.T) {
 	for name, serve := range map[string]func(*Gateway, http.ResponseWriter, *http.Request){
-		"ServeStream": func(g *Gateway, w http.ResponseWriter, r *http.Request) {
-			g.ServeStream(w, r, "alice", sharedScopeUnderTest)
+		"default projection": func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+			g.ServeStream(w, r, "alice", sharedScopeUnderTest, "")
 		},
-		"ServeStreamProjection": func(g *Gateway, w http.ResponseWriter, r *http.Request) {
-			g.ServeStreamProjection(w, r, "alice", sharedScopeUnderTest, ProjectionSpec)
+		"requested projection": func(g *Gateway, w http.ResponseWriter, r *http.Request) {
+			g.ServeStream(w, r, "alice", sharedScopeUnderTest, ProjectionSpec)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var observed, calls atomic.Int32
 			g := &Gateway{
-				Auth: AuthorizerFunc(func(context.Context, Principal, Scope) error {
-					calls.Add(1)
-					return nil
-				}),
-				Clients: func(context.Context, string, Principal) (Backend, error) {
-					calls.Add(1)
-					return newFakeUpstream(), nil
+				StreamConfig: StreamConfig{
+					Authorizer: AuthorizerFunc(func(context.Context, Principal, Scope) error {
+						calls.Add(1)
+						return nil
+					}),
+					Clients: func(context.Context, string, Principal) (Backend, error) {
+						calls.Add(1)
+						return newFakeUpstream(), nil
+					},
+					Observer:                ObserverFunc(func(Observation) { observed.Add(1) }),
+					ReauthorizationInterval: 30 * time.Second,
 				},
-				Observer:                ObserverFunc(func(Observation) { observed.Add(1) }),
-				ReauthorizationInterval: 30 * time.Second,
 			}
 			w := &spyWriter{header: http.Header{}}
 			msg := configPanic(t, func() { serve(g, w, httptest.NewRequest(http.MethodGet, "/", nil)) })
@@ -146,13 +150,15 @@ func TestDirectHTTPServingAcceptsValidTimedConfigurations(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			g := &Gateway{
-				Auth:                    AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("not today") }),
-				Clients:                 func(context.Context, string, Principal) (Backend, error) { return newFakeUpstream(), nil },
-				WriteTimeout:            tc.write,
-				ReauthorizationInterval: tc.interval,
+				StreamConfig: StreamConfig{
+					Authorizer:              AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("not today") }),
+					Clients:                 func(context.Context, string, Principal) (Backend, error) { return newFakeUpstream(), nil },
+					WriteTimeout:            tc.write,
+					ReauthorizationInterval: tc.interval,
+				},
 			}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				g.ServeStream(w, r, "alice", sharedScopeUnderTest)
+				g.ServeStream(w, r, "alice", sharedScopeUnderTest, "")
 			}))
 			defer srv.Close()
 			res, err := srv.Client().Get(srv.URL)
@@ -176,18 +182,20 @@ func TestDirectHTTPServingAcceptsValidTimedConfigurations(t *testing.T) {
 func TestTransportNeutralStreamsKeepTimedChecksWithoutAWriteTimeout(t *testing.T) {
 	var revoked atomic.Bool
 	g := &Gateway{
-		Auth: AuthorizerFunc(func(context.Context, Principal, Scope) error {
-			if revoked.Load() {
-				return Forbidden("revoked")
-			}
-			return nil
-		}),
-		Clients:                 func(context.Context, string, Principal) (Backend, error) { return newFakeUpstream(), nil },
-		ReauthorizationInterval: time.Millisecond,
+		StreamConfig: StreamConfig{
+			Authorizer: AuthorizerFunc(func(context.Context, Principal, Scope) error {
+				if revoked.Load() {
+					return Forbidden("revoked")
+				}
+				return nil
+			}),
+			Clients:                 func(context.Context, string, Principal) (Backend, error) { return newFakeUpstream(), nil },
+			ReauthorizationInterval: time.Millisecond,
+		},
 	}
 	events := make(reauthEvents, 32)
 	done := make(chan error, 1)
-	go func() { done <- g.StreamProjection(t.Context(), "alice", sharedScopeUnderTest, "", events) }()
+	go func() { done <- g.Stream(t.Context(), "alice", sharedScopeUnderTest, "", events) }()
 	awaitEvent(t, events, EventReset)
 	revoked.Store(true)
 	if ev := awaitEvent(t, events, EventError); ev.Code != CodeForbidden || !ev.Terminal {

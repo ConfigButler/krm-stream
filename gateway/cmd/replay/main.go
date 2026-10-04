@@ -127,10 +127,12 @@ func stream(corpus gateway.Corpus, pace time.Duration) http.HandlerFunc {
 		}
 
 		gw := &gateway.Gateway{
-			Auth:       gateway.AllowAll{},
-			Projection: f.Projection,
-			Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
-				return paced{backend, delay}, nil
+			StreamConfig: gateway.StreamConfig{
+				Authorizer:  gateway.AllowAll{},
+				Projections: gateway.StaticProjection(f.Projection),
+				Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
+					return paced{backend, delay}, nil
+				},
 			},
 		}
 
@@ -146,7 +148,7 @@ func stream(corpus gateway.Corpus, pace time.Duration) http.HandlerFunc {
 			cancel()
 		}()
 
-		gw.ServeStream(w, r.WithContext(ctx), nil, *f.Scope)
+		gw.ServeStream(w, r.WithContext(ctx), nil, *f.Scope, "")
 	}
 }
 

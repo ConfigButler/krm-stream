@@ -173,7 +173,7 @@ var otherScopeUnderTest = Scope{Version: "v1", Resource: "configmaps", Namespace
 // lock, and with it every other scope's stream. Now an opening holds up only its own scope.
 func TestASlowOpeningDoesNotHoldUpAnotherScope(t *testing.T) {
 	up := newGatedUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	ctxA, cancelA := context.WithCancel(t.Context())
 	defer cancelA()
@@ -211,7 +211,7 @@ func TestConcurrentCallersForOneScopeShareOneOpening(t *testing.T) {
 	up := newGatedUpstream()
 	var mu sync.Mutex
 	var opened, closed int
-	b := NewSharedBackendWithOptions(up, SharedOptions{Observer: ObserverFunc(func(o Observation) {
+	b := NewSharedBackend(up, SharedOptions{Observer: ObserverFunc(func(o Observation) {
 		mu.Lock()
 		defer mu.Unlock()
 		switch o.Kind {
@@ -264,7 +264,7 @@ func TestConcurrentCallersForOneScopeShareOneOpening(t *testing.T) {
 // waiting on the same opening, which is not cancelled on their behalf.
 func TestCancellingOneWaiterLeavesTheOthersWaiting(t *testing.T) {
 	up := newGatedUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	leaving, leave := context.WithCancel(t.Context())
 	defer leave()
@@ -299,7 +299,7 @@ func TestCancellingOneWaiterLeavesTheOthersWaiting(t *testing.T) {
 // waiting is not the upstream being away. The next caller opens afresh, at once.
 func TestCancellingTheLastWaiterCancelsTheOpening(t *testing.T) {
 	up := newGatedUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	ctx1, cancel1 := context.WithCancel(t.Context())
 	ctx2, cancel2 := context.WithCancel(t.Context())
@@ -340,7 +340,7 @@ func TestCancellingTheLastWaiterCancelsTheOpening(t *testing.T) {
 // A caller that is already gone starts nothing, joins nothing, and holds nothing open.
 func TestACancelledCallerDoesNotOpenOrJoin(t *testing.T) {
 	up := newGatedUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 	gone, cancel := context.WithCancel(t.Context())
 	cancel()
 
@@ -375,7 +375,7 @@ func TestCancellationRacingASuccessfulOpeningOrphansNothing(t *testing.T) {
 		up.ignoreCancel = true // so the released watcher always reaches the backend, which must dispose of it
 		var mu sync.Mutex
 		balance := 0
-		b := NewSharedBackendWithOptions(up, SharedOptions{Observer: ObserverFunc(func(o Observation) {
+		b := NewSharedBackend(up, SharedOptions{Observer: ObserverFunc(func(o Observation) {
 			mu.Lock()
 			defer mu.Unlock()
 			switch o.Kind {
@@ -430,7 +430,7 @@ func TestAnAbandonedOpeningReturningLateCannotTouchItsReplacement(t *testing.T) 
 		t.Run(name, func(t *testing.T) {
 			up := newGatedUpstream()
 			up.ignoreCancel = true
-			b := NewSharedBackend(up)
+			b := NewSharedBackend(up, SharedOptions{})
 
 			ctx, leave := context.WithCancel(t.Context())
 			abandoned := watchAsync(ctx, b, sharedScopeUnderTest)
@@ -489,7 +489,7 @@ func TestAnOpeningFailureReachesEveryWaiterAndBacksOffOnce(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			up := newGatedUpstream()
-			b := NewSharedBackend(up)
+			b := NewSharedBackend(up, SharedOptions{})
 			now := time.Unix(0, 0)
 			b.now = func() time.Time { return now } // read only under b.mu, after the waiters arrived
 
@@ -536,32 +536,34 @@ func TestAnOpeningFailureReachesEveryWaiterAndBacksOffOnce(t *testing.T) {
 // not hold up a stream of another scope, and does not leave the opening behind.
 func TestAStreamWaitingOnASlowOpeningEndsWithItsCaller(t *testing.T) {
 	up := newGatedUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 	var mu sync.Mutex
 	var kinds []ObservationKind
 	g := &Gateway{
-		Auth:    AllowAll{},
-		Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil },
-		Observer: ObserverFunc(func(o Observation) {
-			mu.Lock()
-			defer mu.Unlock()
-			if o.Scope == sharedScopeUnderTest {
-				kinds = append(kinds, o.Kind)
-			}
-		}),
+		StreamConfig: StreamConfig{
+			Authorizer: AllowAll{},
+			Clients:    func(context.Context, string, Principal) (Backend, error) { return b, nil },
+			Observer: ObserverFunc(func(o Observation) {
+				mu.Lock()
+				defer mu.Unlock()
+				if o.Scope == sharedScopeUnderTest {
+					kinds = append(kinds, o.Kind)
+				}
+			}),
+		},
 	}
 
 	slowCtx, leave := context.WithCancel(t.Context())
 	defer leave()
 	slowDone := make(chan error, 1)
-	go func() { slowDone <- g.Stream(slowCtx, nil, sharedScopeUnderTest, &lockedSink{}) }()
+	go func() { slowDone <- g.Stream(slowCtx, nil, sharedScopeUnderTest, "", &lockedSink{}) }()
 	slowOpen := up.opened(t)
 
 	fast := make(reauthEvents, 8)
 	fastCtx, stopFast := context.WithCancel(t.Context())
 	defer stopFast()
 	fastDone := make(chan error, 1)
-	go func() { fastDone <- g.Stream(fastCtx, nil, otherScopeUnderTest, fast) }()
+	go func() { fastDone <- g.Stream(fastCtx, nil, otherScopeUnderTest, "", fast) }()
 	fastOpen := up.opened(t)
 	w := newOpenWatcher()
 	fastOpen.release <- gatedResult{w: w}

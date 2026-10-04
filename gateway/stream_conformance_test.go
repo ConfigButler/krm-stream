@@ -73,7 +73,7 @@ func replayFixture(t *testing.T, c Corpus, f Fixture) []Event {
 func replay(t *testing.T, c Corpus, f Fixture, newSink func(conn int) Sink, done func(Sink)) {
 	t.Helper()
 
-	gw := &Gateway{Auth: AllowAll{}, Projection: f.Projection}
+	gw := &Gateway{StreamConfig: StreamConfig{Authorizer: AllowAll{}, Projections: StaticProjection(f.Projection)}}
 
 	connections := splitConnections(f.Watch)
 	endsTerminally := len(f.Events) > 0 && f.Events[len(f.Events)-1].Type == EventError && f.Events[len(f.Events)-1].Terminal
@@ -88,7 +88,7 @@ func replay(t *testing.T, c Corpus, f Fixture, newSink func(conn int) Sink, done
 		sink := newSink(i)
 
 		finished := make(chan error, 1)
-		go func() { finished <- gw.Stream(ctx, nil, *f.Scope, sink) }()
+		go func() { finished <- gw.Stream(ctx, nil, *f.Scope, "", sink) }()
 
 		// The script is exhausted the moment the gateway comes BACK for another event having been
 		// given the last one — which is proof it finished processing it. No sleeps, no polling: a

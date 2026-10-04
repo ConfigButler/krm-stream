@@ -175,19 +175,15 @@ func writeSSEHeaders(ctx context.Context, w http.ResponseWriter, s *SSESink) err
 	})
 }
 
-// ServeStream runs one HTTP stream, including headers, heartbeats and cleanup.
-func (g *Gateway) ServeStream(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope) {
-	g.ServeStreamProjection(w, r, principal, scope, "")
-}
-
-// ServeStreamProjection serves a requested projection under the gateway's policy.
-// With WriteTimeout enabled, unsupported writers abort before a stream opens. A positive
-// ReauthorizationInterval requires a positive WriteTimeout; without one it panics before
+// ServeStream runs one HTTP stream, including headers, heartbeats and cleanup. requested is the
+// projection name the caller asked for, which the Projections policy grants or refuses; empty asks it
+// for its default. With WriteTimeout enabled, unsupported writers abort before a stream opens. A
+// positive ReauthorizationInterval requires a positive WriteTimeout; without one it panics before
 // writing anything, as Handler does at construction.
-func (g *Gateway) ServeStreamProjection(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope, projection Projection) {
+func (g *Gateway) ServeStream(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope, requested Projection) {
 	g.serveHTTP(w, r, func(ctx context.Context, sink *SSESink) {
 		// A terminal frame may itself fail; delivery is not guaranteed on a failed transport.
-		_ = g.StreamProjection(ctx, principal, scope, projection, sink)
+		_ = g.Stream(ctx, principal, scope, requested, sink)
 	})
 }
 
