@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.7.0](https://github.com/ConfigButler/krm-stream/compare/gateway/v0.6.0...gateway/v0.7.0) (2026-10-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **gateway:** HTTP hosts using timed reauthorization (Options.ReauthorizationInterval or Gateway.ReauthorizationInterval with ServeStream/ServeStreamProjection) must set a positive per-operation WriteTimeout, or Handler and the direct serving calls panic. Choose a budget per write-plus-flush, count it in the revocation budget, and verify that the mounted middleware supports flushing and write deadlines (gateway.CheckHTTPStreaming in a host test).
+
+### Features
+
+* **gateway:** harden shared-watch opening and timed reauthorization over HTTP ([#50](https://github.com/ConfigButler/krm-stream/issues/50)) ([b18acf4](https://github.com/ConfigButler/krm-stream/commit/b18acf4be96ef753860610e165409fd7e974d0a4))
+
 ## [0.6.0](https://github.com/ConfigButler/krm-stream/compare/gateway/v0.5.0...gateway/v0.6.0) (2026-10-02)
 
 

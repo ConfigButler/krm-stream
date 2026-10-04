@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.6.0...@configbutler/krm-stream-v0.7.0) (2026-10-04)
+
+
+### Miscellaneous Chores
+
+* **@configbutler/krm-stream:** Synchronize krm-stream versions
+
 ## [0.6.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.5.0...@configbutler/krm-stream-v0.6.0) (2026-10-02)
 
 
