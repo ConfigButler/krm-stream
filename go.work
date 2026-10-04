@@ -28,4 +28,4 @@ use (
 // This points that exact version at the working tree. Go refuses an unversioned replace of a
 // workspace module, so the version is spelled out, and Release Please moves it together with
 // gateway/kube/go.mod; CI fails if the two disagree.
-replace github.com/ConfigButler/krm-stream/gateway v0.6.0 => ./gateway // x-release-please-version
+replace github.com/ConfigButler/krm-stream/gateway v0.7.0 => ./gateway // x-release-please-version
