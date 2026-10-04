@@ -30,7 +30,7 @@ Use the [adoption guide](../adopting.md), [saving guide](../saving.md) and
 |---|---|---|
 | 1 | Define convergence precisely — complete | [Evidence](../../conformance/README.md#convergence-evidence) |
 | 2 | Publish tested deletion-recovery and keep-local recipes — complete | [Recipes](../../examples/editor-recipes/README.md) and [tests](../../packages/krm-stream/test/recipes.test.ts) |
-| 3 | Harden real-API save composition and identity races | Exact-commit API evidence, separate from fake-client CI. |
+| 3 | Harden real-API save composition and identity races — implemented | [`TestRealAPI` cases](../../gateway/kube/composition_e2e_test.go), run by `task test-real-api` |
 | 4 | Measure and implement upstream continuation | Same-workload comparison proves continuity, bounded recovery and authorization. |
 
 Review the remaining priorities as separate changes. Baseline measurement can run alongside
@@ -80,6 +80,13 @@ preserve unrelated edits and conflicts. Capture a fresh save intent after review
 only if repeated consumer code warrants it; do not create another conflict registry.
 
 ## 3. Real-API composition and identity races
+
+Implemented as the `TestRealAPI` cases, run by `task test-real-api`. The browser side runs the real store and conditional editor under node. A
+real status subresource comes from a test-installed Widget CRD, and a test-only transport barrier
+recreates the ConfigMap between the host's preflight GET and its PATCH. The race showed that
+Kubernetes checks the captured `resourceVersion` before the UID, so a replacement arrives as a plain
+409. The host now classifies it with one GET and answers with structured Kubernetes `Status`
+responses. The criteria below are what those cases assert.
 
 The [existing real-API stale-RV test](../../gateway/kube/e2e_test.go) proves ordinary rejection, not
 these compositions. Extend it alongside [store/example tests](../../packages/krm-stream/test/saving.test.ts)

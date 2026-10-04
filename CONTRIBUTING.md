@@ -48,6 +48,7 @@ the rule it protects.
 | `task e2e-wire` | Real Go SSE bytes consumed by the TypeScript client over HTTP. |
 | `task e2e-browser` | Native `EventSource` and unbundled ESM in Chromium. |
 | `task cluster-facts` | Record observed Kubernetes behavior for the supported cluster version. |
+| `task test-real-api` | Compose the save path against a real API server: gateway, host endpoint and browser store. |
 | `task test-cluster` | Exercise the Kubernetes backend against a real API server. |
 
 The cluster tasks need Docker and take longer; the fixture suites are the per-pull-request baseline.

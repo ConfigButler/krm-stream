@@ -28,6 +28,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/utils/ptr"
 
@@ -50,13 +51,20 @@ func (s chanSink) Emit(ctx context.Context, ev gateway.Event) error {
 	}
 }
 
-func clients(t *testing.T) (kubernetes.Interface, dynamic.Interface) {
+// restConfig is the test cluster's client configuration, from KUBECONFIG or the default kubeconfig.
+func restConfig(t *testing.T) *rest.Config {
 	t.Helper()
 	rules := clientcmd.NewDefaultClientConfigLoadingRules()
 	cfg, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(rules, nil).ClientConfig()
 	if err != nil {
 		t.Fatalf("kubeconfig: %v (is the cluster up? `task cluster-up`)", err)
 	}
+	return cfg
+}
+
+func clients(t *testing.T) (kubernetes.Interface, dynamic.Interface) {
+	t.Helper()
+	cfg := restConfig(t)
 	cs, err := kubernetes.NewForConfig(cfg)
 	if err != nil {
 		t.Fatalf("clientset: %v", err)
