@@ -62,6 +62,24 @@ type SubjectFor func(gateway.Principal) (Subject, error)
 // It needs the SERVER's own client (a service account) to hold `create` on `subjectaccessreviews`,
 // which is the standard `system:auth-delegator` role. It does NOT need impersonate rights: this asks
 // a question about a user, it does not act as one.
+//
+// # What a review asks
+//
+// A host that caches decisions must key them on exactly what is asked, so this is a contract:
+//
+//   - Subject: User, Groups, UID and Extra, exactly as subjectFor returns them.
+//   - Verbs: `list`, then `watch`, one review each. The first refusal or failure ends the check;
+//     `watch` is not asked about after `list` is refused.
+//   - Resource attributes: the verb and the scope's Group, Version, Resource, Namespace and Name.
+//     An empty Namespace asks about every namespace; an empty Name, about the whole collection.
+//   - Not sent: the scope's LabelSelector, any field selector, and a subresource. A selector narrows
+//     what the stream delivers, not the question asked: the review covers the whole collection.
+//     The scope's Target and the stream's projection are not resource attributes either; the client
+//     cs decides which API server answers.
+//
+// A future change to these inputs is a compatibility change for caching hosts, and will be called
+// out in the release notes. This describes the adapter's request, not how a particular authorization
+// policy evaluates it.
 func SubjectAccessReviewAuthorizer(cs kubernetes.Interface, subjectFor SubjectFor) gateway.Authorizer {
 	return gateway.AuthorizerFunc(func(ctx context.Context, p gateway.Principal, scope gateway.Scope) error {
 		subject, err := subjectFor(p)

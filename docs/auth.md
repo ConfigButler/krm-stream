@@ -160,6 +160,37 @@ Kubernetes. `subjectOf` supplies the API-server-resolved username, groups, UID a
 both `list` and `watch`. An incomplete review is refused, and an explicit `Denied` wins over
 `Allowed`.
 
+### What the SubjectAccessReview asks
+
+A host that caches decisions has to key them on exactly what the adapter asks. For each check it
+sends one SubjectAccessReview per verb, `list` then `watch`, and stops at the first refusal or
+failure:
+
+| Field | Value |
+|---|---|
+| `user`, `groups`, `uid`, `extra` | The `kube.Subject` returned by the host's `SubjectFor`, unchanged. |
+| `resourceAttributes.verb` | `list`, then `watch`. |
+| `resourceAttributes.group`, `.version`, `.resource` | The scope's group, version and resource. |
+| `resourceAttributes.namespace` | The scope's namespace; empty for an all-namespaces scope. |
+| `resourceAttributes.name` | The scope's name; empty for a collection. |
+
+Not sent: the scope's label selector, any field selector, and a subresource. A selector narrows what
+a stream delivers, but it does not narrow the authorization question: the review asks about the
+whole collection. The scope's target and the stream's projection are not review attributes either;
+the clientset given to the adapter decides which API server receives the review. This describes the
+adapter's request, not how every Kubernetes authorizer evaluates it.
+
+A cache in front of the adapter must therefore:
+
+- key on the complete subject (user, groups, UID and extra) and the complete request, including
+  the verb;
+- keep decisions from different API servers or targets apart, since the same request can have a
+  different answer elsewhere;
+- never let a reused review skip the host's own checks of session validity or projection policy.
+
+Changing these inputs is a compatibility change for caching hosts, and is announced in the release
+notes. The library does not provide a decision cache.
+
 The service account needs `create` on `subjectaccessreviews`; `system:auth-delegator` supplies that
 permission. Reviews do not require impersonation rights. These are SubjectAccessReview requests,
 not SelfSubjectAccessReview requests. Cycle and timed checks use the same authorizer.
