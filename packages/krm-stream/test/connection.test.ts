@@ -823,7 +823,7 @@ for (const [name, prefix] of [
   ["partial", '{"kind":"Status","mess'],
 ] as const)
   test(`a ${name} refusal body falls back to the bare status within its budget`, async () => {
-    const { statusMessage } = await import("../src/sse.ts");
+    const { statusMessage } = await import("../src/http.ts");
     const { response, body } = stalledRefusal(prefix);
     const started = Date.now();
     assert.equal(await statusMessage(response, new AbortController().signal, 20), undefined);
@@ -832,7 +832,7 @@ for (const [name, prefix] of [
   });
 
 test("aborting during a refusal-body read stops it at once", async () => {
-  const { statusMessage } = await import("../src/sse.ts");
+  const { statusMessage } = await import("../src/http.ts");
   const { response, body } = stalledRefusal('{"kind":');
   const abort = new AbortController();
   const read = statusMessage(response, abort.signal, 60_000);
