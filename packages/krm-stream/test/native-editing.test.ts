@@ -1,0 +1,244 @@
+// Native editing: the store under the default policy, fed native objects, and the native conditional
+// editor in examples/native-editor writing through a scripted host proxy. Each test answers the
+// editor's PATCH and GET itself, so it decides what the API server said and when the watch moved.
+
+import assert from "node:assert/strict";
+import { test } from "node:test";
+import { type KRMObject, LiveResourceStore } from "../src/index.ts";
+
+const { nativeEditor, NativeRequestError } = await import("../../../examples/native-editor/editor.ts");
+
+const LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration";
+const URL_ = "/k8s/api/v1/namespaces/app/configmaps/settings";
+const source = { proxy: "/k8s", scope: { version: "v1", resource: "configmaps", namespace: "app" } };
+
+/** A ConfigMap exactly as the API server returns it, machinery included. */
+const native = (rv: string, value = "base", uid = "u"): KRMObject => ({
+  apiVersion: "v1",
+  kind: "ConfigMap",
+  metadata: {
+    uid,
+    name: "settings",
+    namespace: "app",
+    resourceVersion: rv,
+    annotations: { [LAST_APPLIED]: `{"data":{"value":"${value}"}}`, owner: "team-a" },
+    managedFields: [{ manager: "kubectl", operation: "Apply" }],
+  },
+  data: { value },
+});
+const status = (code: number, reason: string, extra: Record<string, unknown> = {}) =>
+  Response.json(
+    { kind: "Status", apiVersion: "v1", status: "Failure", code, reason, message: reason, ...extra },
+    {
+      status: code,
+    },
+  );
+
+interface Call {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: unknown;
+}
+
+/** A host proxy answering each request with the next scripted response. */
+function proxy(...answers: ((call: Call) => Response | Promise<Response>)[]) {
+  const calls: Call[] = [];
+  const request: typeof fetch = async (input, init) => {
+    const call: Call = {
+      method: init?.method ?? "GET",
+      url: String(input),
+      headers: (init?.headers ?? {}) as Record<string, string>,
+      body: typeof init?.body === "string" ? JSON.parse(init.body) : undefined,
+    };
+    calls.push(call);
+    const answer = answers.shift();
+    assert.ok(answer, `unexpected ${call.method} ${call.url}`);
+    return answer(call);
+  };
+  return { calls, request };
+}
+
+function seeded(rv = "1"): LiveResourceStore {
+  const store = new LiveResourceStore();
+  store.applyServerEvent(native(rv));
+  return store;
+}
+
+test("a native save is a conditional merge patch to the object, through the watched proxy", async () => {
+  const store = seeded();
+  store.setValue("u", ["data", "value"], "mine");
+  store.setValue("u", ["metadata", "annotations", "owner"], "team-b");
+  const { calls, request } = proxy(() => {
+    store.setValue("u", ["data", "value"], "typed while saving");
+    // The proxy answers with the written object, which the editor must not adopt.
+    return Response.json(native("2", "mine"));
+  });
+  const editor = nativeEditor(store, "u", source, request, () => true);
+
+  assert.equal(await editor.save(), "saved");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.method, "PATCH");
+  assert.equal(calls[0]!.url, URL_);
+  assert.equal(calls[0]!.headers["Content-Type"], "application/merge-patch+json");
+  assert.deepEqual(calls[0]!.body, {
+    metadata: { annotations: { owner: "team-b" }, uid: "u", resourceVersion: "1" },
+    data: { value: "mine" },
+  });
+  // The response was not adopted: the server object still waits for the watch.
+  assert.equal(store.server("u").metadata.resourceVersion, "1");
+  assert.deepEqual(store.draft("u").data, { value: "typed while saving" });
+
+  // The echo arrives: the saved value settles, the later typing stays.
+  store.applyServerEvent({
+    ...native("2", "mine"),
+    metadata: { ...native("2", "mine").metadata, annotations: { [LAST_APPLIED]: "{}", owner: "team-b" } },
+  });
+  assert.deepEqual(store.patch("u"), { data: { value: "typed while saving" } });
+  assert.equal(editor.saving, false);
+});
+
+test("a native save never carries machinery, even when the server rewrote it during editing", async () => {
+  const store = seeded();
+  store.setValue("u", ["metadata", "annotations", "owner"], "team-b");
+  assert.throws(() => store.removeKey("u", ["metadata", "annotations"]), /read-only/);
+  store.applyServerEvent(native("2", "applied again"));
+  const { calls, request } = proxy(() => new Response(null, { status: 200 }));
+  assert.equal(await nativeEditor(store, "u", source, request, () => true).save(), "saved");
+  assert.deepEqual(calls[0]!.body, {
+    metadata: { annotations: { owner: "team-b" }, uid: "u", resourceVersion: "2" },
+  });
+});
+
+test("a native 409 reconciles a guarded native GET and keeps the draft for review", async () => {
+  const store = seeded();
+  store.setValue("u", ["metadata", "annotations", "owner"], "team-b");
+  const { calls, request } = proxy(
+    () => status(409, "Conflict"),
+    (call) => {
+      assert.equal(call.url, URL_);
+      store.setValue("u", ["metadata", "annotations", "owner"], "team-c");
+      return Response.json(native("3", "moved on the server"));
+    },
+    () => new Response(null, { status: 200 }),
+  );
+  const editor = nativeEditor(store, "u", source, request, () => true);
+
+  assert.equal(await editor.save(), "version-stale");
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ["PATCH", "GET"],
+  );
+  assert.equal(store.server("u").metadata.resourceVersion, "3");
+  assert.equal(store.draft("u").metadata.annotations?.owner, "team-c");
+  assert.deepEqual(store.draft("u").data, { value: "moved on the server" });
+
+  // The next deliberate Save captures a new intent at the version the read established.
+  assert.equal(await editor.save(), "saved");
+  assert.deepEqual(calls[2]!.body, {
+    metadata: { annotations: { owner: "team-c" }, uid: "u", resourceVersion: "3" },
+  });
+});
+
+test("a native 409 with a concurrent change to the edited field is a draft conflict", async () => {
+  const store = seeded();
+  store.setValue("u", ["data", "value"], "mine");
+  const { request } = proxy(
+    () => status(409, "Conflict"),
+    () => Response.json(native("3", "theirs")),
+  );
+  const editor = nativeEditor(store, "u", source, request, () => true);
+  assert.equal(await editor.save(), "draft-conflict");
+  assert.deepEqual(store.conflicts("u"), [{ path: ["data", "value"], theirs: "theirs" }]);
+  assert.equal(await editor.save(), "draft-conflict", "no write until the conflict is resolved");
+});
+
+test("an object replaced under the same name is unavailable, and its replacement is never applied", async () => {
+  for (const refusal of [
+    () => status(409, "Conflict"),
+    () => status(422, "Invalid", { details: { causes: [{ field: "metadata.uid", message: "Precondition failed" }] } }),
+  ]) {
+    const store = seeded();
+    store.setValue("u", ["data", "value"], "mine");
+    const { calls, request } = proxy(refusal, () => Response.json(native("4", "replacement", "u-new")));
+    assert.equal(await nativeEditor(store, "u", source, request, () => true).save(), "unavailable");
+    assert.deepEqual(
+      calls.map((c) => c.method),
+      ["PATCH", "GET"],
+    );
+    assert.equal(store.server("u").metadata.resourceVersion, "1");
+    assert.deepEqual(store.draft("u").data, { value: "mine" });
+  }
+});
+
+test("a deleted object is unavailable on save and on the recovery read", async () => {
+  const deleted = seeded();
+  deleted.setValue("u", ["data", "value"], "mine");
+  const patch = proxy(() => status(404, "NotFound"));
+  assert.equal(await nativeEditor(deleted, "u", source, patch.request, () => true).save(), "unavailable");
+
+  const gone = seeded();
+  gone.setValue("u", ["data", "value"], "mine");
+  const read = proxy(
+    () => status(409, "Conflict"),
+    () => status(404, "NotFound"),
+  );
+  assert.equal(await nativeEditor(gone, "u", source, read.request, () => true).save(), "unavailable");
+});
+
+test("a refused native write keeps the Kubernetes Status for the form and the draft intact", async () => {
+  const store = seeded();
+  store.setValue("u", ["data", "value"], "x".repeat(10));
+  const invalid = { causes: [{ field: "data.value", message: "too long" }] };
+  const { request } = proxy(() => status(422, "Invalid", { details: invalid }));
+  const error = await nativeEditor(store, "u", source, request, () => true)
+    .save()
+    .then(
+      () => undefined,
+      (e: unknown) => e,
+    );
+  assert.ok(error instanceof NativeRequestError);
+  assert.equal(error.httpStatus, 422);
+  assert.deepEqual((error.status as { details: unknown }).details, invalid);
+  assert.deepEqual(store.patch("u"), { data: { value: "xxxxxxxxxx" } });
+});
+
+test("a recovery read overtaken by the watch is not applied, and the next Save reads again", async () => {
+  const store = seeded();
+  store.setValue("u", ["data", "value"], "mine");
+  const { calls, request } = proxy(
+    () => status(409, "Conflict"),
+    () => {
+      store.applyServerEvent(native("5", "base"));
+      return Response.json(native("4", "older"));
+    },
+    () => Response.json(native("5", "base")),
+  );
+  const editor = nativeEditor(store, "u", source, request, () => true);
+  assert.equal(await editor.save(), "recovering");
+  assert.equal(store.server("u").metadata.resourceVersion, "5");
+  assert.equal(await editor.save(), "version-stale", "only a read, never the old patch");
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ["PATCH", "GET", "GET"],
+  );
+});
+
+test("the native editor refuses to write while the connection is not live, and rejects a projected envelope", async () => {
+  const store = seeded();
+  store.setValue("u", ["data", "value"], "mine");
+  const idle = proxy();
+  assert.equal(await nativeEditor(store, "u", source, idle.request, () => false).save(), "recovering");
+  assert.equal(idle.calls.length, 0);
+
+  // A projected endpoint's { object, redactedPaths } is another source; it never reconciles here.
+  const projected = proxy(
+    () => status(409, "Conflict"),
+    () => Response.json({ object: native("2", "theirs"), redactedPaths: [] }),
+  );
+  await assert.rejects(
+    nativeEditor(store, "u", source, projected.request, () => true).save(),
+    /not a Kubernetes object/,
+  );
+  assert.equal(store.server("u").metadata.resourceVersion, "1");
+});
