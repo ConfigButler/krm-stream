@@ -36,7 +36,7 @@ browser never holds a Kubernetes credential.
   access provides no projection, redaction, suppression or shared watches; use the
   [gateway](../../docs/why-a-gateway.md) for those.
 - It is a viewer. To edit through the same proxy, add the
-  [native editor](../native-editor/README.md). Resumable watches and paginated lists are later work;
+  [native editor](../native-editor/README.md), which has its own page for one ConfigMap. Resumable watches and paginated lists are later work;
   see the [delivery plan](../../docs/proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order).
 
 `task e2e-browser` loads this page in Chromium on both entry points, with Playwright standing in for

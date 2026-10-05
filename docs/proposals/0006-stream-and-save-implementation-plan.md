@@ -2,8 +2,8 @@
 
 **Status: active delivery plan, updated 2026-10-05.** This is the single inventory of completed work,
 open work and ordering. The implementation includes connector separation, Go API cleanup,
-real-API save-composition tests, the native viewer and native editing. Detailed contracts stay in the
-linked proposals and guides rather than becoming another roadmap.
+real-API save-composition tests, the native viewer and native editing with a browser page. Detailed
+contracts stay in the linked proposals and guides rather than becoming another roadmap.
 
 Start with [watching resources](../why-a-gateway.md); add the [editor](../client-state-model.md) only
 where a page needs drafts. Hosts with a Kubernetes proxy can read native collections with the
@@ -30,7 +30,7 @@ remain separate delivery steps.
 | Editor integration and recovery recipes | Tested deletion recovery, keep-local resolution and Vue subscription ownership | [Recipes](../../examples/editor-recipes/README.md), [Vue](../../examples/vue/README.md) |
 | Real-API save composition | Cases for suppressed churn, guarded-read overlap, structured errors and same-name UID replacement | [Completed baseline](#completed-baseline) |
 | Native viewer (slice 1) | `connectNativeWatch` and `nativeCollectionURL`: unpaginated LIST, WATCH from the collection RV, fresh LIST on reconnect, native 410 recovery and terminal refusals on a lifecycle shared with the gateway connector; fake-fetch, Chromium and real-API tests; minimal example | [Request](../field-reports/third-our-identity.md#slice-1-a-native-viewer), [example](../../examples/native-viewer/README.md), [client](../../packages/krm-stream/README.md#native-connections) |
-| Native editing (slice 2) | Machinery (`managedFields`, last-applied annotation) read-only in the store under every policy; maps holding a protected path merged key by key; `nativeObjectURL`; `gateway.ValidateNativeMergePatch` for host proxies; a native conditional editor with guarded native recovery reads; fake-fetch and real-API tests | [Request](../field-reports/third-our-identity.md#slice-2-native-editing), [example](../../examples/native-editor/README.md), [saving](../saving.md#native-editing-through-a-host-proxy) |
+| Native editing (slice 2) | Machinery (`managedFields`, last-applied annotation) read-only in the store under every policy; maps holding a protected path merged key by key; `nativeObjectURL`; `gateway.ValidateNativeMergePatch` for host proxies; a native conditional editor with guarded native recovery reads; fake-fetch and real-API tests; a minimal one-ConfigMap page accepted in Chromium on both entry points | [Request](../field-reports/third-our-identity.md#slice-2-native-editing), [example](../../examples/native-editor/README.md), [saving](../saving.md#native-editing-through-a-host-proxy) |
 | Watch-first documentation | README, watch/edit/save guides, native-fetch request and compact decision records; duplicate/superseded guides removed | [README](../../README.md), [current request](../field-reports/third-our-identity.md) |
 
 ## Open work and delivery order
@@ -41,7 +41,7 @@ before starting a later one. Deliver separately reviewable changes and use the p
 | Order | Open work | Dependencies and completion |
 |---|---|---|
 | 1 | Native viewer — **completed** | See [completed work](#completed-work); acceptance evidence is recorded in the [request](../field-reports/third-our-identity.md#acceptance-for-slice-1). |
-| 2 | Native editing — **completed** | See [completed work](#completed-work); acceptance evidence is recorded in the [request](../field-reports/third-our-identity.md#acceptance-for-slice-2). No editor method changed, so proposal 0009's cleanup is unaffected. |
+| 2 | Native editing — **completed** | See [completed work](#completed-work); acceptance evidence, browser acceptance included, is recorded in the [request](../field-reports/third-our-identity.md#acceptance-for-slice-2). No editor method changed, so proposal 0009's cleanup is unaffected. |
 | 3 | Native reconnect efficiency | After the viewer; evaluate resumable watches, streaming-list initialization and pagination with explicit membership/checkpoint tests. Do not claim these efficiencies for slice 1. |
 | 4 | Gateway upstream continuation | Independent track with a design below; review reopen/credential bounds, record a baseline, implement and measure. No dependency on native transport. |
 | 5 | Save progress during suppressed churn | Independent evaluation using existing real-API fixtures; bounded submitted-intent recovery first, optional version delivery second. Implementation depends on measured benefit and reviewed scope. |

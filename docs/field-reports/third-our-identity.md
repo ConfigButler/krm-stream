@@ -139,8 +139,16 @@ capture and PATCH (409, guarded read, a second deliberate save, neither write lo
 refusing an unconditional patch and a machinery patch before they reach the API server, and an
 object replaced under the same name reported `unavailable` with the replacement untouched.
 
-There is no browser page for native editing yet; the comparative frontend (order 6) is where one
-belongs.
+**Browser acceptance (2026-10-05).** The [example page](../../examples/native-editor/README.md#run-the-page)
+edits one ConfigMap with the same editor, store and connector, built from `editor.ts` without a
+second save controller or new library API. `examples/vanilla-browser/tests/native-editor.spec.ts`
+(`task e2e-browser`) runs it in Chromium on both entry points, with the watch live throughout, against
+a test server playing the host proxy. It covers a save and its echo, typing and focus during a save,
+409 recovery and a second deliberate save, explicit conflict resolution, a lost response and a 502
+each settled by a GET before any further PATCH, an accepted write without an echo confirmed
+explicitly, 403 and 422 refusals, UID replacement with copy-out, and disconnect cleanup. A manual
+run through `kubectl proxy` against the v1.36.4+k3s1 spike cluster saved and echoed on both entry
+points and rendered a real 422. The comparative frontend (order 6) remains separate.
 
 ## Follow-ups after the viewer
 

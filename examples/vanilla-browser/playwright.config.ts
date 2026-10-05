@@ -41,7 +41,7 @@ export default defineConfig<{ entry: Entry }>({
   // first-ever CI run. Run `task e2e-browser`, which installs the library's devDependencies first.
   webServer: {
     command:
-      "cd ../../packages/krm-stream && npm run --silent build && " +
+      "cd ../../packages/krm-stream && npm run --silent build && node ../../examples/native-editor/build.mjs && " +
       "cd ../../gateway && go run ./cmd/replay " +
       "--addr 127.0.0.1:8100 --corpus ../conformance " +
       "--static ../examples/vanilla-browser --dist ../packages/krm-stream/dist",

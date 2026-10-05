@@ -191,7 +191,7 @@ tasks:
     # and it cannot do that with no node_modules there. On a developer's machine that directory is
     # already populated by `task test`, which is exactly why this gap survived until the first CI run
     # on a clean checkout found it.
-    deps: [fixtures, build-client, _example-deps]
+    deps: [fixtures, build-client, build-native-editor, _example-deps]
     dir: examples/vanilla-browser
     cmds:
       # The only place the library's central promise is actually tested: that the published ESM
@@ -325,6 +325,26 @@ tasks:
       # whose exports map pointed at a file that was not in it.
       - npm run --silent build
 
+  build-native-editor:
+    desc: "Build the library and compile the native editor page's controller and recipes into examples/native-editor/dist."
+    deps: [build-client]
+    sources:
+      - examples/native-editor/build.mjs
+      - examples/native-editor/editor.ts
+      - examples/editor-recipes/keepLocal.ts
+      - examples/editor-recipes/recoveryCopy.ts
+    generates:
+      - examples/native-editor/dist/editor.js
+      - examples/native-editor/dist/keepLocal.js
+      - examples/native-editor/dist/recoveryCopy.js
+    status:
+      - test -f examples/native-editor/dist/editor.js
+      - test -f examples/native-editor/dist/keepLocal.js
+      - test -f examples/native-editor/dist/recoveryCopy.js
+    cmds:
+      # Types stripped, library import renamed to the published package; see build.mjs.
+      - node examples/native-editor/build.mjs
+
   pack-client:
     desc: "Pack the npm tarball and PROVE it contains every entry point the exports map advertises."
     deps: [build-client]
@@ -365,7 +385,7 @@ tasks:
     cmds:
       # .task/ is Task's checksum store: what makes a task say "up to date". Remove it when one is wrong.
       - rm -rf .task
-      - rm -rf {{.CLIENT_DIR}}/node_modules {{.CLIENT_DIR}}/dist
+      - rm -rf {{.CLIENT_DIR}}/node_modules {{.CLIENT_DIR}}/dist examples/native-editor/dist
       - rm -rf examples/vanilla-browser/node_modules
       # Go's test cache is content-addressed and sound: a cached `ok` means those inputs really did
       # pass. Use `go test -count=1` to watch a suite run; `go clean -cache` buys nothing but minutes.

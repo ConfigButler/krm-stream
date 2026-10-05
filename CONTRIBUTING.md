@@ -62,7 +62,7 @@ the rule it protects.
 |---|---|
 | `task test` | Deterministic gateway, adapter, client, and shared-fixture coverage. |
 | `task e2e-wire` | Real Go SSE bytes consumed by the TypeScript client over HTTP. |
-| `task e2e-browser` | Native `EventSource`, unbundled ESM and the native viewer example in Chromium. |
+| `task e2e-browser` | Native `EventSource`, unbundled ESM and the native viewer and editor pages in Chromium. |
 | `task cluster-facts` | Record observed Kubernetes behavior for the supported cluster version. |
 | `task test-real-api` | Compose the save path and native viewing and editing against a real API server: gateway or host proxy, host endpoint and browser store. |
 | `task test-cluster` | Exercise the Kubernetes backend against a real API server. |
