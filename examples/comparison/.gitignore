@@ -1,0 +1,4 @@
+# Built by build.mjs (task build-compare-page).
+dist/
+# Written by measure.ts; the dated report in docs/facts/ records the runs that matter.
+results/

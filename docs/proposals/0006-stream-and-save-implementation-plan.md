@@ -2,8 +2,8 @@
 
 **Status: active delivery plan, updated 2026-10-05.** This is the single inventory of completed work,
 open work and ordering. The implementation includes connector separation, Go API cleanup,
-real-API save-composition tests, the native viewer, native editing with a browser page and native
-watch resumption. Detailed
+real-API save-composition tests, the native viewer, native editing with a browser page, native
+watch resumption and a comparison example with measurements. Detailed
 contracts stay in the linked proposals and guides rather than becoming another roadmap.
 
 Start with [watching resources](../why-a-gateway.md); add the [editor](../client-state-model.md) only
@@ -33,6 +33,7 @@ remain separate delivery steps.
 | Native viewer (slice 1) | `connectNativeWatch` and `nativeCollectionURL`: unpaginated LIST, WATCH from the collection RV, fresh LIST on reconnect (superseded by resumption below), native 410 recovery and terminal refusals on a lifecycle shared with the gateway connector; fake-fetch, Chromium and real-API tests; minimal example | [Request](../field-reports/third-our-identity.md#slice-1-a-native-viewer), [example](../../examples/native-viewer/README.md), [client](../../packages/krm-stream/README.md#native-connections) |
 | Native editing (slice 2) | Machinery (`managedFields`, last-applied annotation) read-only in the store under every policy; maps holding a protected path merged key by key; `nativeObjectURL`; `gateway.ValidateNativeMergePatch` for host proxies; a native conditional editor with guarded native recovery reads; fake-fetch and real-API tests; a minimal one-ConfigMap page accepted in Chromium on both entry points | [Request](../field-reports/third-our-identity.md#slice-2-native-editing), [example](../../examples/native-editor/README.md), [saving](../saving.md#native-editing-through-a-host-proxy) |
 | Native watch resumption | A per-handle checkpoint advanced only after a consumed event or bookmark; ordinary reconnects resume the WATCH without LIST, reset or synced; 410, malformed input and unclassifiable errors discard it for a fresh snapshot; fake-fetch, Chromium (both entry points) and real-API resume/expiry tests | [Request](../field-reports/third-our-identity.md#native-watch-resumption), [client](../../packages/krm-stream/README.md#native-connections) |
+| Comparative frontend and measurements | One host serving native, `krm-full/v1` and `krm-spec/v1`, unshared and shared, with editing on every source, refusal without native fallback, Secret disclosure, status-only suppression and hidden rotations; a driver with identical workloads, a convergence gate and request/byte/event/notification/render/authorization counters; native before/after resumption | [Example](../../examples/comparison/README.md), [results](../facts/comparison-2026-10-05.md) |
 | Watch-first documentation | README, watch/edit/save guides, native-fetch request and compact decision records; duplicate/superseded guides removed | [README](../../README.md), [current request](../field-reports/third-our-identity.md) |
 
 ## Open work and delivery order
@@ -47,7 +48,7 @@ before starting a later one. Deliver separately reviewable changes and use the p
 | 3 | Native reconnect efficiency — **resumption completed** | See [completed work](#completed-work). Streaming-list initialization and pagination are evaluated [below](#3-native-streaming-lists-and-pagination) and remain open; implement them only with their own membership, checkpoint and recovery tests. |
 | 4 | Gateway upstream continuation | Independent track with a design below; review reopen/credential bounds, record a baseline, implement and measure. No dependency on native transport. |
 | 5 | Save progress during suppressed churn | Independent evaluation using existing real-API fixtures; bounded submitted-intent recovery first, optional version delivery second. Implementation depends on measured benefit and reviewed scope. |
-| 6 | Comparative frontend and measurements | Follow working native viewing and editing. Compare native/full/spec and shared/unshared workloads; the larger project is outside slice 1. |
+| 6 | Comparative frontend and measurements — **completed** | See [completed work](#completed-work). Save progress under churn (order 5) and memory/CPU remain unmeasured; rerun `task compare-measure` for new evidence rather than extending the example into a benchmark framework. |
 | Separate | Editor API cleanup in proposal 0009 | Independently proposed. Keep current standalone `applyStreamEvent` in slice 1; neither bound methods nor a new read-only store are required for native transport. |
 | Per change | Validation, release and host adoption | Release ready increments under the existing lockstep policy; do not wait for every track. Check each change's final-commit CI, artifact/API notes and host acceptance. |
 

@@ -8,8 +8,12 @@ through an existing host proxy, such as `kubectl proxy`, with the shared lifecyc
 The checked browser example in [`vanilla-browser/`](vanilla-browser/) runs against the gateway source
 over SSE. [Native editor](native-editor/README.md) adds conditional saves through the same proxy,
 with machinery protection and guarded native recovery reads, and a minimal page that edits one
-ConfigMap with them. Both native pages run in Chromium under `task e2e-browser`. The larger
-view/sharing comparison follows separately.
+ConfigMap with them. Both native pages run in Chromium under `task e2e-browser`, through watch
+resumption and expiry recovery.
+[Comparison](comparison/README.md) serves the same Widgets and Secrets through native access,
+`krm-full/v1` and `krm-spec/v1`, unshared and shared, with editing on every source, host counters and
+a measurement driver against the spike cluster; dated results are in
+[docs/facts](../docs/facts/comparison-2026-10-05.md).
 For gateway host integration patterns, use these small recipes:
 
 - [Same-origin cookie application](../docs/adopting.md#1-mount-the-stream-endpoint): fetch

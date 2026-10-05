@@ -19,8 +19,8 @@ Start with watch streams and authoritative resource views; add editing as an opt
 The [README](README.md) explains current capabilities and how to choose a native or gateway source.
 Current API examples must match this branch. Native viewing is LIST/WATCH on the shared
 connection lifecycle and resumes ordinary reconnects from a per-handle checkpoint, and native editing
-writes conditional merge patches back through the same proxy; streaming lists, pagination, editor
-cleanup and larger comparisons are separate. Save-progress evaluation remains a proposal until implemented.
+writes conditional merge patches back through the same proxy; the comparison example measures the
+sources side by side. Streaming lists, pagination and editor cleanup are separate. Save-progress evaluation remains a proposal until implemented.
 
 - Keep the core gateway free of `client-go`; Kubernetes integration belongs in `gateway/kube`.
 - Keep the browser client framework-free and free of runtime dependencies.
@@ -66,6 +66,7 @@ the rule it protects.
 | `task e2e-browser` | Native `EventSource`, unbundled ESM and the native viewer and editor pages in Chromium. |
 | `task cluster-facts` | Record observed Kubernetes behavior for the supported cluster version. |
 | `task test-real-api` | Compose the save path and native viewing and editing against a real API server: gateway or host proxy, host endpoint and browser store. |
+| `task compare-measure` | Measure native, full and spec sources, unshared and shared, under identical workloads against a real API server; `task compare-native-baseline BASELINE_REF=<sha>` compares the native connector with an earlier build. Results are evidence for the run, recorded in `docs/facts/`. |
 | `task test-cluster` | Exercise the Kubernetes backend against a real API server. |
 
 The cluster tasks need Docker and take longer; the fixture suites are the per-pull-request baseline.

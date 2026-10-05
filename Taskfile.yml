@@ -385,7 +385,7 @@ tasks:
     cmds:
       # .task/ is Task's checksum store: what makes a task say "up to date". Remove it when one is wrong.
       - rm -rf .task
-      - rm -rf {{.CLIENT_DIR}}/node_modules {{.CLIENT_DIR}}/dist examples/native-editor/dist
+      - rm -rf {{.CLIENT_DIR}}/node_modules {{.CLIENT_DIR}}/dist examples/native-editor/dist examples/comparison/dist
       - rm -rf examples/vanilla-browser/node_modules
       # Go's test cache is content-addressed and sound: a cached `ok` means those inputs really did
       # pass. Use `go test -count=1` to watch a suite run; `go clean -cache` buys nothing but minutes.
@@ -478,3 +478,58 @@ tasks:
       # -p 1: the shared-host example measures a CLUSTER-WIDE API-server watch gauge, which the
       # backend suite's own real watches corrupt if their packages run concurrently.
       - go test -tags e2e -v -count=1 -p 1 -timeout 10m ./...
+
+  # ------------------------------------------------------------- comparison --
+  # One host serves the same Widgets and Secrets through every source — native /k8s, krm-full/v1 and
+  # krm-spec/v1, unshared and shared — so a page and a driver can compare them under identical churn.
+  # Port 8110, so it never collides with `task demo` or a browser suite on 8100. See
+  # examples/comparison/README.md and the dated runs in docs/facts/comparison-*.md.
+  build-compare-page:
+    desc: "Build the library and compile the comparison page's controller, with the editors and recipe it reuses, into examples/comparison/dist."
+    deps: [build-client]
+    sources:
+      - examples/comparison/build.mjs
+      - examples/comparison/page.ts
+      - examples/native-editor/editor.ts
+      - examples/conditional-save/editor.ts
+      - examples/editor-recipes/keepLocal.ts
+    generates:
+      - examples/comparison/dist/page.js
+    status:
+      - test -f examples/comparison/dist/page.js
+    cmds:
+      # Types stripped, library import renamed to the published package; see build.mjs.
+      - node examples/comparison/build.mjs
+
+  compare:
+    desc: "Serve the comparison page against the spike cluster: native vs krm-full/v1 vs krm-spec/v1, with editing and counters."
+    deps: [cluster-up, build-compare-page]
+    dir: gateway/kube
+    env:
+      KUBECONFIG: '{{.KUBECONFIG_PATH}}'
+    cmds:
+      # The browser address is the TLS one: HTTP/2, so the page's six streams do not use up the six
+      # HTTP/1.1 connections a browser allows one origin. The certificate is self-signed at startup.
+      - echo "→ https://127.0.0.1:8111/   (also ?entry=bundle, ?variant=shared; plain http://127.0.0.1:8110/ is for drivers)"
+      # Foreground, so Ctrl-C reaches the host, which deletes its scratch namespace on the way out.
+      - go run ./examples/comparison/cmd/compare --addr 127.0.0.1:8110 {{.CLI_ARGS}}
+
+  compare-measure:
+    desc: "Measure every source under every workload against the spike cluster (CLI_ARGS go to measure.ts)."
+    # Not cached, and it must not be: it measures a cluster, not files.
+    deps: [cluster-up, build-client]
+    env:
+      KUBECONFIG: '{{.KUBECONFIG_PATH}}'
+    cmds:
+      - bash examples/comparison/measure.sh {{.CLI_ARGS}}
+
+  compare-native-baseline:
+    desc: "Native before/after: measure the native source with the library built at BASELINE_REF (default main), then with this tree's."
+    deps: [cluster-up, build-client]
+    vars:
+      # Name the commit BEFORE the change under test. Once main contains it, main is not a baseline.
+      BASELINE_REF: '{{.BASELINE_REF | default "main"}}'
+    env:
+      KUBECONFIG: '{{.KUBECONFIG_PATH}}'
+    cmds:
+      - bash examples/comparison/measure.sh --baseline-ref {{.BASELINE_REF}} {{.CLI_ARGS}}

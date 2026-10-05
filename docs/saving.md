@@ -161,7 +161,7 @@ and any receipt or Git workflow; connection state is not a save guarantee.
 | `draft-conflict` | Show local and current values at each conflicting field. | Offer explicit resolution: `revert` takes the server's value, the [keep-local recipe](../examples/editor-recipes/README.md#keep-the-local-value-in-a-conflict) keeps the person's. Keep the rest of the form visible. |
 | Connection `retrying` / `syncing` | “Reconnecting. Your unsaved changes are still here.” | Disable writes until live. |
 | Example editor outcome `recovering` | “Refreshing configuration. Your edits are still here.” | A usable base is not established; require an accepted guarded read before another write. This is not a connection status. |
-| `saved`, watch confirmation pending | “Saved to Kubernetes; waiting for live confirmation.” | Preserve later typing. Track any receipt separately from draft state. |
+| `saved`, watch confirmation pending | “Saved to Kubernetes; waiting for live confirmation.” | Preserve later typing. Track any receipt separately from draft state. Typing in the **same** field while its save is in flight makes the save's own echo a `draft-conflict` at that field: the merge cannot tell the echo from another writer's change. Keep-local and another Save resolve it. |
 | Session expiry or access denial | Explain sign-in or access outcome. | Handle identity-scoped recovery; do not retry terminal auth failures indefinitely or label them field conflicts. |
 | `unavailable`, deleted/recreated UID | “This configuration was removed. A replacement must be opened separately.” | Offer copy-out from a retained recovery copy; never apply the old draft to the replacement. |
 
