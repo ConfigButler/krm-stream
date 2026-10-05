@@ -107,6 +107,15 @@ interface Resource {
   conflicts: Map<string, Conflict>;
 }
 
+/** Machinery no person edits, under every policy and from every source: the field ownership the
+ * API server records, and the annotation `kubectl apply` diffs against. A gateway projection removes
+ * both and its write check, ValidateMergePatch, refuses them; a native object carries both, so here
+ * they are read-only exactly as a redacted value is. */
+const MACHINERY: Path[] = [
+  ["metadata", "managedFields"],
+  ["metadata", "annotations", "kubectl.kubernetes.io/last-applied-configuration"],
+];
+
 export class LiveResourceStore {
   readonly #policy: EditabilityPolicy;
   #revision = 0;
@@ -340,7 +349,11 @@ export class LiveResourceStore {
     const res = this.#must(id);
     if (this.isEditable(id, path)) return !deepEqual(get(res.server, path), get(res.draft, path));
     // A container (`[]`, `["metadata"]`) is dirty iff something editable underneath it is.
-    if (!this.#policy.containsEditable(res.server, path)) return false;
+    const regions = this.#regionsFor(
+      res.server,
+      res.redacted.map((r) => r.path),
+    );
+    if (!regions.container(path)) return false;
     return this.changes(id).some((c) => isPrefix(path, c.path));
   }
 
@@ -457,12 +470,19 @@ export class LiveResourceStore {
     return res;
   }
 
+  /** The policy, minus the protected paths: this object's redactions and the machinery. A path
+   * inside one is read-only. A path holding one cannot be replaced or removed whole, which would
+   * rewrite what it holds, so where the policy makes it editable it is merged key by key instead: a
+   * new Secret key beside withheld values, or one annotation beside the last-applied one. */
   #regionsFor(object: KRMObject, redacted: Path[]): Regions {
-    const insideRedacted = (path: Path) => redacted.some((r) => isPrefix(r, path));
-    const containsRedacted = (path: Path) => redacted.some((r) => isPrefix(path, r));
+    const protectedPaths = [...MACHINERY, ...redacted];
+    const inside = (path: Path) => protectedPaths.some((p) => isPrefix(p, path));
+    const holds = (path: Path) => protectedPaths.some((p) => isPrefix(path, p));
     return {
-      editable: (path) => !insideRedacted(path) && !containsRedacted(path) && this.#policy.isEditable(object, path),
-      container: (path) => !insideRedacted(path) && this.#policy.containsEditable(object, path),
+      editable: (path) => !inside(path) && !holds(path) && this.#policy.isEditable(object, path),
+      container: (path) =>
+        !inside(path) &&
+        (this.#policy.containsEditable(object, path) || (holds(path) && this.#policy.isEditable(object, path))),
       listMapKeys: (path) => this.#policy.listMapKeys?.(object, path),
     };
   }

@@ -4,8 +4,10 @@ The release after 0.7 has one browser connector and one name for each gateway se
 removed rather than kept as aliases, so the compiler or a failed import finds every call site. The
 editor store's methods (`setValue`, `captureSave`, `captureReconciliation`, `adoptSaved` and so on)
 are unchanged on this branch. Proposed editor removals in proposal 0009 are not migration requirements
-yet. The read-only native connector, `connectNativeWatch`, is a new addition rather than a migration
-step, and uses today's standalone state-input helper. Gateway pages keep `connectResourceStream`.
+yet, and the one edit-policy change is [below](#editor-store). The native connector,
+`connectNativeWatch`, and `nativeObjectURL` for native editing are new additions rather than
+migration steps, and use today's standalone state-input helper. Gateway pages keep
+`connectResourceStream`.
 For the overall direction, see [watching resources](why-a-gateway.md).
 
 ## Browser client
@@ -64,6 +66,19 @@ Three behaviors to account for:
 `applyStreamEvent` takes the callback's events, which carry no `seq` and are never errors. A host
 that feeds a store from its own transport passes the same shapes: `reset`, `added` or `modified`
 with `object`, `deleted` with `identity`, and `synced`.
+
+### Editor store
+
+`metadata.managedFields` and the `kubectl.kubernetes.io/last-applied-configuration` annotation are
+read-only under every policy, as they already were on the gateway's side through
+`ValidateMergePatch`. A map that holds one of them, or a redacted value, is now edited key by key:
+
+| 0.7 | Now |
+|---|---|
+| `setValue`/`removeKey` on `["metadata", "annotations"]` as a whole | refused as read-only; set or remove each annotation key instead |
+| `addKey`/`setValue` for the last-applied annotation, or anything under `managedFields` with a policy that made it editable | refused as read-only |
+| `isEditable(uid, ["metadata", "annotations"])` | `false`; `isDirty` on it still reports edits underneath |
+| A new key in a Secret's `data` beside redacted values was accepted but never reached `changes()` or `patch()` | it is an ordinary edit in the patch and survives later events |
 
 ## Go gateway
 
