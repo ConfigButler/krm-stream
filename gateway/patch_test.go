@@ -54,6 +54,45 @@ func TestValidateMergePatchHonorsProjectionAndPatchShape(t *testing.T) {
 	}
 }
 
+func TestValidateNativeMergePatchRequiresPreconditionsAndProtectsMachinery(t *testing.T) {
+	const conditional = `"uid":"u1","resourceVersion":"7"`
+	for _, patch := range []string{
+		`{"metadata":{` + conditional + `},"data":{"mode":"b"}}`,
+		`{"metadata":{` + conditional + `,"annotations":{"owner":"team-b","gone":null}},"spec":{"replicas":2}}`,
+		`{"metadata":{` + conditional + `,"labels":null}}`,
+	} {
+		if err := ValidateNativeMergePatch([]byte(patch)); err != nil {
+			t.Errorf("patch %s rejected: %v", patch, err)
+		}
+	}
+
+	for _, patch := range []string{
+		`{"data":{"mode":"b"}}`,
+		`{"metadata":{"uid":"u1"},"data":{"mode":"b"}}`,
+		`{"metadata":{"resourceVersion":"7"},"data":{"mode":"b"}}`,
+		`{"metadata":{"uid":"","resourceVersion":"7"}}`,
+		`{"metadata":{"uid":"u1","resourceVersion":7}}`,
+		`{"metadata":null}`,
+		`null`, `[]`, `{`,
+	} {
+		if err := ValidateNativeMergePatch([]byte(patch)); err == nil {
+			t.Errorf("unconditional or malformed patch %s was accepted", patch)
+		}
+	}
+
+	for _, patch := range []string{
+		`{"metadata":{` + conditional + `,"managedFields":[]}}`,
+		`{"metadata":{` + conditional + `,"managedFields":null}}`,
+		`{"metadata":{` + conditional + `,"annotations":{"kubectl.kubernetes.io/last-applied-configuration":"{}"}}}`,
+		`{"metadata":{` + conditional + `,"annotations":null}}`,
+	} {
+		var violation *PatchViolation
+		if err := ValidateNativeMergePatch([]byte(patch)); !errors.As(err, &violation) {
+			t.Errorf("patch %s: want PatchViolation, got %v", patch, err)
+		}
+	}
+}
+
 // Project is exported because the SAVE path needs it, and until it was, a host answering a save with
 // the written object had no supported way to make that object safe. The obvious thing — hand back
 // what the Kubernetes client returned — leaks exactly what the stream withholds, through the one
