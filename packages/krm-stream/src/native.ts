@@ -3,11 +3,24 @@
 // objects are exactly what the proxy returns, and the host owns credentials, routing and
 // authorization.
 //
-// Every connection starts with a fresh, complete LIST, so a reconnect needs no checkpoint: the
-// snapshot repairs whatever the previous watch missed — deletes, selector exits, a UID replaced
-// under the same name — and the store prunes only once it completes. Resumable watches, streaming
-// lists and pagination are later work with their own recovery rules; this file deliberately
-// implements none of them.
+// A handle's first connection, and every connection after its checkpoint is discarded, starts with
+// a fresh, complete LIST: the snapshot repairs whatever a previous watch missed — deletes, selector
+// exits, a UID replaced under the same name — and the store prunes only once it completes. Once that
+// snapshot is applied and its WATCH accepted, the handle keeps a CHECKPOINT: the resourceVersion of
+// the last event its consumer applied, or of the last bookmark. An ordinary reconnect — EOF, a
+// network failure, a retryable refusal — resumes the WATCH from it instead of listing again. The
+// consumer already holds everything up to the checkpoint and the resumed watch delivers everything
+// after it, in order: the same invariant any live watch with events in flight relies on. So a
+// resumed watch starts no snapshot — no reset, no synced — and the store keeps its membership,
+// drafts and conflicts. A write is protected against replayed staleness by its resourceVersion
+// precondition, exactly as on a live watch.
+//
+// Expiry (410), malformed input and unclassifiable errors discard the checkpoint, and the next
+// connection lists again. The checkpoint belongs to one connectNativeWatch call: it is never
+// exported, accepted from a caller or shared between handles, so it is bound to that handle's URL,
+// selectors and credentials. ResourceVersions are opaque: the checkpoint is replaced in stream
+// order, never compared, parsed or ordered. Streaming lists and pagination are later work with their own
+// recovery rules; this file deliberately implements neither.
 //
 // lifecycle.ts owns retries, state and cancellation, shared with the gateway connector. This file
 // owns framing and its classification, and imports nothing from the SSE side: there is no `seq`, no
@@ -24,28 +37,47 @@ import {
 import type { ErrorCode, Identity, KRMObject } from "./types.ts";
 
 /** Query parameters the connector sets itself, refused in a caller's collection URL. */
-const reserved = ["watch", "resourceVersion", "resourceVersionMatch", "limit", "continue", "sendInitialEvents"];
+const reserved = [
+  "watch",
+  "resourceVersion",
+  "resourceVersionMatch",
+  "limit",
+  "continue",
+  "sendInitialEvents",
+  "allowWatchBookmarks",
+];
 
 /** Watch a native Kubernetes collection through a host proxy, delivering each state event to
  * `consume`. `collectionURL` is a collection path the proxy serves, such as one
  * nativeCollectionURL builds; its selectors apply to both the LIST and the WATCH.
  *
- * Each connection LISTs the complete collection and delivers `reset`, an `added` per member, and —
- * once the WATCH from the collection's resourceVersion is accepted — `synced`, after which the state
- * is `live` and watch events follow as `added`, `modified` and `deleted`. Bookmarks change nothing.
- * Every reconnect LISTs again, so a store keeps its previous state until the next snapshot completes
- * and then prunes what it no longer contains.
+ * The first connection LISTs the complete collection and delivers `reset`, an `added` per member,
+ * and — once the WATCH from the collection's resourceVersion is accepted — `synced`, after which the
+ * state is `live` and watch events follow as `added`, `modified` and `deleted`. Every WATCH asks for
+ * bookmarks; they are never delivered and change no object.
  *
- * HTTP or in-stream 410 (history expired), 408, 429, 5xx, network failures, EOF and malformed or
- * truncated frames consume the bounded retry budget, honoring `Retry-After` and a Status's
- * `retryAfterSeconds`. HTTP or in-stream 401, 403 and every other 4xx are terminal, as is a LIST
- * response that is only one page of the collection. Host exceptions, `close()` and `signal` behave
- * exactly as for connectResourceStream.
+ * After a complete snapshot the handle keeps a checkpoint: the resourceVersion of the last event the
+ * consumer applied, or of the last bookmark. An EOF, a network failure, a truncated final frame or a
+ * retryable refusal (408, 429 or 5xx, as an HTTP status or in the stream) RESUMES the WATCH from that
+ * checkpoint: no LIST, no `reset` and no `synced`, and the state goes `connecting` → `live` once the
+ * resumed watch is accepted. The consumer keeps everything it holds, drafts and conflicts included,
+ * and receives what changed in the meantime — deletes and selector exits as `deleted`, a same-name
+ * replacement as the old UID's `deleted` and the new UID's `added`.
  *
- * Objects arrive as the proxy returns them, Secret values and machinery fields included: native
- * access provides no projection, redaction, suppression or watch sharing. A source that refused a
- * projected stream must never be replaced with this one, and separate sources, scopes and identities
- * need separate stores. */
+ * HTTP or in-stream 410 (history expired) is reported as RESYNC_REQUIRED and discards the
+ * checkpoint, as do malformed frames and an in-stream error without a code: the next connection
+ * LISTs again, and a store keeps its previous state until that snapshot completes and then prunes
+ * what it no longer contains. An initialization interrupted before `synced` leaves no checkpoint
+ * either. Every reconnect consumes the bounded retry budget, honoring `Retry-After` and a Status's
+ * `retryAfterSeconds`. HTTP or in-stream 401, 403 and every other 4xx are terminal, on a resumed
+ * watch too, as is a LIST response that is only one page of the collection. Host exceptions,
+ * `close()` and `signal` behave exactly as for connectResourceStream.
+ *
+ * The checkpoint is private to the handle, so it is bound to this URL and these options: it is
+ * never exposed, accepted or shared. Objects arrive as the proxy returns them, Secret values and
+ * machinery fields included: native access provides no projection, redaction, suppression or watch
+ * sharing. A source that refused a projected stream must never be replaced with this one, and
+ * separate sources, scopes and identities need separate stores. */
 export function connectNativeWatch(
   collectionURL: string,
   consume: ResourceEventConsumer,
@@ -56,7 +88,9 @@ export function connectNativeWatch(
   for (const name of reserved) {
     if (query.has(name)) throw new Error(`krm-stream: the collection URL must not set ${name}; the connector does`);
   }
-  return runConnection((hooks, signal) => watchOnce(url, hooks, signal, opts), consume, opts);
+  // This handle's own, for its whole life: no other handle, URL or identity ever reads it.
+  const position: Position = { checkpoint: undefined, type: undefined };
+  return runConnection((hooks, signal) => watchOnce(url, hooks, signal, opts, position), consume, opts);
 }
 
 /** The apiVersion and kind a typed collection's items have: `ConfigMapList` lists `ConfigMap`s. */
@@ -65,17 +99,39 @@ interface ItemType {
   kind: string;
 }
 
-/** A frame or a response this connector cannot use. Reported, never skipped: the connection ends
- * and the next one re-lists. */
+/** What one handle carries from one connection to the next. Only that handle's transport reads or
+ * writes it. */
+interface Position {
+  /** Where the next WATCH resumes: the resourceVersion of the last event the consumer applied, or of
+   * the last bookmark, after a complete snapshot. Undefined when the next connection must LIST.
+   * Opaque: replaced in stream order, never compared, parsed or ordered. */
+  checkpoint: string | undefined;
+  /** The item type the last complete LIST named, for watch objects without type metadata: a resumed
+   * watch has no collection of its own to read it from. */
+  type: ItemType | undefined;
+}
+
+/** A frame or a response this connector cannot use. Reported, never skipped: the connection ends,
+ * the checkpoint is discarded, and the next connection re-lists. */
 class Malformed extends Error {}
 
-/** One connection: LIST, then WATCH until it ends. Resolves in every case, after the readers and
- * listeners are released. */
+/** The watch ended inside a frame. Unlike malformed input this says nothing about what was
+ * delivered: the partial frame was never applied, so the checkpoint still names the last event that
+ * was, and the next connection resumes from it. */
+class Truncated extends Error {}
+
+/** Whether a refusal with this HTTP status, on the response or in the stream, leaves the checkpoint
+ * usable: a transient condition of the server, not of the position. */
+const resumable = (status: number) => status === 408 || status === 429 || status >= 500;
+
+/** One connection: LIST, then WATCH until it ends — or, with a checkpoint, only the WATCH from it.
+ * Resolves in every case, after the readers and listeners are released. */
 async function watchOnce(
   url: string,
   hooks: TransportHooks,
   signal: AbortSignal,
   opts: ResourceStreamOptions,
+  position: Position,
 ): Promise<void> {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -85,60 +141,88 @@ async function watchOnce(
   // Called detached, so a consumer never sees this hooks object as `this`.
   const { consume } = hooks;
 
-  /** Report a refused response. The connection ends either way. */
+  /** Report a refused response. The connection ends either way; only a transient refusal keeps the
+   * checkpoint, so an expired or refused position is never asked for again. */
   const refused = async (phase: string, res: Response) => {
+    if (!resumable(res.status)) position.checkpoint = undefined;
     const { code, terminal } = classify(res.status);
     const message = (await statusMessage(res, controller.signal)) ?? `native ${phase}: HTTP ${res.status}`;
     if (aborted()) return; // closed while reading the refusal: report nothing
     hooks.error(code, message, terminal, retryAfter(res.headers.get("Retry-After")));
   };
   const malformed = (phase: string, error: Malformed) => {
+    // Something was delivered that cannot be trusted, or something that should have been was not:
+    // the position is unknown, and only a fresh snapshot repairs it.
+    position.checkpoint = undefined;
     if (!aborted()) hooks.error("INTERNAL", `native ${phase}: ${error.message}`, false);
+  };
+  /** The consumer applied an event, or the stream passed a bookmark: the next connection resumes
+   * after it. An event without a usable resourceVersion leaves no position to resume from. Nothing
+   * moves once the stream is closing, which is also how a consumer exception leaves it unmoved. */
+  const advance = (resourceVersion: unknown) => {
+    if (aborted()) return;
+    position.checkpoint = typeof resourceVersion === "string" && resourceVersion !== "" ? resourceVersion : undefined;
   };
 
   try {
     if (aborted()) return;
-    const listed = await request(url, "application/json", controller.signal, opts);
-    if (!listed.ok || !listed.body) return await refused("list", listed);
-    if (aborted()) return void (await listed.body.cancel().catch(() => {}));
-    hooks.opened();
+    // Read once: this connection resumes or re-lists, never both.
+    const resumeFrom = position.checkpoint;
+    let from: string;
+    if (resumeFrom === undefined) {
+      const listed = await request(url, "application/json", controller.signal, opts);
+      if (!listed.ok || !listed.body) return await refused("list", listed);
+      if (aborted()) return void (await listed.body.cancel().catch(() => {}));
+      hooks.opened();
 
-    let collection: Collection;
-    try {
-      const text = await readText(listed.body, controller.signal);
-      if (text === undefined) return;
-      collection = readCollection(text);
-    } catch (error) {
-      if (error instanceof Unpaginated) {
-        if (!aborted()) hooks.error("INTERNAL", error.message, true);
-        return;
+      let collection: Collection;
+      try {
+        const text = await readText(listed.body, controller.signal);
+        if (text === undefined) return;
+        collection = readCollection(text);
+      } catch (error) {
+        if (error instanceof Unpaginated) {
+          if (!aborted()) hooks.error("INTERNAL", error.message, true);
+          return;
+        }
+        if (error instanceof Malformed) return malformed("list", error);
+        throw error; // the network failed while the body arrived
       }
-      if (error instanceof Malformed) return malformed("list", error);
-      throw error; // the network failed while the body arrived
-    }
+      position.type = collection.type;
+      from = collection.resourceVersion;
 
-    // Membership is established only by a COMPLETE collection, so nothing above this line delivers.
-    hooks.reset();
-    if (aborted()) return;
-    consume({ type: "reset" });
-    for (const object of collection.items) {
+      // Membership is established only by a COMPLETE collection, so nothing above this line delivers.
+      hooks.reset();
       if (aborted()) return;
-      consume({ type: "added", object });
+      consume({ type: "reset" });
+      for (const object of collection.items) {
+        if (aborted()) return;
+        consume({ type: "added", object });
+      }
+      if (aborted()) return;
+    } else {
+      from = resumeFrom;
     }
-    if (aborted()) return;
 
+    // Bookmarks keep a quiet collection's checkpoint recent enough to resume from.
     const watched = await request(
-      `${url}${url.includes("?") ? "&" : "?"}watch=1&resourceVersion=${encodeURIComponent(collection.resourceVersion)}`,
+      `${url}${url.includes("?") ? "&" : "?"}watch=1&allowWatchBookmarks=true&resourceVersion=${encodeURIComponent(from)}`,
       "application/json",
       controller.signal,
       opts,
     );
     if (!watched.ok || !watched.body) return await refused("watch", watched);
     if (aborted()) return void (await watched.body.cancel().catch(() => {}));
-    // The snapshot is applied and the watch is accepted: only now is the state complete and live.
-    consume({ type: "synced" });
-    // A consumer that closed the stream — or threw — while applying `synced` gets no later `live`.
-    if (aborted()) return void (await watched.body.cancel().catch(() => {}));
+    if (resumeFrom === undefined) {
+      // The snapshot is applied and the watch is accepted: only now is the state complete and live.
+      consume({ type: "synced" });
+      // A consumer that closed the stream — or threw — while applying `synced` gets no later `live`,
+      // and an initialization that never completed leaves no checkpoint: the next connection lists.
+      if (aborted()) return void (await watched.body.cancel().catch(() => {}));
+      position.checkpoint = from;
+    }
+    // A resumed watch starts no snapshot: the consumer already holds everything up to the checkpoint
+    // and this watch delivers everything after it, in order. Its acceptance alone makes it live.
     hooks.synced();
 
     const reader = watched.body.getReader();
@@ -157,6 +241,10 @@ async function watchOnce(
           if (done) return decoder.end();
           lines = decoder.push(value);
         } catch (error) {
+          if (error instanceof Truncated) {
+            // The checkpoint stands: it names the last event applied, and the partial one was not.
+            return void hooks.error("INTERNAL", `native watch: ${error.message}`, false);
+          }
           if (!(error instanceof Malformed)) throw error;
           return malformed("watch", error);
         }
@@ -165,7 +253,7 @@ async function watchOnce(
           if (aborted()) return;
           let more: boolean;
           try {
-            more = deliver(line, collection.type, hooks);
+            more = deliver(line, position.type, hooks, advance, position);
           } catch (error) {
             if (!(error instanceof Malformed)) throw error;
             return malformed("watch", error);
@@ -178,7 +266,8 @@ async function watchOnce(
       await reader.cancel().catch(() => {});
     }
   } catch {
-    // The network failed. This connection is over, and the lifecycle decides about the next. Host
+    // The network failed. This connection is over, and the lifecycle decides about the next. The
+    // checkpoint still names the last event applied, so the next connection resumes from it. Host
     // callbacks never land here: the lifecycle catches their exceptions itself.
   } finally {
     controller.abort();
@@ -186,8 +275,15 @@ async function watchOnce(
   }
 }
 
-/** Apply one watch frame; false when the connection must end. Throws Malformed. */
-function deliver(line: string, type: ItemType | undefined, hooks: TransportHooks): boolean {
+/** Apply one watch frame, then advance the checkpoint past it; false when the connection must end.
+ * Throws Malformed. */
+function deliver(
+  line: string,
+  type: ItemType | undefined,
+  hooks: TransportHooks,
+  advance: (resourceVersion: unknown) => void,
+  position: Position,
+): boolean {
   let frame: unknown;
   try {
     frame = JSON.parse(line);
@@ -200,22 +296,28 @@ function deliver(line: string, type: ItemType | undefined, hooks: TransportHooks
   const object = frame.object;
   switch (frame.type) {
     case "ADDED":
-      hooks.consume({ type: "added", object: resource(object, type, "watch") });
+    case "MODIFIED": {
+      const applied = resource(object, type, "watch");
+      hooks.consume({ type: frame.type === "ADDED" ? "added" : "modified", object: applied });
+      advance(applied.metadata.resourceVersion);
       return true;
-    case "MODIFIED":
-      hooks.consume({ type: "modified", object: resource(object, type, "watch") });
+    }
+    case "DELETED": {
+      const removed = resource(object, type, "watch");
+      hooks.consume({ type: "deleted", identity: identity(removed) });
+      advance(removed.metadata.resourceVersion);
       return true;
-    case "DELETED":
-      hooks.consume({ type: "deleted", identity: identity(resource(object, type, "watch")) });
-      return true;
+    }
     case "BOOKMARK":
       // A collection checkpoint, not an object version: it changes neither membership nor any
-      // object. Every reconnect re-lists, so there is nothing to resume from it either.
+      // object, and the consumer never sees it. It only moves where the next watch resumes.
+      advance(isRecord(object.metadata) ? object.metadata.resourceVersion : undefined);
       return true;
     case "ERROR": {
-      const { code, terminal, message, retryAfterMs } = statusError(object);
+      const { code, terminal, message, retryAfterMs, keepsCheckpoint } = statusError(object);
+      if (!keepsCheckpoint) position.checkpoint = undefined;
       hooks.error(code, message, terminal, retryAfterMs);
-      // The API server ends the watch after an error; either way, the next connection re-lists.
+      // The API server ends the watch after an error. A transient one resumes; any other re-lists.
       return false;
     }
     default:
@@ -229,11 +331,13 @@ function classify(status: number): { code: ErrorCode; terminal: boolean } {
   return status === 410 ? { code: "RESYNC_REQUIRED", terminal: false } : refusal(status);
 }
 
-/** A watch ERROR event's Kubernetes Status, classified like the HTTP status it carries. */
+/** A watch ERROR event's Kubernetes Status, classified like the HTTP status it carries. Only a coded
+ * transient error keeps the checkpoint: an expiry names the position itself as the problem, and an
+ * error without a code cannot be told apart from one, so it re-lists. */
 function statusError(status: Record<string, unknown>) {
   const reason = typeof status.reason === "string" ? status.reason : undefined;
-  const code =
-    typeof status.code === "number" ? status.code : reason === "Expired" || reason === "Gone" ? 410 : undefined;
+  const expired = reason === "Expired" || reason === "Gone";
+  const code = typeof status.code === "number" ? status.code : expired ? 410 : undefined;
   const { code: errorCode, terminal } =
     code === undefined ? { code: "INTERNAL" as const, terminal: false } : classify(code);
   const text = typeof status.message === "string" ? status.message : "";
@@ -244,6 +348,7 @@ function statusError(status: Record<string, unknown>) {
     terminal,
     message: text !== "" ? text : `native watch: error ${code ?? reason ?? "without a status"}`,
     retryAfterMs: typeof seconds === "number" && seconds >= 0 ? seconds * 1000 : undefined,
+    keepsCheckpoint: code !== undefined && !expired && resumable(code),
   };
 }
 
@@ -333,7 +438,8 @@ function identity(object: KRMObject): Identity {
 
 /** Incremental decoder for native watch JSON: one event per line. Bytes arrive in arbitrary chunks,
  * so a frame — or a multi-byte character — can be split anywhere; this buffers until a line is
- * complete. Throws Malformed on invalid UTF-8 and when the stream ends mid-frame. */
+ * complete. Throws Malformed on invalid UTF-8, and Truncated when the stream ends mid-frame — the two
+ * are kept apart because only malformed input casts doubt on what was already delivered. */
 export class WatchDecoder {
   #utf8 = new TextDecoder("utf-8", { fatal: true });
   #buffer = "";
@@ -352,10 +458,16 @@ export class WatchDecoder {
     return lines;
   }
 
-  /** The stream ended. Anything still buffered is a truncated frame. */
+  /** The stream ended. Anything still buffered — a character cut off included — is a truncated frame:
+   * every complete line has already been returned, so the cut can only be inside the last one. */
   end(): void {
-    this.#buffer += decode(this.#utf8);
-    if (this.#buffer.trim() !== "") throw new Malformed("the watch ended inside a frame");
+    let rest: string;
+    try {
+      rest = this.#utf8.decode();
+    } catch {
+      throw new Truncated("the watch ended inside a UTF-8 character");
+    }
+    if ((this.#buffer + rest).trim() !== "") throw new Truncated("the watch ended inside a frame");
   }
 }
 

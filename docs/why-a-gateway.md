@@ -62,11 +62,12 @@ The fetch connector exposes `connecting`, `syncing`, `live`, `retrying`, `closed
 `exhausted`. Apply state events synchronously before rendering completion. Retryable failures recover
 within the connector's bounded budget. For the gateway SSE connector, every HTTP 4xx except 408/429,
 terminal stream errors and a mismatched protocol header stop the connection. The native connector
-classifies HTTP and in-stream 410 (expired watch history) as recoverable by a fresh LIST instead.
+classifies HTTP and in-stream 410 (expired watch history) as recoverable by a fresh LIST instead,
+and resumes its WATCH from its own checkpoint after an ordinary interruption.
 Dispose subscriptions and close the handle when their owner leaves. See the
 [client lifecycle reference](../packages/krm-stream/README.md#connections).
 
-A new browser connection receives a fresh snapshot. SSE sequence numbers and object versions are not
+A new gateway connection receives a fresh snapshot. SSE sequence numbers and object versions are not
 browser resume tokens. Proposed gateway upstream continuation can reduce resnapshots without changing
 that browser contract; see [proposal 0006](proposals/0006-stream-and-save-implementation-plan.md#4-measured-upstream-continuation).
 
@@ -96,11 +97,15 @@ both can carry errors. Both connectors handle refusal, expiry, cancellation and 
 through one shared lifecycle; each classifies its own framing and HTTP responses. Browser `EventSource` is a different client mechanism with header/retry limitations.
 
 The native connector reads with an ordinary LIST, then a WATCH from the collection's
-resourceVersion, with a fresh LIST on every reconnect. It uses the shared lifecycle and
-`LiveResourceStore`, and is `live` only once the snapshot is applied and the WATCH is accepted. HTTP/in-stream 410 recovers within the bounded policy; terminal auth refusal never selects
-another source. A paginated LIST response is refused rather than marked complete.
-[Native editing](saving.md#native-editing-through-a-host-proxy) writes conditional merge patches back
-through the same proxy. Resume, streaming lists and pagination follow separately.
+resourceVersion. It uses the shared lifecycle and `LiveResourceStore`, and is `live` only once the
+snapshot is applied and the WATCH is accepted. After that complete snapshot, an EOF, a network
+failure or a transient refusal resumes the WATCH from the handle's checkpoint — the last event the
+store applied, or the last bookmark — without a LIST or a new snapshot, so the store keeps its
+members, drafts and conflicts and receives the missed changes as events. HTTP/in-stream 410
+discards the checkpoint and recovers with a fresh LIST within the bounded policy; terminal auth
+refusal never selects another source. A paginated LIST response is refused rather than marked
+complete. [Native editing](saving.md#native-editing-through-a-host-proxy) writes conditional merge
+patches back through the same proxy. Streaming lists and pagination follow separately.
 
 See the [native usage snippet](../README.md#watch-native-resources-through-a-host-proxy), the
 [client reference](../packages/krm-stream/README.md#native-connections) and the

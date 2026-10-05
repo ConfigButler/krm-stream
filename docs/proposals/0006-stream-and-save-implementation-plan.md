@@ -2,7 +2,8 @@
 
 **Status: active delivery plan, updated 2026-10-05.** This is the single inventory of completed work,
 open work and ordering. The implementation includes connector separation, Go API cleanup,
-real-API save-composition tests, the native viewer and native editing with a browser page. Detailed
+real-API save-composition tests, the native viewer, native editing with a browser page and native
+watch resumption. Detailed
 contracts stay in the linked proposals and guides rather than becoming another roadmap.
 
 Start with [watching resources](../why-a-gateway.md); add the [editor](../client-state-model.md) only
@@ -29,8 +30,9 @@ remain separate delivery steps.
 | Optional editor and safe-save baseline | Draft reconciliation, explicit conflicts, atomic intent capture and guarded projected reads; recovery remains review plus another deliberate Save | [Editor model](../client-state-model.md), [saving](../saving.md) |
 | Editor integration and recovery recipes | Tested deletion recovery, keep-local resolution and Vue subscription ownership | [Recipes](../../examples/editor-recipes/README.md), [Vue](../../examples/vue/README.md) |
 | Real-API save composition | Cases for suppressed churn, guarded-read overlap, structured errors and same-name UID replacement | [Completed baseline](#completed-baseline) |
-| Native viewer (slice 1) | `connectNativeWatch` and `nativeCollectionURL`: unpaginated LIST, WATCH from the collection RV, fresh LIST on reconnect, native 410 recovery and terminal refusals on a lifecycle shared with the gateway connector; fake-fetch, Chromium and real-API tests; minimal example | [Request](../field-reports/third-our-identity.md#slice-1-a-native-viewer), [example](../../examples/native-viewer/README.md), [client](../../packages/krm-stream/README.md#native-connections) |
+| Native viewer (slice 1) | `connectNativeWatch` and `nativeCollectionURL`: unpaginated LIST, WATCH from the collection RV, fresh LIST on reconnect (superseded by resumption below), native 410 recovery and terminal refusals on a lifecycle shared with the gateway connector; fake-fetch, Chromium and real-API tests; minimal example | [Request](../field-reports/third-our-identity.md#slice-1-a-native-viewer), [example](../../examples/native-viewer/README.md), [client](../../packages/krm-stream/README.md#native-connections) |
 | Native editing (slice 2) | Machinery (`managedFields`, last-applied annotation) read-only in the store under every policy; maps holding a protected path merged key by key; `nativeObjectURL`; `gateway.ValidateNativeMergePatch` for host proxies; a native conditional editor with guarded native recovery reads; fake-fetch and real-API tests; a minimal one-ConfigMap page accepted in Chromium on both entry points | [Request](../field-reports/third-our-identity.md#slice-2-native-editing), [example](../../examples/native-editor/README.md), [saving](../saving.md#native-editing-through-a-host-proxy) |
+| Native watch resumption | A per-handle checkpoint advanced only after a consumed event or bookmark; ordinary reconnects resume the WATCH without LIST, reset or synced; 410, malformed input and unclassifiable errors discard it for a fresh snapshot; fake-fetch, Chromium (both entry points) and real-API resume/expiry tests | [Request](../field-reports/third-our-identity.md#native-watch-resumption), [client](../../packages/krm-stream/README.md#native-connections) |
 | Watch-first documentation | README, watch/edit/save guides, native-fetch request and compact decision records; duplicate/superseded guides removed | [README](../../README.md), [current request](../field-reports/third-our-identity.md) |
 
 ## Open work and delivery order
@@ -42,7 +44,7 @@ before starting a later one. Deliver separately reviewable changes and use the p
 |---|---|---|
 | 1 | Native viewer — **completed** | See [completed work](#completed-work); acceptance evidence is recorded in the [request](../field-reports/third-our-identity.md#acceptance-for-slice-1). |
 | 2 | Native editing — **completed** | See [completed work](#completed-work); acceptance evidence, browser acceptance included, is recorded in the [request](../field-reports/third-our-identity.md#acceptance-for-slice-2). No editor method changed, so proposal 0009's cleanup is unaffected. |
-| 3 | Native reconnect efficiency | After the viewer; evaluate resumable watches, streaming-list initialization and pagination with explicit membership/checkpoint tests. Do not claim these efficiencies for slice 1. |
+| 3 | Native reconnect efficiency — **resumption completed** | See [completed work](#completed-work). Streaming-list initialization and pagination are evaluated [below](#3-native-streaming-lists-and-pagination) and remain open; implement them only with their own membership, checkpoint and recovery tests. |
 | 4 | Gateway upstream continuation | Independent track with a design below; review reopen/credential bounds, record a baseline, implement and measure. No dependency on native transport. |
 | 5 | Save progress during suppressed churn | Independent evaluation using existing real-API fixtures; bounded submitted-intent recovery first, optional version delivery second. Implementation depends on measured benefit and reviewed scope. |
 | 6 | Comparative frontend and measurements | Follow working native viewing and editing. Compare native/full/spec and shared/unshared workloads; the larger project is outside slice 1. |
@@ -53,11 +55,11 @@ before starting a later one. Deliver separately reviewable changes and use the p
 
 The native viewer and native editing are in place: native frame parsing stays separate from SSE,
 both connectors share the lifecycle and HTTP helpers, and native writes go back through the host
-proxy as conditional merge patches. The connector re-lists on every reconnect and refuses paginated
-responses; it claims no resume efficiency. Choose the next change from order 3 or from the
-independent tracks; none of them waits for another.
+proxy as conditional merge patches. Ordinary reconnects resume the WATCH from a per-handle
+checkpoint; expiry and malformed input fall back to a fresh snapshot. The connector still requires an
+unpaginated LIST. Choose the next change from the independent tracks; none of them waits for another.
 
-Native reconnect efficiency (order 3) needs its own membership and checkpoint tests. Keep the current
+Streaming lists and pagination (order 3) need their own membership and checkpoint tests. Keep the current
 standalone state-input helper; proposed editor removals remain in
 [proposal 0009](0009-stream-and-editor-separation.md#proposed-editor-cleanup), with brief API change notes
 when implemented. Gateway continuation and save measurements proceed independently. Retain the existing
@@ -86,6 +88,30 @@ and a test-only preflight/PATCH race barrier. They establish 409 rejection, guar
 fresh deliberate save after churn stops; they do not establish usable save progress during sustained
 churn. `task test-real-api` runs these cases. Record actual runs, server versions, skips and final
 commit separately from fake-client and general CI results.
+
+## 3. Native streaming lists and pagination
+
+**Status: evaluated, not implemented.** Resumption removes the LIST from ordinary reconnects; these
+two would reduce the cost of the snapshots that remain (first connection, expiry, malformed input).
+
+**Streaming-list initialization** (`sendInitialEvents=true`, `resourceVersionMatch=NotOlderThan`)
+replaces LIST + WATCH with one request and avoids buffering the collection into one JSON body, which
+helps memory and time-to-first-row for large collections. `reset` precedes the first synthetic ADDED;
+the only boundary is the BOOKMARK annotated `k8s.io/initial-events-end: "true"` (F1), and `synced`,
+pruning and arming the checkpoint (to that bookmark's resourceVersion) happen there and nowhere else.
+Anything before it, a 410 included, leaves no checkpoint and prunes nothing, and synthetic ADDEDs must
+not advance a resumable checkpoint. Aggregated APIs refuse the request (F6), so a handle needs a
+classified, non-terminal fallback to LIST-then-WATCH. Tests: boundary gating, a partial initial
+stream, a missing end bookmark, fallback classification, and the real API on both kube-apiserver and
+the aggregated API.
+
+**Pagination** (`limit`/`continue`) bounds each response for very large collections. `reset` precedes
+the first page, every page's items count as membership, nothing is pruned before the last page, and
+`synced` and the checkpoint arm only after the final page and an accepted WATCH from the first page's
+resourceVersion. An expired continue token (410 mid-list) abandons the whole cycle without pruning
+and restarts from page one; duplicate UIDs across pages are malformed; no WATCH opens before the last
+page. Tests: abort between pages, 410 on page N, a terminal error on a later page, and the store
+keeping its previous membership throughout.
 
 ## 4. Measured upstream continuation
 

@@ -42,7 +42,7 @@ function gate() {
   return { opened, open };
 }
 
-test("the native viewer lists, goes live once the watch is accepted, re-lists and disconnects", async ({
+test("the native viewer lists, goes live on acceptance, resumes after EOF, re-lists after expiry and disconnects", async ({
   page,
   entry,
 }) => {
@@ -53,8 +53,38 @@ test("the native viewer lists, goes live once the watch is accepted, re-lists an
   const a1 = item("a", "uid-a", "1", "one");
   const a2 = item("a", "uid-a", "11", "two");
   const b = item("b", "uid-b", "1", "one");
+  const bDeleted = item("b", "uid-b", "21", "one");
   const c = item("c", "uid-c", "12", "new");
-  const watches = [gate(), gate()];
+  const bookmark = {
+    type: "BOOKMARK",
+    object: { kind: "ConfigMap", apiVersion: "v1", metadata: { resourceVersion: "20" } },
+  };
+  const expired = {
+    type: "ERROR",
+    object: {
+      kind: "Status",
+      apiVersion: "v1",
+      status: "Failure",
+      code: 410,
+      reason: "Expired",
+      message: "too old resource version: 20 (25)",
+    },
+  };
+  // Each WATCH the page sends: the resourceVersion it must ask for, and what it is answered once
+  // its gate opens. A fulfilled body ends, so every answered watch is followed by EOF.
+  const script = [
+    // The snapshot's watch: two changes and a bookmark, then EOF. The page resumes from the bookmark.
+    {
+      from: "10",
+      gate: gate(),
+      body: frames({ type: "MODIFIED", object: typed(a2) }, { type: "ADDED", object: typed(c) }, bookmark),
+    },
+    // The resumed watch replays b's deletion, then the history expires.
+    { from: "20", gate: gate(), body: frames({ type: "DELETED", object: typed(bDeleted) }, expired) },
+    // The replacement snapshot's watch, then a resume from its list version that is never answered.
+    { from: "30", gate: gate(), body: "" },
+    { from: "30", gate: undefined, body: "" },
+  ];
   let lists = 0;
   let watchCount = 0;
   await page.route("**/k8s/**", async (route) => {
@@ -63,31 +93,25 @@ test("the native viewer lists, goes live once the watch is accepted, re-lists an
     expect(url.searchParams.get("labelSelector"), "LIST and WATCH share the selectors").toBe("tier=web");
     if (url.searchParams.get("watch") !== "1") {
       lists++;
-      // The first snapshot holds a and b. Every later one holds only a: c is deleted while the page
-      // is between watches, and nothing reports it except the next complete snapshot.
+      // The first snapshot holds a and b. The second holds only a: c was deleted while the history
+      // was expired, and nothing reports it except that complete snapshot.
       const items = lists === 1 ? [a1, b] : [a2];
       await route.fulfill({
-        json: { kind: "ConfigMapList", apiVersion: "v1", metadata: { resourceVersion: `${lists}0` }, items },
+        json: {
+          kind: "ConfigMapList",
+          apiVersion: "v1",
+          metadata: { resourceVersion: `${lists === 1 ? 1 : 3}0` },
+          items,
+        },
       });
       return;
     }
-    const n = watchCount++;
-    expect(url.searchParams.get("resourceVersion")).toBe(`${n + 1}0`);
-    const held = watches[n];
-    if (!held) return; // a later watch is never answered: the page stays syncing until it disconnects
-    await held.opened;
-    // A fulfilled body ends, so each answered watch is followed by EOF and a fresh LIST.
-    await route.fulfill({
-      contentType: "application/json",
-      body:
-        n === 0
-          ? frames(
-              { type: "MODIFIED", object: typed(a2) },
-              { type: "DELETED", object: typed(b) },
-              { type: "ADDED", object: typed(c) },
-            )
-          : "",
-    });
+    const step = script[watchCount++];
+    expect(url.searchParams.get("resourceVersion")).toBe(step?.from);
+    expect(url.searchParams.get("allowWatchBookmarks")).toBe("true");
+    if (!step?.gate) return; // never answered: the page waits, connecting, until it disconnects
+    await step.gate.opened;
+    await route.fulfill({ contentType: "application/json", body: step.body });
   });
 
   await page.goto(`/examples/native-viewer/index.html?entry=${entry}&namespace=app&labelSelector=tier%3Dweb`);
@@ -101,22 +125,42 @@ test("the native viewer lists, goes live once the watch is accepted, re-lists an
   await expect(state).toHaveText("syncing");
   await expect(history).not.toContainText("live");
 
-  watches[0]!.open();
+  script[0]!.gate!.open();
   await expect(history).toContainText("syncing → live");
-  // The watch's events arrived; then it ended, and the next LIST is incomplete until its watch is
-  // accepted, so c — missing from that LIST — is still shown.
-  await expect.poll(() => lists).toBe(2);
-  await expect(state).toHaveText("syncing");
   await expect(row("uid-a")).toContainText('"value": "two"');
+  await expect(row("uid-c")).toBeVisible();
+  // The watch ended. The page resumes it from the bookmark instead of listing again: while the
+  // resumed watch is opening it is connecting, never syncing, and it keeps every row.
+  await expect.poll(() => watchCount).toBe(2);
+  await expect(state).toHaveText("connecting");
+  expect(lists, "a resume is not a snapshot").toBe(1);
+  await expect(row("uid-b")).toBeVisible();
+
+  script[1]!.gate!.open();
+  // Accepted: live at once, and the missed deletion arrives. Then the history expires.
   await expect(row("uid-b")).toHaveCount(0);
+  await expect(page.locator("#error")).toHaveText("RESYNC_REQUIRED: too old resource version: 20 (25)");
+  await expect.poll(() => lists).toBe(2);
+  // The replacement snapshot is incomplete until its watch is accepted, so c — missing from it — is
+  // still shown, and the page is syncing.
+  await expect(state).toHaveText("syncing");
   await expect(row("uid-c")).toBeVisible();
 
-  watches[1]!.open();
-  // The replacement snapshot completes: c is pruned.
+  script[2]!.gate!.open();
+  // The replacement snapshot completes: c is pruned. Its watch ends, and the next one resumes.
   await expect(row("uid-c")).toHaveCount(0);
   await expect(row("uid-a")).toBeVisible();
-  await expect.poll(() => lists).toBe(3);
-  await expect(state).toHaveText("syncing");
+  await expect.poll(() => watchCount).toBe(4);
+  await expect(state).toHaveText("connecting");
+  await expect(history).toHaveText(
+    [
+      ...["connecting", "syncing", "syncing", "live"],
+      ...["retrying", "connecting", "live"],
+      ...["retrying", "connecting", "syncing", "syncing", "live"],
+      ...["retrying", "connecting"],
+    ].join(" → "),
+  );
+  expect(lists).toBe(2);
 
   await page.getByRole("button", { name: "Disconnect" }).click();
   await expect(state).toHaveText("closed");

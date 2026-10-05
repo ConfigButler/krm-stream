@@ -1,7 +1,7 @@
 # Watch streams, optional editing and native access
 
-**Request of 2026-10-05. Slice 1, the native viewer, and slice 2, native editing, are implemented;
-the other follow-ups below remain open.** It builds on the connector separation, Go API cleanup and real-API save tests. Use
+**Request of 2026-10-05. Slice 1, the native viewer, slice 2, native editing, and native watch
+resumption are implemented; the other follow-ups below remain open.** It builds on the connector separation, Go API cleanup and real-API save tests. Use
 [proposal 0006](../proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order)
 for completed work, delivery order and independent tracks.
 
@@ -154,15 +154,55 @@ saved and echoed on both entry points and rendered a real 422. The comparative f
 
 Each is separate from the slices above and from the others:
 
-- Native resume, streaming lists and pagination.
+- Native resume — **implemented**, see [below](#native-watch-resumption); streaming lists and
+  pagination remain open.
 - Comparative view and sharing measurements.
 - Independent gateway continuation and save-progress evaluation.
 - The independently proposed editor API cleanup in proposal 0009.
 
-Resumable native watches, streaming-list initialization and pagination are later improvements with
-their own recovery tests. Slice 1 improves adoption and lifecycle reuse; re-listing on every reconnect
-does not claim resume efficiency. Gateway upstream continuation has a different checkpoint owner and
+Slice 1 re-listed on every reconnect and claimed no resume efficiency; the requirements above are
+the contract it was built against. Gateway upstream continuation has a different checkpoint owner and
 can proceed independently. Neither implies browser replay for gateway SSE v1.
+
+### Native watch resumption
+
+**Implemented** in `connectNativeWatch`; the contract is in the
+[client reference](../../packages/krm-stream/README.md#native-connections).
+
+- Each handle keeps a private checkpoint, armed only once a complete snapshot was applied and its
+  WATCH accepted, and advanced only after the consumer applied an event or the stream passed a
+  bookmark. It is never exposed, accepted or shared, so it stays bound to the handle's proxy, scope,
+  selectors and credentials. Resource versions are opaque and replaced in stream order. Bookmarks
+  (`allowWatchBookmarks=true`) move only the checkpoint, never an object's write version.
+- EOF, network failures, a truncated final frame and retryable refusals (408, 429, 5xx, HTTP or in
+  the stream) resume the WATCH from the checkpoint: no LIST, `reset` or `synced`, so membership,
+  drafts and conflicts survive and missed updates, deletes, selector exits and same-name UID
+  replacements arrive as watch events. The state goes `connecting` → `live` once the resumed watch is
+  accepted.
+- HTTP or in-stream 410, malformed frames, an error without a code and an event without a
+  resourceVersion discard the checkpoint; the next connection is a fresh, complete LIST/WATCH
+  snapshot, during which the state is not live and editors refuse to save. Terminal refusals, the
+  bounded retry budget, cancellation and callback-error cleanup are unchanged; every reconnect still
+  consumes the budget.
+
+**Acceptance.** `packages/krm-stream/test/native.test.ts` covers missed updates, deletes, selector
+exits and UID replacement replayed on resume, bookmarks, opaque versions, split and truncated frames,
+malformed input, interrupted initialization, HTTP and in-stream expiry, repeated expiry to
+exhaustion, terminal and transient refusals on a resumed watch, cancellation, per-handle checkpoints
+and drafts/conflicts across a resume and a re-list; `native-editing.test.ts` covers a save refused
+during expiry recovery. `task e2e-browser` runs the viewer and editor pages through resume and an
+in-stream 410 on both entry points. `TestRealAPINativeResumeThroughHostProxy` (`task test-real-api`,
+v1.36.4+k3s1) drops the watch at a host proxy, mutates the cluster while the next WATCH is held and
+converges with no second LIST; it then rewrites a WATCH's resourceVersion to `1` so the real API server
+answers with its own in-stream 410, and recovers through a fresh snapshot, twice in a row. The expiry
+is induced by the proxy; the 410 is the server's.
+
+**Limits.** A resumed watch is live on acceptance, so an expired one is briefly live until its
+in-stream 410 arrives; a resume does not invalidate a guarded read as a snapshot does (an event for
+the object does), as on any live watch; the checkpoint is in memory and a page reload lists again.
+Streaming-list initialization and pagination are evaluated in
+[proposal 0006](../proposals/0006-stream-and-save-implementation-plan.md#3-native-streaming-lists-and-pagination)
+and not implemented.
 
 ## Show the value of each path
 

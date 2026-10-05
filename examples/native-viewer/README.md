@@ -30,14 +30,18 @@ browser never holds a Kubernetes credential.
 
 - The page lists the collection, applies the complete snapshot and becomes `live` only once the
   watch is accepted. The **History** line shows each connection state.
-- Every reconnect lists again; a resource deleted or relabelled out of the selector while
-  disconnected disappears when the next snapshot completes.
+- After the first snapshot, a dropped or ended watch resumes from the last event applied — or the
+  last bookmark — without listing again: the History line shows `retrying → connecting → live`,
+  never `syncing`, and what changed while disconnected arrives as ordinary events, deletions and
+  selector exits included. When the API server reports the history expired (410), the page lists
+  again, and a resource deleted or relabelled out of the selector meanwhile disappears when that
+  snapshot completes.
 - Objects are exactly what the proxy returns, Secret values and machinery fields included. Native
   access provides no projection, redaction, suppression or shared watches; use the
   [gateway](../../docs/why-a-gateway.md) for those.
 - It is a viewer. To edit through the same proxy, add the
-  [native editor](../native-editor/README.md), which has its own page for one ConfigMap. Resumable watches and paginated lists are later work;
-  see the [delivery plan](../../docs/proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order).
+  [native editor](../native-editor/README.md), which has its own page for one ConfigMap. Streaming
+  lists and paginated lists are later work; see the [delivery plan](../../docs/proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order).
 
 `task e2e-browser` loads this page in Chromium on both entry points, with Playwright standing in for
 the host proxy: [native-viewer.spec.ts](../vanilla-browser/tests/native-viewer.spec.ts).

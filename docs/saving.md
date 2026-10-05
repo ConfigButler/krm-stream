@@ -140,7 +140,7 @@ version precondition, not necessarily a disagreement at an editable field.
 | Secret token rotates | Under `krm-full/v1` or `krm-spec/v1`, an update with a higher redaction revision | The token remains withheld; its change is visible |
 
 The RV labels are illustrative opaque strings. Neither RV nor event `seq` provides resume: a new
-connection starts a complete snapshot. The
+gateway connection starts a complete snapshot. The
 [normative contract](../spec/v1.md#6-ordering-delivery--the-state-guarantee) defines the exact
 guarantee.
 
@@ -216,6 +216,17 @@ the watch delivers the same object as an ordinary event. Native objects have no 
 [quiet-stream case](#why-a-quiet-stream-can-still-reject-a-save) does not arise: every change
 to the object, status included, reaches the store with its version. A 409 still means another write
 landed between capture and PATCH, or that the object was replaced under the same name.
+
+A native connection that drops resumes its WATCH from the last event the store applied, without a
+new snapshot ([native connections](../packages/krm-stream/README.md#native-connections)): drafts and
+conflicts stay, and changes made meanwhile arrive as ordinary events, merged against the draft as
+any live event is. Until the resumed WATCH is accepted the connection is not `live`, so the example
+editor answers `recovering` and writes nothing; a write captured before the drop is still guarded by
+its `resourceVersion` precondition. An expired history (410) re-lists instead, and a draft survives
+that snapshot while its UID does. A resume starts no snapshot, so unlike a snapshot it does not
+invalidate a guarded read captured before it; an event it delivers for that object does, exactly as
+on a live watch. As on a live watch, an accepted read can be followed by replayed events older than
+the object it returned, until the watch catches up.
 
 ## Creating and deleting whole objects
 

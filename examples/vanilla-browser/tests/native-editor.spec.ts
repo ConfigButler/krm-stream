@@ -55,6 +55,10 @@ class Host {
   #rv = 1;
   #watches = new Set<ServerResponse>();
   #held: string[] = [];
+  // Every frame by the version it carries, so a WATCH resumed from a version replays what followed.
+  #log: { rv: number; frame: string }[] = [];
+  #expireNext = false;
+  #holdNext: ReturnType<typeof gate> | undefined;
   #server: Server;
   url = "";
 
@@ -115,6 +119,33 @@ class Host {
     for (const frame of this.#held.splice(0)) for (const watch of this.#watches) watch.write(frame);
   }
 
+  /** End every open watch, as the API server routinely does. */
+  endWatches() {
+    // Forgotten at once, so nothing is written after the end before its close event.
+    for (const watch of this.#watches) {
+      this.#watches.delete(watch);
+      watch.end();
+    }
+  }
+
+  /** The next WATCH is accepted and then reports that its history expired, as F3 observed. */
+  expireNextWatch() {
+    this.#expireNext = true;
+  }
+
+  /** The next WATCH that is not expired waits for the returned gate before it is accepted. */
+  holdNextWatch() {
+    this.#holdNext = gate();
+    return this.#holdNext;
+  }
+
+  /** The requests the page made for the collection: `list`, or `watch@<resourceVersion>`. */
+  collectionCalls() {
+    return this.calls
+      .filter((c) => c.path === COLLECTION)
+      .map((c) => (c.query.get("watch") === "1" ? `watch@${c.query.get("resourceVersion")}` : "list"));
+  }
+
   /** The API server's PATCH: preconditions checked, then the merge patch applied and echoed. */
   patch = (call: Call, res: ServerResponse, { deliver = true } = {}) => {
     const body = call.body as { metadata?: Record<string, unknown> };
@@ -141,6 +172,7 @@ class Host {
 
   #emit(type: string, object: ConfigMap, deliver: boolean) {
     const frame = `${JSON.stringify({ type, object: typed(object) })}\n`;
+    this.#log.push({ rv: Number(object.metadata.resourceVersion), frame });
     if (!deliver) return void this.#held.push(frame);
     for (const watch of this.#watches) watch.write(frame);
   }
@@ -163,9 +195,22 @@ class Host {
     if (call.path === COLLECTION && call.method === "GET") {
       expect(call.query.get("fieldSelector")).toBe("metadata.name=settings");
       if (call.query.get("watch") === "1") {
-        // Accepted, and open until the page or the test closes it.
+        if (this.#expireNext) {
+          this.#expireNext = false;
+          res.writeHead(200, { "Content-Type": "application/json", Connection: "close" });
+          const status = { kind: "Status", apiVersion: "v1", status: "Failure", code: 410, reason: "Expired" };
+          const message = `too old resource version: ${call.query.get("resourceVersion")} (${this.#rv})`;
+          return void res.end(`${JSON.stringify({ type: "ERROR", object: { ...status, message } })}\n`);
+        }
+        const held = this.#holdNext;
+        this.#holdNext = undefined;
+        await held?.opened;
+        // Accepted, and open until the page or the test closes it. A watch from an older version
+        // first replays what followed it, as the API server does from its history.
         res.writeHead(200, { "Content-Type": "application/json" });
         res.flushHeaders();
+        const from = Number(call.query.get("resourceVersion"));
+        for (const { rv, frame } of this.#log) if (rv > from && !this.#held.includes(frame)) res.write(frame);
         this.#watches.add(res);
         res.on("close", () => this.#watches.delete(res));
         return;
@@ -613,4 +658,47 @@ test("a deleted object shows its unsaved edits at once, with nothing to open in 
   await expect(page.getByRole("button", { name: "Discard these edits and open the replacement" })).toBeHidden();
   await expect(save(page)).toBeDisabled();
   expect(host.objectCalls()).toEqual([]);
+});
+
+test("a draft survives a resumed watch, and saving waits while an expired watch re-lists", async ({
+  page,
+  entry,
+  host,
+}) => {
+  await open(page, host, entry);
+  await field(page, "data value").fill("mine");
+
+  // The watch ends, and another writer changes a field the person is not editing before the page
+  // reconnects. The page resumes from its checkpoint: the change is replayed, with no new LIST.
+  host.endWatches();
+  host.change((o) => {
+    o.metadata.annotations.owner = "team-c";
+  });
+  await expect(field(page, "annotation owner")).toHaveValue("team-c");
+  await expect(page.locator("#state")).toHaveText("live");
+  expect(host.collectionCalls()).toEqual(["list", "watch@1", "watch@1"]);
+  await expect(field(page, "data value")).toHaveValue("mine");
+  await expect(page.locator("#changes li")).toHaveCount(1);
+  await expect(page.locator("#changes")).toContainText('change data value: "base" → "mine"');
+
+  // The next resume finds the history expired. Until the replacement snapshot's watch is accepted,
+  // the edit stays in the form and Save stays disabled.
+  host.expireNextWatch();
+  const accepted = host.holdNextWatch();
+  host.endWatches();
+  await expect(page.locator("#error")).toHaveText("RESYNC_REQUIRED: too old resource version: 2 (2)");
+  await expect(page.locator("#state")).toHaveText("syncing");
+  await expect(save(page)).toBeDisabled();
+  await expect(page.locator("#hint")).toHaveText("Saving resumes once the watch is live; your edits stay here.");
+  await expect(field(page, "data value")).toHaveValue("mine");
+  expect(host.collectionCalls()).toEqual(["list", "watch@1", "watch@1", "watch@2", "list", "watch@2"]);
+  expect(host.objectCalls(), "nothing is written while recovering").toEqual([]);
+
+  accepted.open();
+  await expect(page.locator("#state")).toHaveText("live");
+  await expect(save(page)).toBeEnabled();
+  await save(page).click();
+  await expect(outcome(page)).toHaveAttribute("data-kind", "echoed");
+  expect(host.patchBodies()).toEqual([{ metadata: { uid: "u1", resourceVersion: "2" }, data: { value: "mine" } }]);
+  expect(host.object!.metadata.annotations.owner).toBe("team-c");
 });

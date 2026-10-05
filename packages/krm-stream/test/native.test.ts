@@ -91,6 +91,10 @@ function scripted(...steps: Step[]) {
   return { fetch, urls };
 }
 const isWatch = (url: string) => new URL(url, "http://host").searchParams.get("watch") === "1";
+/** The resourceVersion a WATCH asked to start from. */
+const rvOf = (url: string) => new URL(url, "http://host").searchParams.get("resourceVersion");
+/** Each request as `list` or `watch@<resourceVersion>`, so a test reads which reconnects resumed. */
+const requested = (urls: string[]) => urls.map((u) => (isWatch(u) ? `watch@${rvOf(u)}` : "list"));
 /** A step that never answers until the request is aborted, like a slow server. */
 const hang: Step = (_url, signal) =>
   new Promise((_resolve, reject) => {
@@ -132,7 +136,9 @@ test("an empty collection is a complete snapshot, and the watch opens from its r
   assert.equal(watch.searchParams.get("labelSelector"), "tier=web", "the WATCH uses the same selectors");
   assert.equal(watch.searchParams.get("watch"), "1");
   assert.equal(watch.searchParams.get("resourceVersion"), "42");
+  assert.equal(watch.searchParams.get("allowWatchBookmarks"), "true", "bookmarks keep a quiet checkpoint fresh");
   assert.equal(watch.searchParams.has("limit"), false);
+  assert.equal(watch.searchParams.has("sendInitialEvents"), false);
 });
 
 test("requests use same-origin credentials, no cache, cancellation and the caller's headers", async () => {
@@ -408,11 +414,9 @@ for (const [label, tail, pattern] of [
     /unknown watch event/,
   ],
   ["an object without a uid", `${JSON.stringify({ type: "ADDED", object: { metadata: { name: "x" } } })}\n`, /uid/],
-  ["a truncated frame at EOF", '{"type":"MODIFIED","object":{"metad', /ended inside a frame/],
   ["invalid UTF-8", new Uint8Array([0xff, 0xfe, 0x0a]), /UTF-8/],
-  ["a character cut off at EOF", new Uint8Array([0xe2, 0x9c]), /UTF-8/],
 ] as const)
-  test(`${label} is reported, never skipped, and recovered by a fresh list`, async () => {
+  test(`${label} is reported, never skipped, and recovered by a fresh list rather than a resume`, async () => {
     const errors: unknown[][] = [];
     const types: string[] = [];
     const store = new LiveResourceStore(readOnlyPolicy);
@@ -505,16 +509,16 @@ test("repeated expiry consumes the bounded budget with backoff instead of loopin
   assert.equal(handle.state.status, "exhausted");
 });
 
-test("short EOFs on an accepted watch also exhaust the budget", async () => {
-  let calls = 0;
+test("short EOFs on an accepted watch also exhaust the budget, resuming rather than re-listing", async () => {
+  const requests: string[] = [];
   const fetch = (async (input: RequestInfo | URL) => {
-    calls++;
+    requests.push(isWatch(String(input)) ? "watch" : "list");
     return isWatch(String(input)) ? body("").response : collection([]);
   }) as typeof globalThis.fetch;
   const handle = connectNativeWatch(url, ignore, { fetch, maxRetries: 2, retryDelayMs: 0, healthyResetMs: 60_000 });
   const states = statuses(handle);
   await handle.closed;
-  assert.equal(calls, 6);
+  assert.deepEqual(requests, ["list", "watch", "watch", "watch"]);
   assert.equal(states.filter((s) => s === "live").length, 3);
   assert.equal(handle.state.status, "exhausted");
 });
@@ -667,14 +671,16 @@ test("network failures on list, watch and body read consume exactly the retry bu
   assert.equal(handle.state.status, "exhausted");
 });
 
-test("missed deletes and selector exits are repaired by re-listing; prior state is kept until then", async () => {
+test("after expiry, missed deletes and selector exits are repaired by re-listing; prior state is kept until then", async () => {
   const store = new LiveResourceStore(readOnlyPolicy);
-  const { fetch } = scripted(
-    // The first connection sees a, b and c; its watch then ends without reporting b's deletion or
-    // c's label change taking it out of the selector.
+  const { fetch, urls } = scripted(
+    // The first connection sees a, b and c; its watch then expires without reporting b's deletion
+    // or c's label change taking it out of the selector, so there is nothing to resume from.
     () => collection([cm("a", "one", "1"), cm("b", "two", "1"), cm("c", "three", "1")], "1"),
-    () => body("").response,
-    // The replacement snapshot no longer lists them, but its watch is refused: incomplete.
+    () =>
+      body(frames({ type: "ERROR", object: status(410, "too old resource version", { reason: "Expired" }) })).response,
+    // The replacement snapshot no longer lists them, but its watch is refused: incomplete, so the
+    // next connection lists again rather than resuming from a snapshot that never completed.
     () => collection([cm("a", "one", "5")], "5"),
     () => json(status(503, "busy"), 503),
     () => collection([cm("a", "one", "6")], "6"),
@@ -699,6 +705,553 @@ test("missed deletes and selector exits are repaired by re-listing; prior state 
   await handle.closed;
   assert.deepEqual(seen, [["a", "b", "c"], ["a", "b", "c"], ["a", "b", "c"], ["a"]]);
   assert.equal(store.server("a").metadata.resourceVersion, "6");
+  assert.deepEqual(requested(urls), ["list", "watch@1", "list", "watch@5", "list", "watch@6"]);
+});
+
+// ------------------------------------------------------------------------------------ resume --
+//
+// After a complete snapshot, a handle resumes its WATCH from the last event its consumer applied (or
+// the last bookmark) instead of listing again. A resumed watch starts no snapshot: no LIST, no
+// `reset`, no `synced`, and the state goes connecting → live on acceptance.
+
+const bookmark = (rv: string) => ({
+  type: "BOOKMARK",
+  object: { kind: "ConfigMap", apiVersion: "v1", metadata: { resourceVersion: rv } },
+});
+const expired = (message = "too old resource version") => ({
+  type: "ERROR",
+  object: status(410, message, { reason: "Expired" }),
+});
+/** Close the handle the n-th time it goes live. */
+function closeOnLive(handle: ResourceStreamHandle, n: number) {
+  let lives = 0;
+  handle.subscribe((state) => {
+    if (state.status === "live" && ++lives === n) handle.close();
+  });
+}
+
+test("an EOF resumes the watch from the last applied event and replays what was missed, without a snapshot", async () => {
+  const store = new LiveResourceStore(readOnlyPolicy);
+  const { fetch, urls } = scripted(
+    () =>
+      collection([cm("a", "one", "1"), cm("b", "two", "1"), cm("c", "three", "1"), cm("d", "same", "1", "first")], "1"),
+    // The first watch delivers one change, then ends routinely.
+    () => body(frames({ type: "MODIFIED", object: cm("a", "one", "2", "seen") })).response,
+    // Meanwhile a changed, b was deleted, c's labels took it out of the selector and d was replaced
+    // under the same name. The resumed watch replays all of it, in order.
+    () =>
+      body(
+        frames(
+          { type: "MODIFIED", object: cm("a", "one", "3", "missed") },
+          { type: "DELETED", object: cm("b", "two", "4") },
+          { type: "DELETED", object: cm("c", "three", "5") },
+          { type: "DELETED", object: cm("d", "same", "6", "first") },
+          { type: "ADDED", object: cm("d2", "same", "7", "second") },
+        ),
+        { open: true },
+      ).response,
+  );
+  const types: string[] = [];
+  const handle = connectNativeWatch(
+    url,
+    (event) => {
+      types.push(event.type);
+      applyStreamEvent(store, event);
+      if (event.type === "added" && event.object.metadata.uid === "d2") handle.close();
+    },
+    { fetch, retryDelayMs: 0 },
+  );
+  const states = statuses(handle);
+  await handle.closed;
+
+  assert.deepEqual(requested(urls), ["list", "watch@1", "watch@2"], "the reconnect resumed: no second LIST");
+  const resumed = new URL(urls[2]!, "http://host");
+  assert.equal(resumed.pathname, "/k8s/api/v1/namespaces/app/configmaps");
+  assert.equal(resumed.searchParams.get("labelSelector"), "tier=web", "the same selectors");
+  assert.equal(resumed.searchParams.get("allowWatchBookmarks"), "true");
+  assert.deepEqual(types, [
+    ...["reset", "added", "added", "added", "added", "synced", "modified"],
+    ...["modified", "deleted", "deleted", "deleted", "added"],
+  ]);
+  assert.deepEqual(store.ids().sort(), ["a", "d2"]);
+  assert.deepEqual(store.server("a").data, { value: "missed" });
+  assert.equal(store.server("d2").metadata.name, "same");
+  assert.deepEqual(states, ["connecting", "syncing", "syncing", "live", "retrying", "connecting", "live", "closed"]);
+});
+
+test("a resumed watch is live only once accepted, and never syncing", async () => {
+  let accept!: () => void;
+  const accepted = new Promise<void>((resolve) => {
+    accept = resolve;
+  });
+  const { fetch, urls } = scripted(
+    () => collection([cm("a", "one", "1")], "1"),
+    () => body("").response,
+    async () => {
+      await accepted;
+      return body("", { open: true }).response;
+    },
+  );
+  const types: string[] = [];
+  const handle = connectNativeWatch(url, (event) => types.push(event.type), { fetch, retryDelayMs: 0 });
+  const states = statuses(handle);
+  closeOnLive(handle, 2);
+  while (urls.length < 3) await new Promise((resolve) => setTimeout(resolve, 1));
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(handle.state.status, "connecting", "not live while the resumed watch is opening");
+  accept();
+  await handle.closed;
+  assert.deepEqual(states, ["connecting", "syncing", "syncing", "live", "retrying", "connecting", "live", "closed"]);
+  assert.deepEqual(types, ["reset", "added", "synced"], "acceptance alone delivers nothing");
+});
+
+test("a bookmark moves the checkpoint, and changes no object and reaches no consumer", async () => {
+  const store = new LiveResourceStore(readOnlyPolicy);
+  const { fetch, urls } = scripted(
+    () => collection([cm("a", "one", "1")], "1"),
+    () => body(frames({ type: "MODIFIED", object: cm("a", "one", "2", "changed") }, bookmark("9"))).response,
+    // A quiet collection: nothing but a bookmark, and the checkpoint still moves.
+    () => body(frames(bookmark("15"))).response,
+    () => body("", { open: true }).response,
+  );
+  const types: string[] = [];
+  const handle = connectNativeWatch(
+    url,
+    (event) => {
+      types.push(event.type);
+      applyStreamEvent(store, event);
+    },
+    { fetch, retryDelayMs: 0 },
+  );
+  closeOnLive(handle, 3);
+  await handle.closed;
+  assert.deepEqual(requested(urls), ["list", "watch@1", "watch@9", "watch@15"]);
+  assert.deepEqual(types, ["reset", "added", "synced", "modified"]);
+  assert.equal(store.server("a").metadata.resourceVersion, "2", "a bookmark is never an object's version");
+  assert.deepEqual(store.server("a").data, { value: "changed" });
+});
+
+test("resourceVersions are opaque: the last one in stream order is resumed from, whatever it looks like", async () => {
+  const { fetch, urls } = scripted(
+    () => collection([cm("a", "one", "Zm9v/+=")], "Zm9v/+="),
+    () =>
+      body(
+        frames(
+          { type: "MODIFIED", object: cm("a", "one", "10") },
+          // Smaller as a number and as a string, and still the latest: never compared.
+          { type: "MODIFIED", object: cm("a", "one", "9") },
+          { type: "ADDED", object: cm("b", "two", "ä b&c=d#e") },
+        ),
+      ).response,
+    () => body("", { open: true }).response,
+  );
+  const handle = connectNativeWatch(url, ignore, { fetch, retryDelayMs: 0 });
+  closeOnLive(handle, 2);
+  await handle.closed;
+  assert.deepEqual(requested(urls), ["list", "watch@Zm9v/+=", "watch@ä b&c=d#e"]);
+});
+
+for (const [label, tail, pattern] of [
+  ["a frame", '{"type":"MODIFIED","object":{"metad', /ended inside a frame/],
+  ["a character", new Uint8Array([0xe2, 0x9c]), /ended inside a UTF-8 character/],
+] as const)
+  test(`a watch that ends inside ${label} resumes from the last complete event`, async () => {
+    const errors: unknown[][] = [];
+    const store = new LiveResourceStore(readOnlyPolicy);
+    // Frames split every 3 bytes, then cut off inside the next one.
+    const first = body(frames({ type: "MODIFIED", object: cm("a", "one", "2", "complete ✓") }), {
+      chunk: 3,
+      open: true,
+    });
+    first.push(tail);
+    first.end();
+    const { fetch, urls } = scripted(
+      () => collection([cm("a", "one", "1")], "1"),
+      () => first.response,
+      // The resumed watch's frames are split anywhere too, multi-byte characters included.
+      () =>
+        body(frames({ type: "MODIFIED", object: cm("a", "one", "3", "après 🚀") }), { chunk: 1, open: true }).response,
+    );
+    const types: string[] = [];
+    const handle = connectNativeWatch(
+      url,
+      (event) => {
+        types.push(event.type);
+        applyStreamEvent(store, event);
+        if (event.type === "modified" && event.object.metadata.resourceVersion === "3") handle.close();
+      },
+      { fetch, retryDelayMs: 0, onError: (...args) => errors.push(args) },
+    );
+    await handle.closed;
+    assert.deepEqual(requested(urls), ["list", "watch@1", "watch@2"], "the partial frame was never applied");
+    assert.deepEqual(types, ["reset", "added", "synced", "modified", "modified"]);
+    assert.deepEqual(store.server("a").data, { value: "après 🚀" });
+    assert.equal(errors.length, 1);
+    assert.equal(errors[0]![0], "INTERNAL");
+    assert.match(String(errors[0]![1]), pattern);
+    assert.equal(errors[0]![2], false);
+  });
+
+for (const [label, frame, applied] of [
+  ["a frame that is not JSON", "{not json}\n", []],
+  ["an in-stream error without a code", frames({ type: "ERROR", object: { kind: "Status", message: "odd" } }), []],
+  [
+    "an event without a resourceVersion",
+    frames({ type: "MODIFIED", object: { ...cm("a", "one", ""), metadata: { uid: "a", name: "one" } } }),
+    ["modified"],
+  ],
+  ["a bookmark without a resourceVersion", frames({ type: "BOOKMARK", object: { kind: "ConfigMap" } }), []],
+] as const)
+  test(`${label} on a resumed watch discards the checkpoint: the next connection lists`, async () => {
+    const { fetch, urls } = scripted(
+      () => collection([cm("a", "one", "1")], "1"),
+      () => body("").response,
+      () => body(frame).response,
+      () => collection([cm("a", "one", "5")], "5"),
+      () => body("", { open: true }).response,
+    );
+    const types: string[] = [];
+    const handle = connectNativeWatch(url, (event) => types.push(event.type), { fetch, retryDelayMs: 0 });
+    closeOnLive(handle, 3);
+    await handle.closed;
+    assert.deepEqual(requested(urls), ["list", "watch@1", "watch@1", "list", "watch@5"]);
+    assert.deepEqual(types, ["reset", "added", "synced", ...applied, "reset", "added", "synced"]);
+  });
+
+for (const [label, step] of [
+  ["refused with 503", () => json(status(503, "busy"), 503)],
+  [
+    "lost to the network",
+    () => {
+      throw new TypeError("offline");
+    },
+  ],
+  ["expired with HTTP 410", () => json(status(410, "too old resource version", { reason: "Expired" }), 410)],
+] as [string, Step][])
+  test(`an initialization whose watch is ${label} leaves no checkpoint: the next connection lists and prunes`, async () => {
+    const store = new LiveResourceStore(readOnlyPolicy);
+    store.applyServerEvent(cm("stale", "gone", "0"));
+    const { fetch, urls } = scripted(
+      () => collection([cm("a", "one", "1"), cm("b", "two", "1")], "1"),
+      step,
+      () => collection([cm("a", "one", "3")], "3"),
+      () => body("", { open: true }).response,
+    );
+    const types: string[] = [];
+    const handle = connectNativeWatch(
+      url,
+      (event) => {
+        types.push(event.type);
+        applyStreamEvent(store, event);
+      },
+      { fetch, retryDelayMs: 0 },
+    );
+    closeOnLive(handle, 1);
+    await handle.closed;
+    assert.deepEqual(requested(urls), ["list", "watch@1", "list", "watch@3"]);
+    assert.deepEqual(types, ["reset", "added", "added", "reset", "added", "synced"]);
+    assert.deepEqual(store.ids(), ["a"], "the completed snapshot pruned b and what preceded both");
+  });
+
+test("a consumer exception on a resumed watch closes the stream with it and requests nothing more", async () => {
+  const boom = new Error("render failed");
+  const resumed = body(
+    frames({ type: "MODIFIED", object: cm("a", "one", "3") }, { type: "MODIFIED", object: cm("a", "one", "4") }),
+    { open: true },
+  );
+  const { fetch, urls } = scripted(
+    () => collection([cm("a", "one", "1")], "1"),
+    () => body(frames({ type: "MODIFIED", object: cm("a", "one", "2") })).response,
+    () => resumed.response,
+  );
+  const seen: string[] = [];
+  const handle = connectNativeWatch(
+    url,
+    (event) => {
+      seen.push(event.type === "modified" ? `modified@${event.object.metadata.resourceVersion}` : event.type);
+      if (event.type === "modified" && event.object.metadata.resourceVersion === "3") throw boom;
+    },
+    { fetch, retryDelayMs: 0 },
+  );
+  const states = statuses(handle);
+  await assert.rejects(handle.closed, (error) => error === boom);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.deepEqual(requested(urls), ["list", "watch@1", "watch@2"], "never retried");
+  assert.deepEqual(seen, ["reset", "added", "synced", "modified@2", "modified@3"], "nothing after the exception");
+  assert.equal(resumed.state.cancelled, true);
+  assert.equal(states.at(-1), "closed");
+});
+
+test("HTTP 410 and an in-stream 410 on a resumed watch recover with a fresh, pruning snapshot", async () => {
+  const errors: unknown[][] = [];
+  const store = new LiveResourceStore(readOnlyPolicy);
+  const { fetch, urls } = scripted(
+    () => collection([cm("a", "one", "1"), cm("b", "two", "1")], "1"),
+    () => body(frames({ type: "MODIFIED", object: cm("a", "one", "2") })).response,
+    () => json(status(410, "too old resource version: 2 (7)", { reason: "Expired" }), 410),
+    () => collection([cm("a", "one", "7")], "7"),
+    () => body(frames({ type: "MODIFIED", object: cm("a", "one", "8") })).response,
+    () => body(frames(expired("too old resource version: 8 (9)"))).response,
+    () => collection([cm("a", "one", "9"), cm("c", "three", "9")], "9"),
+    () => body("", { open: true }).response,
+  );
+  const types: string[] = [];
+  const handle = connectNativeWatch(
+    url,
+    (event) => {
+      types.push(event.type);
+      applyStreamEvent(store, event);
+    },
+    { fetch, retryDelayMs: 0, onError: (...args) => errors.push(args) },
+  );
+  const states = statuses(handle);
+  closeOnLive(handle, 4);
+  await handle.closed;
+  assert.deepEqual(requested(urls), ["list", "watch@1", "watch@2", "list", "watch@7", "watch@8", "list", "watch@9"]);
+  assert.deepEqual(errors, [
+    ["RESYNC_REQUIRED", "too old resource version: 2 (7)", false, undefined],
+    ["RESYNC_REQUIRED", "too old resource version: 8 (9)", false, undefined],
+  ]);
+  assert.deepEqual(types, [
+    ...["reset", "added", "added", "synced", "modified"],
+    ...["reset", "added", "synced", "modified"],
+    ...["reset", "added", "added", "synced"],
+  ]);
+  assert.deepEqual(store.ids().sort(), ["a", "c"], "b was pruned by the completed replacement snapshot");
+  // Never live from an expiry until the replacement snapshot completes.
+  assert.deepEqual(states, [
+    ...["connecting", "syncing", "syncing", "live", "retrying"],
+    ...["connecting", "retrying"],
+    ...["connecting", "syncing", "syncing", "live", "retrying"],
+    ...["connecting", "live", "retrying"],
+    ...["connecting", "syncing", "syncing", "live", "closed"],
+  ]);
+});
+
+test("repeated expiry on resume consumes the bounded budget with backoff, never an immediate re-list", async () => {
+  const log: string[] = [];
+  let lists = 0;
+  let initial = 0;
+  const fetch = (async (input: RequestInfo | URL) => {
+    const u = String(input);
+    if (!isWatch(u)) {
+      log.push("list");
+      return collection([], String(++lists));
+    }
+    log.push(`watch@${rvOf(u)}`);
+    // Every snapshot's watch passes one bookmark and ends; every resume from it has expired.
+    return rvOf(u)!.startsWith("b")
+      ? body(frames(expired())).response
+      : body(frames(bookmark(`b${++initial}`))).response;
+  }) as typeof globalThis.fetch;
+  const errors: string[] = [];
+  const handle = connectNativeWatch(url, ignore, {
+    fetch,
+    maxRetries: 3,
+    retryDelayMs: 1,
+    maxRetryDelayMs: 4,
+    onError: (code) => errors.push(code),
+  });
+  handle.subscribe((state) => {
+    if (state.status === "retrying" || state.status === "exhausted") log.push(state.status);
+  });
+  await handle.closed;
+  assert.deepEqual(log, [
+    ...["list", "watch@1", "retrying"],
+    ...["watch@b1", "retrying"],
+    ...["list", "watch@2", "retrying"],
+    ...["watch@b2", "exhausted"],
+  ]);
+  assert.deepEqual(errors, ["RESYNC_REQUIRED", "RESYNC_REQUIRED"]);
+  assert.equal(handle.state.status, "exhausted");
+});
+
+for (const [label, step, code] of [
+  ["HTTP 403", () => json(status(403, "access revoked"), 403), "FORBIDDEN"],
+  ["HTTP 401", () => json(status(401, "access revoked"), 401), "UNAUTHENTICATED"],
+  [
+    "an in-stream 403",
+    () => body(frames({ type: "ERROR", object: status(403, "access revoked", { reason: "Forbidden" }) })).response,
+    "FORBIDDEN",
+  ],
+] as [string, Step, string][])
+  test(`${label} on a resumed watch is terminal`, async () => {
+    const errors: unknown[][] = [];
+    const { fetch, urls } = scripted(
+      () => collection([], "1"),
+      () => body("").response,
+      step,
+    );
+    const handle = connectNativeWatch(url, ignore, { fetch, retryDelayMs: 0, onError: (...args) => errors.push(args) });
+    await handle.closed;
+    assert.deepEqual(requested(urls), ["list", "watch@1", "watch@1"], "never retried or re-listed");
+    assert.deepEqual(errors, [[code, "access revoked", true, undefined]]);
+    assert.equal(handle.state.status, "terminal");
+  });
+
+test("transient failures on a resumed watch resume again from the same checkpoint", async () => {
+  const errors: string[] = [];
+  const { fetch, urls } = scripted(
+    () => collection([cm("a", "one", "1")], "1"),
+    () => body(frames({ type: "MODIFIED", object: cm("a", "one", "2") })).response,
+    () => json(status(503, "busy"), 503),
+    () => json(status(429, "slow down"), 429),
+    () =>
+      body(frames({ type: "ERROR", object: status(500, "etcd leader changed", { reason: "InternalError" }) })).response,
+    () => body(frames({ type: "ERROR", object: status(504, "timeout", { reason: "Timeout" }) })).response,
+    () => {
+      throw new TypeError("offline");
+    },
+    () => body("").response,
+    () => body("", { open: true }).response,
+  );
+  const types: string[] = [];
+  const handle = connectNativeWatch(url, (event) => types.push(event.type), {
+    fetch,
+    retryDelayMs: 0,
+    onError: (code) => errors.push(code),
+  });
+  closeOnLive(handle, 5);
+  await handle.closed;
+  assert.deepEqual(requested(urls), ["list", "watch@1", ...Array(7).fill("watch@2")]);
+  assert.deepEqual(types, ["reset", "added", "synced", "modified"]);
+  assert.deepEqual(errors, ["UPSTREAM_UNAVAILABLE", "UPSTREAM_UNAVAILABLE", "INTERNAL", "UPSTREAM_UNAVAILABLE"]);
+});
+
+test("close during a resumed watch's request, its body and the backoff before it", async (t) => {
+  for (const at of ["resumed watch fetch", "resumed watch body", "backoff"] as const) {
+    await t.test(at, async () => {
+      const before = pendingTimeouts();
+      const resumed = body("", { open: true });
+      const steps: Step[] = [
+        () => collection([cm("a", "one", "1")], "1"),
+        () => body("").response,
+        ...(at === "backoff" ? [] : [at === "resumed watch fetch" ? hang : () => resumed.response]),
+      ];
+      const { fetch, urls } = scripted(...steps);
+      const events: string[] = [];
+      const handle = connectNativeWatch(url, (event) => events.push(event.type), {
+        fetch,
+        retryDelayMs: at === "backoff" ? 60_000 : 0,
+        healthyResetMs: 60_000,
+      });
+      const states = statuses(handle);
+      if (at === "backoff") await until(handle, "retrying");
+      else if (at === "resumed watch body") {
+        while (states.filter((s) => s === "live").length < 2) await new Promise((resolve) => setTimeout(resolve, 1));
+        resumed.push(frames({ type: "MODIFIED", object: cm("a", "one", "2") }));
+      } else while (urls.length < 3) await new Promise((resolve) => setTimeout(resolve, 1));
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      handle.close();
+      await handle.closed;
+      const count = events.length;
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      assert.equal(events.length, count, "nothing is delivered after close");
+      assert.equal(states.at(-1), "closed");
+      assert.equal(urls.length, steps.length, "nothing is requested after close");
+      assert.deepEqual(events, ["reset", "added", "synced", ...(at === "resumed watch body" ? ["modified"] : [])]);
+      assert.equal(requested(urls).filter((r) => r === "list").length, 1, "the reconnect never listed");
+      if (at === "resumed watch body") assert.equal(resumed.state.cancelled, true);
+      if (at === "resumed watch fetch") assert.equal(states.filter((s) => s === "live").length, 1);
+      assert.equal(pendingTimeouts(), before, "the backoff and health timers are released");
+    });
+  }
+});
+
+test("each handle keeps its own checkpoint, even on the same URL, and a new handle starts with a LIST", async () => {
+  const requests: Record<string, string[]> = { a: [], b: [], c: [] };
+  const scripts: Record<string, Step[]> = {
+    a: [
+      () => collection([cm("x", "one", "1")], "1"),
+      () => body(frames({ type: "MODIFIED", object: cm("x", "one", "11") })).response,
+      () => body("", { open: true }).response,
+    ],
+    b: [
+      () => collection([cm("x", "one", "1")], "1"),
+      () => body(frames({ type: "MODIFIED", object: cm("x", "one", "21") })).response,
+      () => body("", { open: true }).response,
+    ],
+    c: [() => collection([cm("x", "one", "30")], "30"), () => body("", { open: true }).response],
+  };
+  // One fetch for every handle: the caller's header tells them apart, as a login identity would.
+  const fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const who = (init!.headers as Record<string, string>)["X-Handle"]!;
+    requests[who]!.push(String(input));
+    return scripts[who]![requests[who]!.length - 1]!(String(input), init!.signal!);
+  }) as typeof globalThis.fetch;
+  const a = connectNativeWatch(url, ignore, { fetch, retryDelayMs: 0, headers: { "X-Handle": "a" } });
+  const b = connectNativeWatch(url, ignore, { fetch, retryDelayMs: 0, headers: { "X-Handle": "b" } });
+  closeOnLive(a, 2);
+  closeOnLive(b, 2);
+  await Promise.all([a.closed, b.closed]);
+  const c = connectNativeWatch(url, ignore, { fetch, retryDelayMs: 0, headers: { "X-Handle": "c" } });
+  closeOnLive(c, 1);
+  await c.closed;
+  assert.deepEqual(requested(requests.a!), ["list", "watch@1", "watch@11"]);
+  assert.deepEqual(requested(requests.b!), ["list", "watch@1", "watch@21"]);
+  assert.deepEqual(requested(requests.c!), ["list", "watch@30"], "a new handle never inherits a checkpoint");
+});
+
+test("drafts and conflicts survive a resumed watch, and a surviving draft survives the re-list after expiry", async () => {
+  const store = new LiveResourceStore();
+  const first = body("", { open: true });
+  const { fetch, urls } = scripted(
+    () => collection([cm("a", "one", "1", "base"), cm("b", "two", "1", "base")], "1"),
+    () => first.response,
+    // While disconnected, another writer changed a's edited field and an unrelated field of b.
+    () =>
+      body(
+        frames(
+          { type: "MODIFIED", object: cm("a", "one", "5", "theirs") },
+          { type: "MODIFIED", object: { ...cm("b", "two", "6", "base"), data: { value: "base", other: "x" } } },
+          expired(),
+        ),
+      ).response,
+    // a was deleted after the history expired; b survives, with its unrelated change.
+    () => collection([{ ...cm("b", "two", "7", "base"), data: { value: "base", other: "x" } }], "7"),
+    () => body("", { open: true }).response,
+  );
+  const types: string[] = [];
+  let afterResume: { conflicts: unknown; dirtyA: boolean; patchB: unknown } | undefined;
+  const handle = connectNativeWatch(
+    url,
+    (event) => {
+      types.push(event.type);
+      applyStreamEvent(store, event);
+    },
+    { fetch, retryDelayMs: 0 },
+  );
+  handle.subscribe((state) => {
+    if (state.status === "retrying" && urls.length === 3) {
+      afterResume = {
+        conflicts: store.conflicts("a"),
+        dirtyA: store.isDirty("a", ["data", "value"]),
+        patchB: store.patch("b"),
+      };
+    }
+  });
+  closeOnLive(handle, 3);
+  await until(handle, "live");
+  store.setValue("a", ["data", "value"], "mine");
+  store.setValue("b", ["data", "value"], "mine too");
+  first.end();
+  await handle.closed;
+
+  assert.deepEqual(requested(urls), ["list", "watch@1", "watch@1", "list", "watch@7"]);
+  assert.deepEqual(types, [
+    ...["reset", "added", "added", "synced"],
+    ...["modified", "modified"],
+    ...["reset", "added", "synced"],
+  ]);
+  assert.deepEqual(afterResume, {
+    conflicts: [{ path: ["data", "value"], theirs: "theirs" }],
+    dirtyA: true,
+    patchB: { data: { value: "mine too" } },
+  });
+  assert.deepEqual(store.ids(), ["b"]);
+  assert.equal(store.server("b").metadata.resourceVersion, "7");
+  assert.deepEqual(store.draft("b").data, { value: "mine too", other: "x" });
+  assert.deepEqual(store.patch("b"), { data: { value: "mine too" } });
 });
 
 test("close during the list request, the list body, the watch request, the watch body and backoff", async (t) => {
@@ -872,7 +1425,15 @@ test("a subscriber or onError that throws stops the stream without retrying", as
 });
 
 test("the collection URL may not set what the connector sets", () => {
-  for (const param of ["watch=1", "resourceVersion=5", "limit=10", "continue=x", "resourceVersionMatch=Exact"]) {
+  for (const param of [
+    "watch=1",
+    "resourceVersion=5",
+    "limit=10",
+    "continue=x",
+    "resourceVersionMatch=Exact",
+    "sendInitialEvents=true",
+    "allowWatchBookmarks=false",
+  ]) {
     assert.throws(() => connectNativeWatch(`/k8s/api/v1/configmaps?${param}`, ignore), /must not set/, param);
   }
 });

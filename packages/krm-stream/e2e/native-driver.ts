@@ -5,7 +5,8 @@
 // the browser: the REAL connectNativeWatch feeding the REAL store under the default edit policy, and
 // the REAL native editor from examples/native-editor writing back through the same proxy, with no
 // gateway in between. After every state event and connection state it prints one JSON line
-// describing what the store holds, so the Go side can wait for the cluster's changes to arrive.
+// describing what the store holds, so the Go side can wait for the cluster's changes to arrive. The
+// event lines include `reset` and `synced`, so the Go side can tell a resumed watch from a snapshot.
 //
 // Commands, one per line on stdin:
 //
@@ -56,7 +57,13 @@ const handle = connectNativeWatch(
     applyStreamEvent(store, event);
     report({ event: event.type, members: members() });
   },
-  { retryDelayMs: 100, onError: (code, message, terminal) => report({ error: { code, message, terminal } }) },
+  {
+    retryDelayMs: 100,
+    // The resume case drops and expires watches several times within one healthy period; each
+    // reconnect still consumes the budget, so give it room to observe them all.
+    maxRetries: 20,
+    onError: (code, message, terminal) => report({ error: { code, message, terminal } }),
+  },
 );
 let live = false;
 handle.subscribe((state) => {
