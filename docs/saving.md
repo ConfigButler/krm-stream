@@ -132,7 +132,7 @@ and any receipt or Git workflow; connection state is not a save guarantee.
 | Situation / outcome | Suggested presentation | Host action |
 |---|---|---|
 | `version-stale`, no field conflicts | “Configuration refreshed. Your edits are intact; review and save again.” | Capture a new intent on the next deliberate Save. Do not show an empty conflict panel. |
-| `draft-conflict` | Show local and current values at each conflicting field. | Offer explicit resolution through store APIs; keep the rest of the form visible. |
+| `draft-conflict` | Show local and current values at each conflicting field. | Offer explicit resolution: `revert` takes the server's value, the [keep-local recipe](../examples/editor-recipes/README.md#keep-the-local-value-in-a-conflict) keeps the person's. Keep the rest of the form visible. |
 | Connection retrying or `recovering` | “Reconnecting. Your unsaved changes are still here.” | Disable writes until live; after a refused GET, require a later accepted guarded read before another write. |
 | `saved`, watch confirmation pending | “Saved to Kubernetes; waiting for live confirmation.” | Preserve later typing. Track any receipt separately from draft state. |
 | Session expiry or access denial | Explain sign-in or access outcome. | Handle identity-scoped recovery; do not retry terminal auth failures indefinitely or label them field conflicts. |
@@ -141,8 +141,9 @@ and any receipt or Git workflow; connection state is not a save guarantee.
 “Unsaved changes are still here” holds while the UID remains in the store. `removeResource` and
 snapshot pruning discard a deleted object's draft, so if recovery after deletion matters, keep a
 detached copy as edits change, **before** removal. Scope it to the original identity and UID, with a
-host-defined lifetime; it is for recovery, not a second draft to reconcile. Resolve conflicts through
-the store's APIs rather than a second application conflict registry.
+host-defined lifetime; it is for recovery, not a second draft to reconcile. The tested
+[recovery-copy recipe](../examples/editor-recipes/README.md#recover-work-after-a-deletion) does
+this. Resolve conflicts through the store's APIs rather than a second application conflict registry.
 
 ## Creating and deleting whole objects
 

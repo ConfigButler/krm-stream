@@ -29,7 +29,7 @@ Use the [adoption guide](../adopting.md), [saving guide](../saving.md) and
 | Priority | Remaining work | Completion evidence |
 |---|---|---|
 | 1 | Define convergence precisely — complete | [Evidence](../../conformance/README.md#convergence-evidence) |
-| 2 | Publish tested deletion-recovery and keep-local recipes | Executed examples preserve unsaved work and unrelated conflicts. |
+| 2 | Publish tested deletion-recovery and keep-local recipes — complete | [Recipes](../../examples/editor-recipes/README.md) and [tests](../../packages/krm-stream/test/recipes.test.ts) |
 | 3 | Harden real-API save composition and identity races | Exact-commit API evidence, separate from fake-client CI. |
 | 4 | Measure and implement upstream continuation | Same-workload comparison proves continuity, bounded recovery and authorization. |
 
@@ -42,11 +42,15 @@ Completed: [contract and executable final-write evidence](../../conformance/READ
 
 ## 2. Tested adoption recipes
 
+Completed: the [editor recipes](../../examples/editor-recipes/README.md) keep a recovery copy before
+deletion or pruning and keep a local value in a conflict, executed by the client suite through
+stream events and linked from the saving and Vue guides. The acceptance criteria below are what
+those tests cover.
+
 Keep the existing [user-facing outcomes](../saving.md#what-the-person-editing-sees) and host-owned
 [receipt contract](../saving.md#answer-204-or-a-receipt-and-let-the-watch-echo-it) in the saving guide.
-The remaining work is executable guidance, using existing store and Vue example tests.
 
-When implementing after proposal 0009, use its event-only store input, consolidated connector and
+For proposal 0009's create/delete guidance, use its event-only store input, consolidated connector and
 guarded response contract. Successful creates/deletes remain host-owned pending confirmations until
 their echo or a completed snapshot confirms state; do not restore unguarded adoption or optimistic
 store deletion in a recipe. Keep server acceptance separate from confirmation to avoid duplicate

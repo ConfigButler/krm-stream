@@ -15,6 +15,9 @@ projected reconciliation, and a host-owned Kubernetes endpoint that preserves re
 
 [Vue adapter](vue/README.md) is a copyable, typechecked composable with reactivity and cleanup tests.
 
+[Editor recipes](editor-recipes/README.md) keep a recovery copy of a draft before its object is
+deleted, and resolve a conflict in favour of the local value. Both are executed by the client suite.
+
 [Shared ConfigMap host](../gateway/kube/examples/sharedstream/README.md) is a compiled Go example
 with participant SelfSubjectReview, service-account SARs and shared data, bounded SSE writes,
 session expiry, lifecycle counters and a manually run real-cluster fixture.
