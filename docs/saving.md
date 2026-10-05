@@ -1,12 +1,27 @@
 # Saving edits safely
 
-krm-stream is a read library. Your application owns its HTTP save endpoint, audit policy and
-Kubernetes client. The recommended sequence is:
+The optional editor preserves drafts as the [live resource view](why-a-gateway.md) changes and
+captures a narrow save intent. Your application owns its HTTP save endpoint, write authorization,
+audit policy and Kubernetes client. Read the [editor state model](client-state-model.md) for edit
+policy, three-way reconciliation and explicit conflict resolution. The supported save sequence is:
 
 1. the browser captures a save intent;
 2. the host validates it and sends a conditional Kubernetes merge PATCH;
-3. the host answers 204, and the watch echoes the write back into the store;
-4. on 409, the browser reconciles a guarded, projected GET, and the person saves again deliberately.
+3. the host answers 204 or a receipt; the watch normally reflects a visible change, with a guarded
+   projected read when an echo cannot confirm the result;
+4. on 409, the browser reconciles a guarded, projected GET, and the person reviews and saves again
+   deliberately.
+
+Serialize saves per editor, resolve field conflicts before submission and enable writes while the
+connection is live. Capture intent before any await and preserve later typing. A dirty draft, an
+accepted write and application progress are separate states; neither a clean form nor a watch echo
+proves a rollout or Git workflow completed. A definite 409 rejection differs from a lost response
+whose write outcome is unknown; do not blindly replay an ambiguous write.
+
+This guide describes projected editing through the current gateway. The requested native connector
+starts with read-only viewing. Native editing is a later slice requiring an explicit read/write and
+edit-policy contract before sharing these recipes. A raw response must never be fed into a
+projected editor as recovery or save confirmation.
 
 The [conditional-save example](../examples/conditional-save/README.md) implements all of it: a
 compilable host endpoint, client reconciliation, race tests and a real-cluster 409 test.
@@ -131,6 +146,9 @@ guarantee.
 
 Sustained invisible churn can prevent save progress. An accepted projected GET advances the base
 without a snapshot. When no field conflicts exist, explain the refreshed base and offer a new save.
+Bounded recovery of the originally submitted intent and optional coalesced version delivery are
+[evaluation work](proposals/0006-stream-and-save-implementation-plan.md#5-save-progress-under-suppressed-churn),
+not supported automatic retry policies. The default spec view stays quiet for status-only updates.
 
 ## What the person editing sees
 
@@ -141,7 +159,8 @@ and any receipt or Git workflow; connection state is not a save guarantee.
 |---|---|---|
 | `version-stale`, no field conflicts | “Configuration refreshed. Your edits are intact; review and save again.” | Capture a new intent on the next deliberate Save. Do not show an empty conflict panel. |
 | `draft-conflict` | Show local and current values at each conflicting field. | Offer explicit resolution: `revert` takes the server's value, the [keep-local recipe](../examples/editor-recipes/README.md#keep-the-local-value-in-a-conflict) keeps the person's. Keep the rest of the form visible. |
-| Connection retrying or `recovering` | “Reconnecting. Your unsaved changes are still here.” | Disable writes until live; after a refused GET, require a later accepted guarded read before another write. |
+| Connection `retrying` / `syncing` | “Reconnecting. Your unsaved changes are still here.” | Disable writes until live. |
+| Example editor outcome `recovering` | “Refreshing configuration. Your edits are still here.” | A usable base is not established; require an accepted guarded read before another write. This is not a connection status. |
 | `saved`, watch confirmation pending | “Saved to Kubernetes; waiting for live confirmation.” | Preserve later typing. Track any receipt separately from draft state. |
 | Session expiry or access denial | Explain sign-in or access outcome. | Handle identity-scoped recovery; do not retry terminal auth failures indefinitely or label them field conflicts. |
 | `unavailable`, deleted/recreated UID | “This configuration was removed. A replacement must be opened separately.” | Offer copy-out from a retained recovery copy; never apply the old draft to the replacement. |

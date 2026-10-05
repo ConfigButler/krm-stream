@@ -3,7 +3,8 @@
 **Status: design rationale for the remaining stream and save work.**
 
 [Proposal 0006](0006-stream-and-save-implementation-plan.md) owns work order and acceptance criteria.
-Use the [saving guide](../saving.md) for current host integration.
+Use [watching resources](../why-a-gateway.md) for view selection, the [editor model](../client-state-model.md)
+for optional reconciliation and the [saving guide](../saving.md) for current host integration.
 
 Kubernetes owns identity and conditional writes. The library supplies projected reads and one draft
 store; the host owns credentials, write policy and presentation. The sections below explain the
@@ -122,11 +123,11 @@ losses of trustworthy state can also require initialization. Bookmarks are usefu
 promises of a fixed heartbeat cadence. [Watch recovery semantics](https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes)
 
 **Upstream:** today, routine watch closure can cause a new initial-state cycle even when retained
-Kubernetes history could permit continuation. Prefer investigating a resumable Kubernetes backend
-first. It could keep the existing `Watcher` seam and SSE protocol, returning a resync only when it
-cannot establish continuity. The upstream [client-go reflector](https://github.com/kubernetes/client-go/blob/master/tools/cache/reflector.go)
-is the reference to study before implementing more watch machinery. It must track the upstream checkpoint, including appropriate bookmarks,
-rather than infer one from a browser's last visible resource.
+Kubernetes history could permit continuation. Proposal 0006 assesses client-go options and proposes a
+bounded loop behind the existing `Watcher` seam, preserving SSE and returning a resync when continuity
+cannot be established. The upstream [client-go reflector](https://github.com/kubernetes/client-go/blob/master/tools/cache/reflector.go)
+is useful reference machinery. A continuation checkpoint belongs to the backend, including appropriate
+bookmarks; it cannot be inferred from a browser's last visible resource. This is still proposed work.
 
 **Downstream:** spec §7 deliberately prohibits SSE resume in v1. SharedBackend can serve a warm snapshot
 without opening one upstream watch per subscriber, but serialization, network bytes and browser
@@ -151,8 +152,11 @@ Upstream continuation is a named follow-up, ahead of any downstream replay desig
 | Add a write-base/read-ticket abstraction | New host/server protocol | Could coordinate reads and intended writes | State, expiration, identity binding and replay concerns; too much core machinery now |
 | Move host to SSA or targeted JSON Patch | No SSE change | Different write tradeoffs | Host policy/validation work; not interchangeable concurrency semantics |
 
-**Current choice:** retain existing emissions and explicit host save outcomes. Prefer complete existing event shapes over a new
-version-only event if measurements later justify version delivery. If changing a named projection's
+**Current choice:** retain existing emissions and explicit host save outcomes.
+[Save-progress evaluation in proposal 0006](0006-stream-and-save-implementation-plan.md#5-save-progress-under-suppressed-churn)
+evaluates bounded submitted-intent recovery and coalesced version delivery under sustained churn.
+This is an evaluation request, not an implemented retry policy or wire event. Prefer complete
+existing event shapes over a new version-only event if measurements later justify version delivery. If changing a named projection's
 promised suppression behavior, use an explicit new contract/projection identity or a coordinated
 pre-1.0 change; do not silently repurpose `krm-spec/v1`. Pre-release naming flexibility is useful,
 but it does not excuse ambiguous guarantees.
@@ -169,8 +173,8 @@ recreation between those operations must never make the old draft modify the new
 validates UID immutability, but validation/storage ordering can affect the returned error.
 [Metadata update validation](https://github.com/kubernetes/apimachinery/blob/master/pkg/api/validation/objectmeta.go)
 
-The UID-race response is not established by the existing stale-RV 409 test. Add a real API-server test
-that forces this race, records the structured Kubernetes Status and verifies the replacement is
-unchanged. If the host normalizes an identity-mismatch error to a conflict response, classify that
-specific case. Keep schema/admission validation failures as validation errors; do not map every 422
-to 409. Preserve useful structured error information without exposing a raw protected object.
+The real-API composition tests now force this preflight/PATCH race: Kubernetes checks the captured
+resourceVersion before UID, returning a plain 409. The example host follows the rejection with one
+GET to classify a replacement while leaving it unchanged. See [the completed baseline](0006-stream-and-save-implementation-plan.md#completed-baseline)
+and [saving](../saving.md#on-409-reconcile-and-save-again). Preserve structured Kubernetes Status and
+keep schema/admission errors distinct; do not map every 422 to a conflict.

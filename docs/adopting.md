@@ -1,8 +1,17 @@
 # Adopting krm-stream
 
-This is the recommended route from an existing Go application to a live KRM view in the browser. The
-library owns the read path. Your application owns identity, authorization policy, Kubernetes
-credentials and writes.
+Start with a live resource view, then add editing only where the page needs it. This guide wires the
+currently supported gateway stream into an existing Go application. The library owns stream recovery
+and browser reconciliation; your application owns identity, authorization policy, credentials and writes.
+
+Choose scope, projection and sharing separately using [watching resources](why-a-gateway.md).
+Choose the source for the guarantees the page needs: native access retains original resources through
+an existing host proxy; the gateway adds projected views, redaction, suppression and optional sharing,
+delivered over SSE. Both should reuse a fetch-based frontend lifecycle.
+
+The [first native slice](field-reports/third-our-identity.md#slice-1-a-native-viewer) is a small read-only
+LIST/WATCH connector with re-list recovery and a viewer. Native editing is separate and does not block
+that slice. Today the supported connector uses the gateway wiring below.
 
 ## 1. Mount the stream endpoint
 
@@ -101,12 +110,13 @@ Use the `Authorizer` to pin a user to a namespace or target before any watch ope
 ```ts
 import {
   LiveResourceStore,
+  readOnlyPolicy,
   applyStreamEvent,
   connectResourceStream,
   resourceStreamURL,
 } from "@configbutler/krm-stream";
 
-const store = new LiveResourceStore();
+const store = new LiveResourceStore(readOnlyPolicy); // list or viewer
 const url = resourceStreamURL("/resource-stream/v1", {
   target: "production",
   version: "v1",
@@ -115,17 +125,25 @@ const url = resourceStreamURL("/resource-stream/v1", {
   projection: "krm-full/v1",
 });
 
+const stopRendering = store.subscribe(() => render(store));
 const connection = connectResourceStream(url, event => applyStreamEvent(store, event));
 renderConnection(connection.state.status);
-connection.subscribe(state => renderConnection(state.status)); // gaps recover with a fresh snapshot
-connection.closed.catch(reportApplicationError); // the callback threw, and the stream stopped
-store.subscribe(() => render(store));
+const stopConnection = connection.subscribe(state => renderConnection(state.status));
+connection.closed.catch(reportApplicationError); // host callback failures stop the stream
+
+// On view disposal:
+stopRendering();
+stopConnection();
+connection.close();
 ```
 
 Fetch sends the same-origin session cookie, and the connection recovers on its own after network
 failures and sequence gaps.
 
-Saving is the host's: see [saving](saving.md). A quiet stream can still hold an older write version;
+For an editor, choose `new LiveResourceStore()` with the default policy or a form-specific policy.
+Render the draft, edit through the store methods and resolve conflicts explicitly; see the
+[editor state model](client-state-model.md). Saving is the host's: see [saving](saving.md).
+A quiet stream can still hold an older write version;
 see [why a quiet stream can reject a save](saving.md#why-a-quiet-stream-can-still-reject-a-save).
 
 ## 4. Optional: recheck quiet streams on a timer

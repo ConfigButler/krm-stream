@@ -9,7 +9,14 @@ host's scope and projection decisions. How Kubernetes checks a caller depends on
 | Shared | One service identity | Authorize every subscriber before serving cached objects; use `kube.SubjectAccessReviewAuthorizer` for Kubernetes RBAC decisions. |
 
 Prefer a per-user backend: Kubernetes RBAC is then the boundary by construction. The wiring for both
-is in [adopting](adopting.md).
+is in [adopting](adopting.md). Watch sharing is an efficiency choice; it never grants a subscriber
+the service identity's access. Full/spec Secret redaction also does not replace scope authorization.
+
+These settings describe the current gateway. The requested native fetch connector uses a host proxy
+and the same session boundary. Native retains original authorized resources; gateway SSE delivers
+projected views. Neither source may bypass refusal or extend session lifetime. The first native
+slice is read-only and must stop on terminal authentication failure, with a new connection after
+access is restored; native editing is separate.
 
 ## Browser sessions
 

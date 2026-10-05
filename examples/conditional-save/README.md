@@ -1,7 +1,10 @@
 # Conditional save with a live draft
 
-This example composes the existing store, connector and host-owned writes. It adds no merge
-algorithm or shared watch implementation.
+Add this controller when a live resource view needs editing. It composes the existing store,
+fetch-based gateway connector and host-owned writes under the [editor model](../../docs/client-state-model.md)
+and [saving contract](../../docs/saving.md). Draft dirtiness, write acceptance and application progress
+remain separate; typing after Save stays in the draft. The example uses the current projected/SSE
+path and performs no automatic write retry.
 
 - [editor.ts](editor.ts) captures a save intent synchronously, handles HTTP 409 by reconciling a
   projected GET, retains in-flight edits and rejects late responses superseded by the watch.
@@ -48,7 +51,8 @@ resourceVersion into the Kubernetes patch. A stale version produces a safe 409, 
 bookkeeping-only changes were suppressed by the full projection. Spec projection also suppresses
 status-only updates. This is safe rejection, but sustained churn can hinder save progress. An accepted
 GET advances the base without requiring a snapshot. Reconcile first; never transplant an old
-patch onto the latest version. No automatic write retry is performed.
+patch onto the latest version. [Save-progress evaluation](../../docs/proposals/0006-stream-and-save-implementation-plan.md#5-save-progress-under-suppressed-churn)
+compares possible improvements without changing this supported baseline.
 
 This endpoint returns 204 for successful writes. A host may instead return a receipt-only HTTP 200
 under the [saving guide’s receipt contract](../../docs/saving.md#answer-204-or-a-receipt-and-let-the-watch-echo-it);

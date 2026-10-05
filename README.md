@@ -10,215 +10,184 @@
 
 # krm-stream
 
-Live Kubernetes resource updates for browser apps.
+Efficient live Kubernetes views for browser applications, with optional editing.
 
-`krm-stream` turns a Kubernetes watch into a small, browser-safe stream. It ships a Go gateway, a
-headless TypeScript store with zero runtime dependencies, and shared conformance fixtures, so your
-product can show live cluster state while people are editing it.
+`krm-stream` helps applications watch Kubernetes resources while controllers and other users keep
+changing them. Its gateway delivers a defined resource view, withholds selected values, suppresses
+irrelevant updates and optionally shares upstream watches. Its headless TypeScript client adds connection lifecycle, recovery and
+live state and reconciles incoming changes with local drafts when a page needs editing.
 
-## Is this for you?
+Your application supplies authentication, authorization policy, Kubernetes credentials, UI and writes.
+The browser client has zero runtime dependencies and chooses no UI framework.
 
-**Yes, if:**
+## Start with the watch
 
-- You want to consume a Kubernetes **watch from a browser**, without handing the browser a cluster
-  credential or turning on CORS across your API server.
-- You want to **live-edit Kubernetes resources**, where a concurrent server change is merged into
-  what the user is typing rather than clobbering it, and a genuine conflict is surfaced instead of
-  silently resolved. That is the [three-way merge](docs/glossary.md).
-- You want to **bound the number of real watches** on your API server. Ten tabs on one namespace
-  should be one upstream watch, not ten.
-- You are building a **product**, not a Kubernetes dashboard. The store is headless and picks no UI
-  framework.
+Kubernetes already provides a change feed. krm-stream adds a browser lifecycle and resource-view
+contract, reducing work at different points:
 
-**Probably not, if:**
+| Capability | Benefit | Boundary |
+|---|---|---|
+| Scope | Watch a resource kind, namespace, name or allowed label selector | The host authorizes the scope; a selector does not grant access |
+| Projection and redaction | Deliver the fields a view needs; full/spec views withhold Kubernetes Secret values | Secret key paths and change revisions remain visible; arbitrary sensitive CRD fields are not automatically redacted |
+| Update suppression | Avoid downstream events when projected content and redaction records are unchanged | The gateway still receives upstream changes; fewer events do not guarantee a current write version |
+| Optional watch sharing | Use one upstream watch for matching scopes on the same shared backend | Every subscriber is authorized separately and receives its own snapshot and updates |
 
-- You just want a **generic three-way merge library**. This store includes KRM identity, projection
-  and redaction rules, plus optional schema-based keyed-list merging.
-- You want a **ready-made Kubernetes dashboard**. Use [Headlamp](https://headlamp.dev/). See
-  [alternatives](docs/alternatives.md).
-- You want to **write to the cluster from the browser**. krm-stream is the read-and-edit half: it
-  captures a merge patch and version together. Your application validates and performs the write.
-  See [saving edits safely](docs/saving.md).
+Choose a view explicitly:
 
-## What is KRM?
+| View | Delivered content | Updates suppressed |
+|---|---|---|
+| `krm-full/v1` (default) | Resource including status, with Secret values withheld | Bookkeeping-only changes |
+| `krm-spec/v1` | Full view with status omitted | Bookkeeping-only and status-only changes |
+| `krm-raw/v1` | Secret values included when host policy permits | Bookkeeping-only changes |
 
-**KRM** is the Kubernetes Resource Model: the shape every Kubernetes object has (`apiVersion`,
-`kind`, `metadata`, and kind-specific fields such as `spec`, `status` or ConfigMap `data`). Custom
-resources use the same conventions,
-which is why this works for your product's own objects, a `Database`, a `FeatureFlag`, a `Tenant`,
-and not only for cluster infrastructure.
+All three remove `metadata.managedFields` and the last-applied-configuration annotation.
+`krm-raw/v1` is still a projection. A hidden Secret rotation produces a redaction update in full/spec.
 
-Never touched a cluster? The [glossary for frontend developers](docs/glossary.md).
+Each current gateway connection starts with a complete snapshot, then follows visible changes. On reconnect,
+a fresh snapshot repairs missed changes and deletes; resources are pruned only when it completes.
+This is a live state feed: intermediate updates may be coalesced. See [watching resources](docs/why-a-gateway.md).
 
-## Why a gateway
+## Choose a source
 
-Kubernetes already has a good change feed: a watch, documented under
-[efficient detection of changes](https://kubernetes.io/docs/reference/using-api/api-concepts/#efficient-detection-of-changes).
-Direct browser access requires exposing cluster credentials and arranging cross-origin access.
-A raw watch also carries whole objects, including Secret values. The embedded gateway uses host-owned
-credentials, enforces the selected disclosure policy and emits SSE. Hosts can opt into one shared
-upstream watch per scope with per-subscriber authorization.
+Start with the resource state and guarantees the page needs; framing is an implementation detail.
 
-[Why a gateway](docs/why-a-gateway.md) works through this in full.
+| Source | Use it for | Current support |
+|---|---|---|
+| Native through a host proxy | Original Kubernetes resources without adopting the gateway; credentials stay on the host | A focused read-only fetch connector is [next work](docs/field-reports/third-our-identity.md#native-watch-connector) |
+| Gateway | Named views, Secret-value redaction, suppression and optional upstream sharing | Supported today through the fetch/SSE connector |
 
-## How it fits
+Native is the straightforward starting point for hosts that already proxy Kubernetes. Gateway SSE
+is the delivery format for projected views; its added capabilities remain useful. Both sources should
+reuse connection state, errors, cancellation, bounded recovery and state application.
+The first native slice lists then watches and re-lists on reconnect. Native editing, resume and a
+larger comparison example follow separately. No source fallback may bypass a refused view.
+
+## Watch a resource view today
+
+```ts
+import {
+  LiveResourceStore, readOnlyPolicy, applyStreamEvent,
+  connectResourceStream, resourceStreamURL,
+} from "@configbutler/krm-stream";
+
+const store = new LiveResourceStore(readOnlyPolicy);
+const stopRendering = store.subscribe(() => renderResources(store));
+const connection = connectResourceStream(
+  resourceStreamURL("/resource-stream/v1", {
+    target: "production", version: "v1", resource: "configmaps", namespace: "app",
+  }),
+  event => applyStreamEvent(store, event),
+);
+renderConnection(connection.state.status);
+const stopConnection = connection.subscribe(state => renderConnection(state.status));
+connection.closed.catch(reportApplicationError);
+
+// On view disposal:
+stopRendering();
+stopConnection();
+connection.close();
+```
+
+The current viewer uses `LiveResourceStore(readOnlyPolicy)`; a dedicated read-only store is deferred.
+The connector delivers state events independently of editing. It uses same-origin cookies by default,
+exposes connection state and bounded retries, and stops on terminal refusals. Apply each event
+synchronously. The [client README](packages/krm-stream/README.md) explains lifecycle and errors.
+For a browser without a bundler, the same API is available in one file through
+`@configbutler/krm-stream/bundle`.
+
+## Add editing when the page needs it
+
+Use `new LiveResourceStore()` for an editor. It keeps the last delivered server object separate from
+the person's draft. Incoming changes update untouched fields, preserve local edits and record
+conflicts when both sides changed the same editable field differently.
+
+For example, someone changes a Deployment's image while an autoscaler changes its replicas. The
+replicas follow the server and the image edit stays. If another person changes that image to a
+different value, the editor keeps the local value and exposes the disagreement for review.
+
+```ts
+const store = new LiveResourceStore(); // use this store in the connection setup for an editor
+store.setValue(uid, ["data", "message"], "hello"); // ConfigMap field edit
+store.conflicts(uid); // disagreements to resolve before Save
+const intent = store.captureSave(uid); // detached { uid, resourceVersion, patch }
+// Your save controller submits this intent after review while the connection is live.
+```
+
+The default policy allows `spec`, labels, annotations, `data` and `stringData`; status, immutable
+metadata and redacted paths remain read-only. A host can narrow the policy for its form.
+
+The intended Save flow is explicit: capture the patch, UID and resource version together; have the
+host authorize and validate it; apply a conditional merge PATCH; then observe the projected result
+through the stream or a guarded projected read. Preserve typing made after Save. A version rejection
+can occur without any field conflict, because suppressed updates still advance Kubernetes versions.
+The current recovery is a guarded read, review and another deliberate Save.
+
+**A dirty draft, an accepted write and application progress are separate states.** A successful PATCH
+can precede its watch observation, and neither proves a workload has finished rolling out.
+
+Use [the editor state model](docs/client-state-model.md) for reconciliation, conflict resolution and
+arrays, and [saving edits safely](docs/saving.md) for the complete host-owned write contract. The
+[conditional-save example](examples/conditional-save/README.md) executes that contract.
+
+## How it fits today
 
 ```mermaid
 flowchart LR
   api["Kubernetes API"]
-  gateway["Embedded Go gateway<br/>Enforces host authorization<br/>Projection and redaction"]
-  store["Browser store<br/>Delivered state, local draft and conflicts"]
-  ui["Your form or live view"]
-  save["Your Go save handler<br/>Write authorization and patch validation"]
-
-  api -->|"Snapshot and watch updates"| gateway
-  gateway -->|"One-way SSE"| store
-  store -->|"Render draft and live status"| ui
+  gateway["Go gateway<br/>Scopes, views and optional sharing"]
+  connector["Fetch connector<br/>State events and recovery"]
+  store["Resource store<br/>Live state and optional drafts"]
+  ui["Your list, viewer or form"]
+  save["Your save endpoint<br/>Authorize, validate and conditionally PATCH"]
+  api -->|"Snapshot and watch"| gateway
+  gateway -->|"SSE"| connector
+  connector --> store
+  store --> ui
   ui -->|"Local edits"| store
-  ui -->|"On Save: capture patch, UID and RV from store"| save
-  save -->|"Conditional PATCH"| api
-
-  classDef library fill:#dff3ff,stroke:#1677a4,color:#062f45;
-  classDef application fill:#e4f7e8,stroke:#27834c,color:#113d23;
-  classDef upstream fill:#f8e0ef,stroke:#a83970,color:#4b1230;
-  class gateway,store library;
-  class save,ui application;
-  class api upstream;
+  ui -->|"Captured save intent"| save
+  save --> api
 ```
 
-The library owns the read stream and browser reconciliation. Your application owns identity,
-authorization policy, Kubernetes credentials, and writes. The browser never receives a Kubernetes
-credential or a raw API-server URL. The blue boxes are the library; the green boxes are your product.
-Both Go components run inside your application: the host decides authorization policy, and the
-embedded gateway enforces it. A successful write returns through the Kubernetes watch as another
-live update.
-
-Each connection starts with a complete projected snapshot, then follows visible changes. The store
-keeps that delivered state separate from local edits. A quiet stream can still hold an older write
-version: see [why a quiet stream can reject a save](docs/saving.md#why-a-quiet-stream-can-still-reject-a-save).
+The gateway runs inside your Go application. Per-user backends let Kubernetes authorize the caller's
+reads; a shared backend uses a service identity and requires checks for each subscriber. Sharing
+reduces duplicate upstream work; access controls and host limits govern who can consume it.
+Gateway upstream continuation and improved save progress during suppressed churn are proposed work.
+New browser connections receive a fresh snapshot under the current protocol.
 
 ## Start here
 
-**Want it running in minutes?** [krm-foyer](https://github.com/ConfigButler/krm-foyer) is a
-ready-made backend for browser apps on Kubernetes: OIDC sign-in, server-side sessions, a `/k8s` API
-proxy, and krm-stream's live resources, with each watch opened as the signed-in user so Kubernetes
-RBAC decides what they see. Its `task demo` starts a test cluster and an example app. Start there if
-you don't already have a Go backend to embed the gateway in. To build the integration yourself, read
-on.
+If you already have a Go host, follow [adopting krm-stream](docs/adopting.md). For a ready-made host,
+[krm-foyer](https://github.com/ConfigButler/krm-foyer) integrates sign-in, sessions, native API proxying
+and krm-stream gateway hosting. The host's dependency version determines which APIs are available.
 
-There are two halves, and they are usually two different people.
-
-### The browser half
-
-No bundler, no framework, no Kubernetes client. The connector uses fetch and hands each resource
-event to a callback; the store is plain ESM:
-
-```ts
-import { LiveResourceStore, applyStreamEvent, connectResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
-
-const store = new LiveResourceStore();
-
-const connection = connectResourceStream(
-  resourceStreamURL("/resource-stream/v1", {
-    target: "production",
-    version: "v1",
-    resource: "configmaps",
-    namespace: "app",
-  }),
-  (event) => {
-    const change = applyStreamEvent(store, event);
-    render(change.uid); // what moved, and which resource it moved on
-  },
-);
-connection.subscribe((state) => renderConnection(state.status)); // connecting, syncing, live, retrying…
-connection.closed.catch(reportApplicationError); // the callback threw, and the stream stopped
-
-// The user edits. The server keeps changing underneath them. Neither wins by accident.
-store.setValue(uid, ["spec", "replicas"], 3);
-store.conflicts(uid); // paths where the server disagreed with an edit the user actually made
-store.patch(uid); // an RFC 7386 merge patch of just their changes, or null
-
-// In your host/view teardown callback:
-connection.close(); // stop the stream and pending retries
-```
-
-If you have no bundler at all and vendor the library by copying it, import
-[`@configbutler/krm-stream/bundle`](packages/krm-stream/README.md): the same API in one file.
-
-### The server half
-
-Mount a scoped stream endpoint in an existing Go application:
-
-```go
-mux.Handle("/resource-stream/v1", gateway.Handler(gateway.Options{
-	Principal: func(r *http.Request) (gateway.Principal, error) { return userFromSession(r) },
-	Scopes: gateway.ScopePolicy{
-		Targets: []string{"production"},
-		Resources: []gateway.GroupResource{
-			{Resource: "configmaps", Scope: gateway.ResourceScopeNamespaced},
-		},
-	},
-	StreamConfig: gateway.StreamConfig{
-		Authorizer: authorizeScope,
-		Clients: func(_ context.Context, _ string, p gateway.Principal) (gateway.Backend, error) {
-			return kube.NewBackendForConfig(restConfigFor(p.(*User)))
-		},
-		Projections: gateway.StaticProjection(gateway.ProjectionFull),
-	},
-}))
-```
-
-The Go side owns identity, authorization, the Kubernetes credential, and the scope a caller is
-allowed to ask for. It never lets the browser choose which cluster to talk to.
-
-`LiveResourceStore` keeps server truth and the local draft separate, reconciles live updates with a
-three-way merge, records conflicts, and builds RFC 7386 merge patches. Your application applies any
-patch through its own save endpoint, which is the one place a write can happen.
-
-## Packages
+KRM means the Kubernetes Resource Model: `apiVersion`, `kind`, `metadata` and kind-specific fields
+such as `spec`, `status` or ConfigMap `data`. Custom resources follow the same conventions. See the
+[frontend glossary](docs/glossary.md) and [alternatives](docs/alternatives.md) for context.
 
 | Package | Purpose |
 |---|---|
-| `github.com/ConfigButler/krm-stream/gateway` | Dependency-free Go stream gateway and SSE handler. |
-| `github.com/ConfigButler/krm-stream/gateway/kube` | Optional `client-go` backend and SubjectAccessReview authorizer. |
-| `@configbutler/krm-stream` | Official dependency-free ESM client store and transports. |
-| [`spec/v1.md`](spec/v1.md) | Normative protocol contract. |
-| [`conformance/`](conformance/) | Shared fixtures exercised by the Go gateway and TypeScript client. |
-
-## Boundaries
-
-- No browser token handling or raw API-server URLs.
-- No authorization system: the host provides `Principal`, `Authorizer`, and `ClientFor`.
-- No write endpoint: hosts validate and apply their own patches.
-- No framework dependency in the browser client.
-- No `client-go` dependency in the core gateway.
-
-The important safety rule is simple: a projected or redacted field must never be written back by a
-browser. Use [`gateway.ValidateMergePatch`](gateway/patch.go) in the host save handler.
+| `github.com/ConfigButler/krm-stream/gateway` | Dependency-free Go stream gateway and SSE handler |
+| `github.com/ConfigButler/krm-stream/gateway/kube` | Optional client-go backend and SubjectAccessReview authorizer |
+| `@configbutler/krm-stream` | Dependency-free ESM connector and resource/editor store |
+| [spec/v1.md](spec/v1.md) and [conformance](conformance/README.md) | Shared normative contract and executable fixtures |
 
 ## Guides
 
-- [Glossary for frontend developers](docs/glossary.md): the Kubernetes vocabulary you actually need, and where each word shows up in the library.
-- [Why a gateway](docs/why-a-gateway.md): why the browser cannot watch the API server, and why watches are shared.
-- [Adopting krm-stream](docs/adopting.md): same-origin cookie, bearer-token, and shared-watch setups.
-- [Authentication and authorization](docs/auth.md): identity and RBAC boundaries.
-- [Saving edits safely](docs/saving.md): patch validation and host write responsibilities.
-- [Operating krm-stream](docs/operations.md): metrics, alerts, and runtime controls.
-- [Client state model](docs/client-state-model.md): drafts, conflicts, redactions, and keyed lists.
-- [Alternatives and prior art](docs/alternatives.md): how this differs from Kubernetes clients, browser dashboards, and config-as-data systems.
-- [Releasing](docs/releasing.md): release workflow and publication prerequisites.
-- [Upgrading from 0.7](docs/migrating.md): the one browser connector and the gateway's shared stream configuration.
+- [Watching resources](docs/why-a-gateway.md): scopes, views, suppression, sharing and recovery.
+- [Adoption](docs/adopting.md): host and browser wiring.
+- [Editor state model](docs/client-state-model.md): drafts, conflicts, redactions and arrays.
+- [Saving](docs/saving.md): conditional writes, recovery and user-facing outcomes.
+- [Authorization](docs/auth.md) and [operations](docs/operations.md): identity, revocation and runtime limits.
+- [Examples](examples/README.md): browser, conditional editor, recovery recipes and Vue integration.
+- [Delivery plan](docs/proposals/0006-stream-and-save-implementation-plan.md): completed work, open work, ordering and dependencies.
+- [Upgrading from 0.7](docs/migrating.md) and [releasing](docs/releasing.md).
 
-## Requirements and maturity
+## Requirements and development
 
-The project is pre-1.0. Protocol and API changes may still be made before 1.0.
-
-- Go 1.27.1 for the gateway.
-- Node 24 for client development and tests.
-- Kubernetes 1.35+ for strict resource-version ordering. `OrderingLenient` supports known
-  non-conformant or aggregated APIs at the cost of per-object monotonic ordering.
-
-## Development
+The project is pre-1.0; protocol and API changes may still be made before 1.0.
+Go 1.27.1 and Node 24 are required for development. Kubernetes 1.35+ supports strict resource-version
+ordering; `OrderingLenient` accommodates known non-conformant or aggregated APIs with a reduced
+per-object monotonicity guarantee.
 
 ```bash
 task fixtures-check
@@ -227,5 +196,4 @@ task lint
 task build-client
 ```
 
-See [CONTRIBUTING.md](CONTRIBUTING.md) for the fixture and test workflow. Licensed under
-[Apache-2.0](LICENSE).
+See [CONTRIBUTING.md](CONTRIBUTING.md). Licensed under [Apache-2.0](LICENSE).

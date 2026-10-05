@@ -1,115 +1,93 @@
-# Proposal 0006: Remaining stream and save work
+# Proposal 0006: Delivery plan for watch streams and optional editing
 
-**Status: active follow-up plan.**
+**Status: active delivery plan, updated 2026-10-05.** This is the single inventory of completed work,
+open work and ordering. The starting implementation includes connector separation, Go API cleanup
+and real-API save-composition tests. Detailed contracts stay in the linked proposals and guides
+rather than becoming another roadmap.
 
-Follow the standing [design rules](../../CONTRIBUTING.md#design-rules) and
-[release policy](../releasing.md). [Proposal 0005](0005-kubernetes-stream-and-save-semantics.md)
-explains the unresolved tradeoffs; this document owns work order and acceptance criteria.
+Start with [watching resources](../why-a-gateway.md); add the [editor](../client-state-model.md) only
+where a page needs drafts. Prioritize a read-only native fetch connector for hosts with a proxy;
+the gateway remains the projected source with redaction, suppression and sharing, delivered over SSE.
+Follow the [design rules](../../CONTRIBUTING.md#design-rules) and [release policy](../releasing.md).
+[Proposal 0005](0005-kubernetes-stream-and-save-semantics.md) owns the stream/save tradeoffs.
 
-[Proposal 0007](0007-shared-stream-host-integration.md) proposes bounded HTTP delivery, lifecycle
-observations and tested shared-host composition. That work can support the authorization bounds
-and continuation measurements below, but adds no dependency or acceptance gate to this plan.
-Hosts may demonstrate the existing requirements with their own bounded sinks and instrumentation.
+## Completed work
 
-[Proposal 0009](0009-stream-and-editor-separation.md) separates browser stream consumption from the
-optional editor layer. It owns that API and package-boundary work; this plan retains the existing
-behavioral follow-ups and acceptance criteria. Priorities 2–3 below form the editor track, and
-priority 4 forms the stream track. Deliver them independently. Complete the browser separation
-before expanding the editor's public API; it does not block gateway fixes, real-API evidence or
-upstream continuation.
+“Implemented” below means present in this checkout; it does not establish that the current stack is
+merged, released or adopted by a host. Final-commit validation and consumer dependency upgrades
+remain separate delivery steps.
 
-[Proposal 0010](0010-gateway-api-cleanup.md) owns separate Go API cleanup. Use its final serving and
-configuration names once implemented; it adds no acceptance gate to the behavioral work here.
-
-## Baseline and order
-
-Use the [adoption guide](../adopting.md), [saving guide](../saving.md) and
-[conditional editor](../../examples/conditional-save/README.md) for current behavior.
-
-| Priority | Remaining work | Completion evidence |
+| Done now | Result | Reference |
 |---|---|---|
-| 1 | Define convergence precisely — complete | [Evidence](../../conformance/README.md#convergence-evidence) |
-| 2 | Publish tested deletion-recovery and keep-local recipes — complete | [Recipes](../../examples/editor-recipes/README.md) and [tests](../../packages/krm-stream/test/recipes.test.ts) |
-| 3 | Harden real-API save composition and identity races — implemented | [`TestRealAPI` cases](../../gateway/kube/composition_e2e_test.go), run by `task test-real-api` |
-| 4 | Measure and implement upstream continuation | Same-workload comparison proves continuity, bounded recovery and authorization. |
+| Defined views and suppression | Full/spec Secret-value redaction, status omission in spec, redaction revisions and suppression excluding RV | [Proposal 0004](0004-views-and-bytes.md) |
+| Gateway snapshot and shared-watch baseline | Complete snapshot boundaries, UID membership, optional watch sharing, bounded configured HTTP delivery and lifecycle observations | [Watching](../why-a-gateway.md), [proposal 0007](0007-shared-stream-host-integration.md) |
+| Shared-watch hardening | Independent/cancellable openings, write-timeout requirement with timed authorization and exact SubjectAccessReview inputs | [Proposal 0008](0008-shared-watch-hardening.md) |
+| Browser connector separation and fixes | One fetch/SSE connector delivers state events; bounded recovery, terminal refusal, callback-failure cleanup, protocol diagnostics and adopted-save membership fix | [Proposal 0009](0009-stream-and-editor-separation.md#implemented-connector-and-correctness-fixes) |
+| Go API cleanup | Shared `StreamConfig`, consolidated serving/constructor names and internal repository harness | [Proposal 0010](0010-gateway-api-cleanup.md), [migration](../migrating.md) |
+| Stream convergence contract | Projected-content guarantee and executable final-write evidence | [Conformance](../../conformance/README.md#convergence-evidence) |
+| Optional editor and safe-save baseline | Draft reconciliation, explicit conflicts, atomic intent capture and guarded projected reads; recovery remains review plus another deliberate Save | [Editor model](../client-state-model.md), [saving](../saving.md) |
+| Editor integration and recovery recipes | Tested deletion recovery, keep-local resolution and Vue subscription ownership | [Recipes](../../examples/editor-recipes/README.md), [Vue](../../examples/vue/README.md) |
+| Real-API save composition | Cases for suppressed churn, guarded-read overlap, structured errors and same-name UID replacement | [Completed baseline](#completed-baseline) |
+| Watch-first documentation | README, watch/edit/save guides, native-fetch request and compact decision records; duplicate/superseded guides removed | [README](../../README.md), [current request](../field-reports/third-our-identity.md) |
 
-Review the remaining priorities as separate changes. Baseline measurement can run alongside
-priorities 2–3. Unit tests do not establish real-cluster composition, consumer readiness or capacity.
+## Open work and delivery order
 
-## 1. Define convergence precisely
+The numbers express the recommended order of attention, not a requirement to finish every earlier row
+before starting a later one. Deliver separately reviewable changes and use the prerequisites below.
 
-Completed: [contract and executable final-write evidence](../../conformance/README.md#convergence-evidence).
+| Order | Open work | Dependencies and completion |
+|---|---|---|
+| 1 | Native viewer: a short contract, shared lifecycle refactor, LIST/WATCH connector, tests and minimal example in one focused PR | Use today's event consumer and read-only store; re-list on reconnect. Native editing, editor cleanup, resume and benchmarks do not gate this slice. Acceptance lives in the [request](../field-reports/third-our-identity.md#slice-1-a-native-viewer). |
+| 2 | Native editing | After the viewer; define source-bound edit policy and host validation, protect machinery fields and preserve save guards. Coordinate any public editor changes with proposal 0009. |
+| 3 | Native reconnect efficiency | After the viewer; evaluate resumable watches, streaming-list initialization and pagination with explicit membership/checkpoint tests. Do not claim these efficiencies for slice 1. |
+| 4 | Gateway upstream continuation | Independent track with a design below; review reopen/credential bounds, record a baseline, implement and measure. No dependency on native transport. |
+| 5 | Save progress during suppressed churn | Independent evaluation using existing real-API fixtures; bounded submitted-intent recovery first, optional version delivery second. Implementation depends on measured benefit and reviewed scope. |
+| 6 | Comparative frontend and measurements | Follow working native viewing; add editing after order 2. Compare native/full/spec and shared/unshared workloads; the larger project is outside slice 1. |
+| Separate | Editor API cleanup in proposal 0009 | Independently proposed. Keep current standalone `applyStreamEvent` in slice 1; neither bound methods nor a new read-only store are required for native transport. |
+| Per change | Validation, release and host adoption | Release ready increments under the existing lockstep policy; do not wait for every track. Check each change's final-commit CI, artifact/API notes and host acceptance. |
 
-## 2. Tested adoption recipes
+### Next implementation
 
-Completed: the [editor recipes](../../examples/editor-recipes/README.md) keep a recovery copy before
-deletion or pruning and keep a local value in a conflict, executed by the client suite through
-stream events and linked from the saving and Vue guides. The acceptance criteria below are what
-those tests cover.
+Start the native viewer from the branch containing the implemented connector separation and Go API
+cleanup. Keep native frame parsing separate from SSE while sharing lifecycle and useful HTTP helpers.
+The short read-only contract and test results belong in the implementation PR; no additional
+editor-design review or comparison campaign must finish first.
 
-Keep the existing [user-facing outcomes](../saving.md#what-the-person-editing-sees) and host-owned
-[receipt contract](../saving.md#answer-204-or-a-receipt-and-let-the-watch-echo-it) in the saving guide.
+Preserve existing SSE behavior and public APIs during the lifecycle refactor. Slice 1 requires complete
+LIST membership, correct type/UID handling, an accepted WATCH before live readiness, transport-specific
+410 recovery, terminal refusals, bounded repeated failure and cancellation. Use unpaginated lists;
+reject unexpected continuation rather than pruning a partial snapshot. Add one small runnable native
+viewer and document the two sources. See the [request](../field-reports/third-our-identity.md#acceptance-for-slice-1).
 
-For proposal 0009's create/delete guidance, use its event-only store input, consolidated connector and
-guarded response contract. Successful creates/deletes remain host-owned pending confirmations until
-their echo or a completed snapshot confirms state; do not restore unguarded adoption or optimistic
-store deletion in a recipe. Keep server acceptance separate from confirmation to avoid duplicate
-submissions when an echo is delayed or arrives before the response.
+Keep the current standalone state-input helper. Proposed editor removals remain in
+[proposal 0009](0009-stream-and-editor-separation.md#proposed-editor-cleanup), with brief API change notes
+when implemented. Native editing can follow the viewer without waiting for resume or streaming lists.
+Gateway continuation and save measurements can proceed independently. Retain the existing projected
+save flow and explicit protocol-version policy; neither needs redesign to deliver a native viewer.
 
-### Deletion recovery copy
+## Deferred work
 
-Demonstrate a host subscription that snapshots detached `store.draft(uid)` on each notification while
-that fixed UID exists, including the initial state. When removal or snapshot pruning makes it absent,
-retain the last copy for explicit copy-out; do not try to read the removed draft. Capturing only on
-Save misses later typing. Specify subscription cleanup, identity-scoped retention and expiry.
+| Item | Trigger for reconsideration | Current approach |
+|---|---|---|
+| Dedicated `ResourceStore`, shared snapshot-tracker extraction and stream/editor subpaths | Demonstrated viewer or unbundled-loading need with measurable benefit | `LiveResourceStore(readOnlyPolicy)` and the root/combined bundle; no extra store is required for native transport |
+| Authorization triggers, grouped checks, decision cache and exported review helpers | Measured duplicate authorization work or a host lifecycle unmet by cancellation/timed checks | Existing per-subscriber checks and host-owned policy; [proposal 0008](0008-shared-watch-hardening.md#deferred-work-and-conditions-for-reconsideration) |
+| Version-delivery or automatic save-recovery implementation | Order 5 establishes benefit, safe scope and explicit compatibility | Current suppression and another deliberate Save; evaluating alternatives is scheduled, implementation is conditional |
+| Browser replay for gateway SSE, independent delivery switches, write tickets and general SSA abstraction | Separate concrete use case and reviewed protocol/write contract | Fresh browser snapshots, named projections and host-owned conditional merge PATCH |
 
-**Acceptance:** edits immediately before deletion and snapshot pruning remain recoverable; a
-replacement UID opens separately and never inherits the old draft. Test initial capture, edit-time
-updates, null-state handling and disposal in the actual recipe. Keep one active draft store; the
-recovery copy is not another reconciler. Link the tested recipe from the saving and Vue guides.
+## Completed baseline
 
-### Explicit keep-local resolution
+Convergence is defined by [the protocol and executable evidence](../../conformance/README.md#convergence-evidence).
+The [editor recipes](../../examples/editor-recipes/README.md) cover deletion recovery and explicit
+keep-local resolution through store events. Preserve their draft, UID, policy and disposal guarantees
+when changing the editor API.
 
-Demonstrate capturing the chosen local value (including absence), resolving that path with
-`revert`, then synchronously reapplying it through `setValue` or `removeKey`. Proposal 0009 removes
-the equivalent `takeTheirs` alias. Verify the recipe against current behavior before publishing
-executable guidance.
-
-**Acceptance:** cover nested paths, deletion, whole-array replacement and policy/redaction refusal;
-preserve unrelated edits and conflicts. Capture a fresh save intent after review. Add a small helper
-only if repeated consumer code warrants it; do not create another conflict registry.
-
-## 3. Real-API composition and identity races
-
-Implemented as the `TestRealAPI` cases, run by `task test-real-api`. The browser side runs the real store and conditional editor under node. A
-real status subresource comes from a test-installed Widget CRD, and a test-only transport barrier
-recreates the ConfigMap between the host's preflight GET and its PATCH. The race showed that
-Kubernetes checks the captured `resourceVersion` before the UID, so a replacement arrives as a plain
-409. The host now classifies it with one GET and answers with structured Kubernetes `Status`
-responses. The criteria below are what those cases assert.
-
-The [existing real-API stale-RV test](../../gateway/kube/e2e_test.go) proves ordinary rejection, not
-these compositions. Extend it alongside [store/example tests](../../packages/krm-stream/test/saving.test.ts)
-and [host handler tests](../../gateway/kube/examples/conditionalsave/handler_test.go).
-
-- **Status churn:** use a real status subresource. Prove a persisted status change advances RV,
-  spec projection suppresses its notification, stale PATCH returns 409, guarded projected GET
-  advances the base without field conflicts, and a fresh intent succeeds when churn stops. Contrast
-  full projection and bookkeeping-only suppression. A no-op SSA reapply is not a valid fixture.
-- **Overlapping recovery:** save starts live, status advances RV, upstream closure begins a snapshot,
-  and the post-409 GET arrives before synced. Assert refused reconciliation, retained drafts,
-  recovery presentation and later progress without blind PATCH retries.
-- **UID race:** force deletion/recreation between host preflight GET and PATCH with a test-only
-  barrier. Preserve structured API Status and prove the replacement is unchanged. Classify the
-  observed identity mismatch specifically; never normalize all 422 validation errors to conflicts.
-
-**Acceptance:** observable winner/draft preservation and accurate outcomes, with the exact tested
-commit, server version, commands, scenarios and results attached to the PR. Use existing host
-validation boundaries; do not generalize the ConfigMap endpoint just to build a test.
-
-Wire focused real-API cases into CI or an explicitly invoked workflow whose successful run is merge
-evidence. Keep broader aggregated-API coverage available through `task test-cluster`. Record skips
-and unrun cases separately from fake-client results; update task/workflow comments to match coverage.
+The `TestRealAPI` composition cases in [composition_e2e_test.go](../../gateway/kube/composition_e2e_test.go)
+exercise status-subresource churn, bookkeeping-only suppression, overlapping guarded reads and
+same-name UID replacement. They use the real store and conditional editor under node, a Widget CRD
+and a test-only preflight/PATCH race barrier. They establish 409 rejection, guarded recovery and a
+fresh deliberate save after churn stops; they do not establish usable save progress during sustained
+churn. `task test-real-api` runs these cases. Record actual runs, server versions, skips and final
+commit separately from fake-client and general CI results.
 
 ## 4. Measured upstream continuation
 
@@ -128,7 +106,7 @@ is needed. Downstream v1 remains snapshot-based on a new connection.
   upstream cannot leave subscribers reporting live forever. Specify the exhaustion transition before
   implementation; avoid adding public retry knobs without a demonstrated host need.
 - Recheck the auth implications: fewer cycles mean fewer cycle-only authorization checks and fewer
-  `ClientFor` refresh calls. Timed subscriber checks must keep running during upstream recovery.
+  `Clients` refresh calls. Timed subscriber checks must keep running during upstream recovery.
   Document refreshing credentials and revocation expectations; do not accidentally weaken them.
 - Keep single-subscriber overflow recovery and the shared cache's ownership intact. Last subscriber
   departure must cancel an in-progress reconnect. No second shared-watch implementation.
@@ -148,9 +126,153 @@ do not label by UID, username or opaque RV. One shared watch still incurs a snap
 browser reconciliation per subscriber; measure those costs rather than inferring capacity from
 upstream watch count.
 
+### Proposed design (for review before implementation)
+
+Nothing below is implemented. It answers the questions this section requires settled first: the
+client-go assessment, the checkpoint and boundary rules, the exhaustion transition and the
+authorization consequences.
+
+**Where.** In `gateway/kube`, inside the watcher the backend returns. The gateway core, its snapshot
+loop and `SharedBackend` do not change: to them a continued watch is one upstream watch that never
+ended. One reopen therefore serves every subscriber of a shared scope, and nothing new reaches the
+browser: no event, no reset, no replay protocol.
+
+**Why not client-go's `RetryWatcher` (v0.36.0).** It has the reopen mechanics but conflicts with
+three requirements here. It needs a concrete initial resourceVersion, so it cannot own the streaming
+list's initial snapshot and could only take over after the boundary. It retries every failure except
+410 and authorization indefinitely, "leaving it up to the user to timeout", where this plan requires
+bounded failure. And it turns 401/403 into terminal error events, where this design wants a fresh
+cycle so the host's `Clients` can supply refreshed credentials. Wrapping it to impose those rules
+would be larger than a small loop in `backend.go` that reuses `translate`, `classify` and the
+existing bookmark handling.
+
+**Checkpoint.** The resourceVersion of the last event the API server delivered on this watch: added,
+modified, deleted, a routine bookmark or the initial-events-end bookmark. It is recorded in the
+backend, before the gateway projects or suppresses anything, so a suppressed update still advances
+it. It is never derived from a browser object, an SSE `seq` or a projected or shared view. Bookmarks
+only move it forward sooner; no bookmark cadence is assumed.
+
+**Boundary.** Continuation is armed only once the snapshot boundary is established: the
+initial-events-end bookmark on the streaming-list path, the list's resourceVersion on
+list-then-watch. A close before that returns `ErrWatchClosed` as today, so a partial snapshot is
+never relabeled as live or complete.
+
+**Reopen.** When an armed watch closes cleanly (the API server's routine timeout, 30 to 60 minutes
+by default), the watcher reopens `Watch` with the scope's selectors, `allowWatchBookmarks` and
+`resourceVersion` set to the checkpoint, and without `sendInitialEvents`. Both initialization paths
+reopen the same way. The reopened watch's events continue the stream, and the gateway never sees the
+seam.
+
+| Reopen outcome | Result |
+|---|---|
+| 410 Gone or `Expired`, when opening or as a watch error event | `ResyncRequired`: history is gone, so a fresh snapshot follows, as today |
+| 401 or 403 | `ErrWatchClosed`: a fresh cycle reauthorizes and asks `Clients` again, so expired credentials are replaced; a refusal there is terminal, exactly as at opening today |
+| Network failure, 429, 5xx or timeout | retry within the bound below |
+| Context cancelled, or `Stop` | return at once, abandoning a reopen in progress |
+
+**Exhaustion transition.** At most three consecutive failed reopens, with jittered backoff of
+roughly 250 ms, 1 s and 4 s. These delays total about six seconds; opening/network time is additional
+and each reopen needs an explicit cancellable time bound before claiming a total recovery limit. A reopened
+watch that closes again before delivering any event, bookmarks included, counts as a failure, so a
+server that accepts and immediately drops watches cannot loop. The count resets when a reopened
+watch delivers an event. At the bound the watcher returns `ErrWatchClosed`: the gateway starts a
+fresh cycle, its existing rule turns a second early end into `UPSTREAM_UNAVAILABLE` and closes the
+connection, and the client's own bounded retry budget takes over. Measure time to downstream
+recovery/closure including opening delays; the backoff total alone does not bound stale `live`
+presentation. No public retry setting is proposed without a demonstrated need.
+
+**Authorization and credentials.** Each routine upstream close used to start a cycle, and with it a
+cycle authorization check and a `Clients` call. With continuation those happen far less often. That
+cadence was never a revocation bound: quiet streams already relied on `ReauthorizationInterval`,
+whose timed checks run per subscriber and keep running through an upstream reopen, because the cycle
+they belong to has not ended. What does change is credential lifetime: a per-user backend is now
+used for the whole stream rather than for one routine watch period. The 401 fallback above refreshes
+credentials instead of ending the stream, and the [authorization guide](../auth.md) must say that a
+backend's credentials should refresh themselves (client-go token sources do) or be renewed through a
+fresh cycle. Open question for review: whether to also cap continuation age, so that a fresh cycle
+still happens periodically. The proposal is not to, because timed checks and the 401 fallback cover
+the cases a cap would; measurements may say otherwise.
+
+**Shared watches.** `SharedBackend` wraps the upstream backend, so continuation happens beneath its
+cache: one reopen per scope and no resnapshot for any subscriber, which also removes a
+SubjectAccessReview per subscriber per routine close. Its single-subscriber overflow recovery and
+early-end backoff are unchanged and still apply to the fallbacks. The last subscriber leaving stops
+the upstream watcher, which cancels a reopen in progress.
+
+**Evidence plan.** Unit tests with a fake dynamic client cover each row above, the checkpoint on a
+suppressed update and on a routine bookmark, deletion during the interruption, a close during the
+initial snapshot, exhaustion, cancellation and subscriber departure during backoff, and two shared
+subscribers seeing one reopen and no reset. Against the real API server, a package-internal test
+sets a short watch `timeoutSeconds` so routine closes happen in seconds, on both the streaming-list
+path and the aggregated API's list-then-watch path. Measurements use the same workload before and
+after on the spike cluster, with counts from the gateway's Observer and a counting backend: upstream
+reopens, downstream resets by cause, snapshot bytes and duration, the browser store's time to apply
+a snapshot (the node driver times it), recovery latency, SubjectAccessReview rate and latency, and
+the save 409 rate with the share of 409s that carry no field conflicts. Labels stay bounded: no UID,
+user or resourceVersion.
+
 **Acceptance:** retained-history recycling preserves downstream continuity, lost history still
 recovers safely, retries stop correctly, and authorization/credential lifecycle expectations remain
 explicit. No new SSE events or downstream replay protocol.
+
+## 5. Save progress under suppressed churn
+
+**Status: requested evaluation, not an implemented retry or delivery feature.** A spec editor should
+avoid repeated extra Save clicks when controller changes leave its relevant editable values unchanged.
+The adopter has not yet measured frequency in a representative workload. Reuse the real-API fixtures
+above and [proposal 0005's tradeoffs](0005-kubernetes-stream-and-save-semantics.md#host-write-strategies).
+
+Compare today's guarded read plus another deliberate Save with two optional approaches. Evaluate
+bounded save recovery first; periodic version delivery still races changes between delivery and PATCH.
+
+### Bounded recovery of a submitted intent
+
+After a definite version rejection, refresh and reconcile under the existing UID, revision and
+snapshot guards. Determine whether the original submitted intent is still valid by comparing its
+relevant base values and dependencies. No field conflicts in the store is insufficient by itself.
+A retry must preserve the submitted patch, exclude later typing, protect whole-array replacements
+and refuse changed dependencies or replacement UIDs. Each candidate retry captures the validated
+original intent and its new precondition together; never just replace the RV on an old patch.
+
+Keep explicit review for real disagreements. Bound attempts and elapsed recovery, explain exhaustion
+and preserve drafts. Distinguish a definite 409 rejection from an unknown write outcome; do not
+replay an ambiguous write automatically. Retain host authorization, projection validation and
+serialization of writes. Any public recovery policy requires demonstrated use and its own contract.
+
+### Optional coalesced version delivery
+
+Retain the latest eligible version per subscriber and UID and compare periodic batches of small
+version-only records with batched complete projected updates. Proposal 0005 currently prefers
+existing event shapes if measurements justify more version delivery; do not choose a wire extension
+in advance.
+
+Eligibility requires proof that the last delivered authoritative projected content, excluding RV but
+including redaction records, still represents that UID at the newer version. The draft is not the
+baseline. Bind delivery to the current view and snapshot and apply it in order. A pending record may
+not overtake a visible update, resurrect a delete, roll a version backwards or cross a reconnect.
+Clear or supersede pending records on those transitions. Collection bookmarks cannot supply an
+object's edit version. Hidden Secret changes require normal redaction updates.
+
+Advance authoritative versions without resetting drafts or waking content-only subscribers. Capture
+future save versions and patches together; do not mutate already captured intents when a batch
+arrives. Declare which writes can rely on the guarantee, including dependencies outside the view.
+Periodic delivery can reduce staleness but cannot eliminate the delivery/PATCH race.
+
+### Evidence and decision
+
+Use identical objects, subscriber counts, edits and status rates for the baseline and variants.
+Include quiet periods, bursts and sustained churn. Measure stale-version 409s separately from field
+conflicts, extra clicks, save completion latency, successful saves and bounded failures during churn,
+GET/PATCH attempts, downstream bytes/events, notifications/renders and batch memory/delivery work.
+Success after churn stops is insufficient evidence of usable editing during churn.
+
+Cover later typing, changed array members, concurrent spec edits, deletion/recreation, partial
+snapshots, resets/reconnects with pending batches, expired sessions, denied access and hidden Secret
+rotations. Preserve current `krm-spec/v1` status-only silence by default. Any new delivery mode needs
+an explicit opt-in and compatibility decision; do not silently wake current consumers.
+
+Document measurements, the decision and adoption guidance. Retaining the baseline is a valid outcome
+if added costs outweigh measured benefit. A universal automatic-save policy is outside this request.
 
 ## Verification and scope
 
@@ -175,6 +297,7 @@ and sinks have bounded completion times. Exercise quiet and active streams; cycl
 meet a bounded quiet-stream revocation target. See [authorization lifecycle](../auth.md#session-validity-and-timed-checks)
 for configuration and host responsibilities.
 
-Version-only events, independent content/delivery switches, downstream replay, write tickets,
-automatic conflict-free retry and a general SSA abstraction remain deferred until a concrete use
-case and measurements justify them. Preserve current named-projection semantics and host policy.
+The save-progress track evaluates submitted-intent recovery and coalesced version delivery without authorizing
+implementation or changing default emissions. Independent content/delivery switches, downstream
+replay, write tickets and a general SSA abstraction remain deferred. Preserve current named-view
+semantics, host policy and the distinction between native browser and gateway upstream recovery.

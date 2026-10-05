@@ -1,10 +1,12 @@
 # Alternatives
 
-krm-stream combines a scoped KRM read stream with a browser store for live state, local drafts and
-conflicts. Choose tools according to which part of that problem your application needs.
+krm-stream starts with efficient live Kubernetes views for browser applications. Its gateway adds
+projection, redaction, suppression and optional watch sharing; its client adds lifecycle recovery
+and optional draft reconciliation. Choose tools according to the part your application needs.
 
 | Need | Relevant approach | Where krm-stream fits |
 |---|---|---|
+| Native watch through an existing browser proxy | Host proxy plus a native fetch/watch consumer | A read-only native connector with shared lifecycle is next work; gateway SSE delivers the supported projected source today. |
 | Kubernetes API access from a server | Kubernetes client libraries and raw watches | The Go adapter uses `client-go`; the gateway adds projections and browser snapshot framing. |
 | A complete Kubernetes UI | Dashboard applications and their plugin APIs | krm-stream supplies state and transport; the host builds the UI. |
 | Review and deliver configuration packages | KRM package and GitOps systems | The host can record accepted writes in its delivery workflow. |
@@ -24,5 +26,5 @@ conflicts. Choose tools according to which part of that problem your application
 - [gitops-reverser](https://reversegitops.dev): a complementary write-and-record workflow. The host
   connects accepted Kubernetes writes to Git; krm-stream supplies the read and edit side.
 
-The [architecture overview](../README.md#how-it-fits) shows the library/host split. The
+The [architecture overview](../README.md#how-it-fits-today) shows the library/host split. The
 [saving guide](saving.md) describes the conditional-write boundary and its limitations.

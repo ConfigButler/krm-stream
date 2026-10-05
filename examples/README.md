@@ -1,7 +1,11 @@
 # Examples
 
-The checked browser example in [`vanilla-browser/`](vanilla-browser/) runs against the replay gateway.
-For host integration patterns, use these small recipes:
+Start with [watching resources](../docs/why-a-gateway.md) and supported host wiring, then add the
+optional editor. The checked browser example in [`vanilla-browser/`](vanilla-browser/) runs against
+the current gateway source over SSE. A minimal native viewer is
+[next work](../docs/field-reports/third-our-identity.md#slice-1-a-native-viewer); it reuses the current
+read-only store and lifecycle. Native editing and the larger view/sharing comparison follow separately.
+For current host integration patterns, use these small recipes:
 
 - [Same-origin cookie application](../docs/adopting.md#1-mount-the-stream-endpoint): fetch
   connector, session cookie, dynamic client acting as the user.

@@ -3,7 +3,10 @@
 The release after 0.7 has one browser connector and one name for each gateway setting. Old names are
 removed rather than kept as aliases, so the compiler or a failed import finds every call site. The
 editor store's methods (`setValue`, `captureSave`, `captureReconciliation`, `adoptSaved` and so on)
-are unchanged.
+are unchanged on this branch. Proposed editor removals in proposal 0009 are not migration requirements
+yet. A read-only native fetch/watch connector is separate requested work and uses today's standalone
+state-input helper. This upgrade still uses gateway SSE; native viewing does not wait for editor cleanup.
+For the overall direction, see [watching resources](why-a-gateway.md).
 
 ## Browser client
 
