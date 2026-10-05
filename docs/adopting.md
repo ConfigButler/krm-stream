@@ -11,8 +11,9 @@ delivered over SSE. Both connectors share one fetch-based frontend lifecycle.
 
 For native access, a host that already proxies Kubernetes needs no gateway: point
 `connectNativeWatch` at a collection behind that proxy, as in the [README](../README.md#watch-native-resources-through-a-host-proxy)
-and the [native viewer example](../examples/native-viewer/README.md). It is read-only and re-lists on
-every reconnect; native editing is separate. The steps below wire the gateway source.
+and the [native viewer example](../examples/native-viewer/README.md). It re-lists on every
+reconnect; to edit through the same proxy, see [native editing](saving.md#native-editing-through-a-host-proxy).
+The steps below wire the gateway source.
 
 ## 1. Mount the stream endpoint
 

@@ -4,7 +4,8 @@
 state in a browser or JavaScript application, with optional editing. It provides:
 
 - `connectNativeWatch`, which reads a native Kubernetes collection through a host proxy with LIST
-  and WATCH, and `nativeCollectionURL` to address one.
+  and WATCH, `nativeCollectionURL` to address one and `nativeObjectURL` to address a member for
+  reads and writes.
 - `connectResourceStream`, which reads a gateway's projected views over SSE, and
   `resourceStreamURL` for the v1 scope query format.
 - `LiveResourceStore` for server state, local drafts, conflicts, redactions, and merge patches, and
@@ -14,7 +15,7 @@ Both connectors use fetch, share one connection lifecycle and hand each resource
 callback, with bounded recovery. Native access delivers original authorized resources; the gateway
 adds projected views, redaction, suppression and optional upstream watch sharing. Start with a
 watch-backed list or viewer; add draft reconciliation only when the page needs editing. The package
-is headless and does not choose a UI framework. Native viewing is read-only in this release.
+is headless and does not choose a UI framework.
 
 ```ts
 import { LiveResourceStore, readOnlyPolicy, applyStreamEvent, connectResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
@@ -124,7 +125,7 @@ errors itself. Gateway framing still supports browser `EventSource` with session
 ```ts
 const connection = connectNativeWatch(
   nativeCollectionURL("/k8s", { version: "v1", resource: "configmaps", namespace: "app", name: "settings" }),
-  event => applyStreamEvent(store, event), // a LiveResourceStore(readOnlyPolicy) for this source only
+  event => applyStreamEvent(store, event), // a LiveResourceStore for this source only
   { onError: (code, message, terminal) => showStreamError(code, message, terminal) },
 );
 ```
@@ -156,6 +157,13 @@ remove the others. Native objects carry whatever the proxy returns, including Se
 machinery fields; there is no projection, redaction or `seq`. Never fall back to native access after a
 gateway refuses a view.
 
+A store fed by `connectNativeWatch` can be edited like any other. `nativeObjectURL(proxy, { ...scope,
+namespace, name })` addresses one member under the same proxy and collection, for a conditional JSON
+merge PATCH and a guarded recovery read. The store keeps `metadata.managedFields` and the
+last-applied annotation read-only under every policy, so no patch carries them; the host proxy checks
+again with `gateway.ValidateNativeMergePatch`. See [native editing](../../docs/saving.md#native-editing-through-a-host-proxy)
+and the [native editor example](../../examples/native-editor/README.md).
+
 ## Optional editing
 
 Use `new LiveResourceStore()` for an editor, or provide a policy that narrows the form's editable
@@ -171,9 +179,10 @@ A quiet stream can still hold an older write version. See the
 [normative contract](../../spec/v1.md#6-ordering-delivery--the-state-guarantee).
 
 `store.captureSave(uid)` captures a detached patch, UID and base resourceVersion together.
-`store.captureReconciliation(uid)` guards a projected asynchronous response against newer watch state.
-See the [complete conditional-save example](../../examples/conditional-save/README.md) and
-[save guide](../../docs/saving.md) for host preconditions, real Kubernetes 409s, and draft preservation.
+`store.captureReconciliation(uid)` guards an asynchronous response from the same source against newer
+watch state. See the [complete conditional-save example](../../examples/conditional-save/README.md),
+the [native editor example](../../examples/native-editor/README.md) and the
+[save guide](../../docs/saving.md) for preconditions, real Kubernetes 409s, and draft preservation.
 
 For Vue 3, use the [copyable composable](../../examples/vue/README.md) for reactive resource and connection state
 with automatic subscription cleanup. Vue stays in the host application.

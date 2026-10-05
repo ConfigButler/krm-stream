@@ -15,9 +15,11 @@ the service identity's access. Full/spec Secret redaction also does not replace 
 These settings describe the current gateway. The native connector reads through a host proxy behind
 the same session boundary; the proxy, not the browser, holds Kubernetes credentials and authorizes
 each collection. Native retains original authorized resources; gateway SSE delivers
-projected views. Neither source may bypass refusal or extend session lifetime. The first native
-slice is read-only and must stop on terminal authentication failure, with a new connection after
-access is restored; native editing is separate.
+projected views. Neither source may bypass refusal or extend session lifetime. The native connector
+must stop on terminal authentication failure, with a new connection after access is restored. Native
+writes go through the same proxy as the signed-in person; the proxy validates each PATCH with
+`ValidateNativeMergePatch` and keeps its own write authorization, and Kubernetes RBAC still applies.
+See [native editing](saving.md#native-editing-through-a-host-proxy).
 
 ## Browser sessions
 

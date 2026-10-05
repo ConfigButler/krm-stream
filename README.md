@@ -55,7 +55,7 @@ Start with the resource state and guarantees the page needs; framing is an imple
 
 | Source | What the page receives | Connector |
 |---|---|---|
-| Native through a host proxy | Original authorized resources, with the shared client lifecycle and store | `connectNativeWatch`, read-only: LIST, then WATCH, and a fresh LIST on every reconnect |
+| Native through a host proxy | Original authorized resources, with the shared client lifecycle and store | `connectNativeWatch`: LIST, then WATCH, and a fresh LIST on every reconnect; edits are written back through the same proxy |
 | Gateway | Projected, redacted or suppressed views and optional upstream watch sharing | `connectResourceStream`, delivered over SSE |
 
 Native is the straightforward starting point for hosts that already proxy Kubernetes. It delivers
@@ -94,7 +94,7 @@ The host mounts the API server's paths under a base such as `/k8s` and owns cred
 which collections a user may read. The connector lists the complete collection, delivers it as a
 snapshot and becomes `live` once the WATCH from the collection's resourceVersion is accepted. Every
 reconnect lists again, and the store prunes only when that snapshot completes. HTTP or in-stream 410
-recovers within the bounded retry budget; 401, 403 and other 4xx are terminal. Slice 1 does not
+recovers within the bounded retry budget; 401, 403 and other 4xx are terminal. The connector does not
 paginate: a LIST that returns a continuation token is refused. The
 [native viewer example](examples/native-viewer/README.md) runs this against `kubectl proxy`.
 
@@ -150,27 +150,31 @@ const intent = store.captureSave(uid); // detached { uid, resourceVersion, patch
 ```
 
 The default policy allows `spec`, labels, annotations, `data` and `stringData`; status, immutable
-metadata and redacted paths remain read-only. A host can narrow the policy for its form.
+metadata and redacted paths remain read-only. Under every policy, `metadata.managedFields` and the
+last-applied annotation stay read-only too. A host can narrow the policy for its form.
 
 The intended Save flow is explicit: capture the patch, UID and resource version together; have the
 host authorize and validate it; apply a conditional merge PATCH; then observe the projected result
 through the stream or a guarded projected read. Preserve typing made after Save. A version rejection
 can occur without any field conflict, because suppressed updates still advance Kubernetes versions.
-The current recovery is a guarded read, review and another deliberate Save.
+The current recovery is a guarded read, review and another deliberate Save. A native store follows
+the same flow through its host proxy: the browser sends the merge PATCH with the captured UID and
+version inside it, and the proxy validates it before forwarding.
 
 **A dirty draft, an accepted write and application progress are separate states.** A successful PATCH
 can precede its watch observation, and neither proves a workload has finished rolling out.
 
 Use [the editor state model](docs/client-state-model.md) for reconciliation, conflict resolution and
 arrays, and [saving edits safely](docs/saving.md) for the complete host-owned write contract. The
-[conditional-save example](examples/conditional-save/README.md) executes that contract.
+[conditional-save example](examples/conditional-save/README.md) executes that contract, and the
+[native editor example](examples/native-editor/README.md) its native counterpart.
 
 ## How it fits today
 
 ```mermaid
 flowchart LR
   api["Kubernetes API"]
-  proxy["Your native proxy<br/>Credentials and routing"]
+  proxy["Your native proxy<br/>Credentials, routing and write checks"]
   gateway["Go gateway<br/>Scopes, views and optional sharing"]
   connector["Fetch connector<br/>State events and recovery"]
   store["Resource store<br/>Live state and optional drafts"]
@@ -185,6 +189,8 @@ flowchart LR
   ui -->|"Local edits"| store
   ui -->|"Captured save intent"| save
   save --> api
+  ui -->|"Native conditional PATCH"| proxy
+  proxy --> api
 ```
 
 A page uses one source per store: the native proxy or the gateway. The gateway runs inside your
@@ -218,7 +224,7 @@ such as `spec`, `status` or ConfigMap `data`. Custom resources follow the same c
 - [Editor state model](docs/client-state-model.md): drafts, conflicts, redactions and arrays.
 - [Saving](docs/saving.md): conditional writes, recovery and user-facing outcomes.
 - [Authorization](docs/auth.md) and [operations](docs/operations.md): identity, revocation and runtime limits.
-- [Examples](examples/README.md): native viewer, gateway browser demo, conditional editor, recovery recipes and Vue integration.
+- [Examples](examples/README.md): native viewer and editor, gateway browser demo, conditional editor, recovery recipes and Vue integration.
 - [Delivery plan](docs/proposals/0006-stream-and-save-implementation-plan.md): completed work, open work, ordering and dependencies.
 - [Upgrading from 0.7](docs/migrating.md) and [releasing](docs/releasing.md).
 
