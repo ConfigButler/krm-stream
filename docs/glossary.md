@@ -63,6 +63,46 @@ formats can carry errors. `connectNativeWatch` reads native watch JSON; `connect
 and delivers the current SSE protocol. A host can separately proxy native Kubernetes access with a
 session cookie while keeping cluster credentials server-side.
 
+## How Kubernetes records writes
+
+A page rarely edits an object alone. The same object is usually also written by `kubectl`, a CI
+pipeline, a GitOps tool or a controller, and Kubernetes keeps some bookkeeping about those writes in
+the object itself.
+
+**kubectl** is Kubernetes' command-line client, and talks to the same API a page reaches through a
+proxy or the gateway. `kubectl get --watch` lists and watches; `kubectl edit`, `patch` and `apply`
+write. An object a page shows may change under an open draft because someone ran one of these.
+
+**`kubectl apply`** writes a configuration file declaratively: the file says what the fields should
+be, and kubectl works out the change. Without `--server-side` this is **client-side apply**: kubectl
+compares the file with the live object and with the configuration it applied last time, so it knows
+which fields to delete when they disappear from the file. A later `kubectl apply` of the same file
+resets any field the file sets, including one a person changed in the browser.
+
+**Last-applied-configuration annotation** (`kubectl.kubernetes.io/last-applied-configuration`) is
+where client-side apply keeps that previous configuration: a JSON copy of the last file applied. It
+is bookkeeping for kubectl, not content. Changing it changes what the next `kubectl apply` deletes.
+Every gateway projection removes it. Native objects carry it, so the editor keeps it read-only under
+every policy, and host checks refuse a patch that touches it.
+
+**Managed fields** (`metadata.managedFields`) record, for each field, which **field manager** last
+set it and how: kubectl, a controller or a host's save endpoint, by update or by apply. The API
+server maintains them on every write. They are large and not meant for people: projections remove
+them and the editor keeps them read-only. A merge patch from a save endpoint is recorded as an update
+by that endpoint's manager.
+
+**Server-side apply (SSA)** moves apply into the API server. A client sends only the fields it wants
+to own, under a field manager name (`kubectl apply --server-side`, or a PATCH with
+`application/apply-patch+yaml`), and the server merges them using managed fields rather than the
+last-applied annotation. If another manager owns a field and set it to a different value, the apply
+fails with an **ownership conflict** unless it forces ownership. A field the manager stops sending is
+removed, unless another manager also owns it. A browser save takes ownership of the fields it
+changes, so the next server-side apply of a file setting one of them to another value conflicts
+instead of silently resetting it. krm-stream saves with JSON merge patches and a resourceVersion precondition instead. SSA
+detects disputes between managers, not a person saving from an out-of-date view, and one manager
+shared by every browser user provides no locking between them. An SSA write path is a separate host
+design; see [why SSA is an option, not a guarantee](proposals/0005-kubernetes-stream-and-save-semantics.md#why-ssa-is-an-option-not-a-replacement-guarantee).
+
 ## Optional editing and saving
 
 **Server and draft** are separate objects in the editor: the latest delivered authoritative view and
