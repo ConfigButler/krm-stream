@@ -9,10 +9,13 @@ automatic write retry.
 
 - [editor.ts](editor.ts) captures a save intent synchronously and sends it as a JSON merge PATCH
   with the captured `metadata.uid` and `metadata.resourceVersion` inside it. On 409 it reconciles a
-  guarded native GET of the same object. It keeps in-flight edits and never adopts a write response.
+  guarded native GET of the same object. After a write whose outcome is unknown, or an accepted
+  write whose echo has not arrived, the next Save reads instead of writing again; `confirm()` does
+  that read on the host's schedule. It keeps in-flight edits and never adopts a write response.
 - [Native editing tests](../../packages/krm-stream/test/native-editing.test.ts) cover the request
   shape, machinery protection, 409 recovery and conflicts, replaced and deleted objects, refused
-  writes, reads overtaken by the watch, and the live-state check.
+  writes, unknown write outcomes, confirmation with and without an echo, reads overtaken by the
+  watch, and the live-state check.
 - `TestRealAPINativeEditThroughHostProxy` (`task test-real-api`) runs this editor and the real
   connector through a credential-holding `/k8s` proxy that validates each PATCH with
   `gateway.ValidateNativeMergePatch`. Against a real API server it checks a save and its echo, a
@@ -31,6 +34,7 @@ const editor = nativeEditor(store, uid, { proxy, scope }, hostFetch, () => conne
 const unsubscribe = store.subscribe(renderEditor);
 // Enable Save only while connection.state.status === "live" and !editor.saving.
 // On Save: await editor.save(), then render errors/conflicts and the current draft.
+// After "saved" with no echo within the host's patience: await editor.confirm().
 // On unmount:
 unsubscribe();
 stopConnection();
@@ -67,10 +71,21 @@ write or read throws `NativeRequestError` with the HTTP status and the Kubernete
 keeps its field causes. A 422 whose cause is `metadata.uid` is an identity precondition, and the
 editor recovers from it as from a 409.
 
+`confirmed` is the one outcome the projected editor does not have: a guarded read, not a write,
+established the server's current state. Fields still dirty were not written, by this Save or by an
+earlier one; the next deliberate Save writes them.
+
+**Never two writes without knowing what the first did.** A network failure or a 5xx (a proxy's 502
+included) throws, but the write may have landed, so the next Save performs a guarded read and
+returns `confirmed` or another recovery outcome instead of sending the patch again. A 4xx is a
+definite refusal and owes no read: correct the draft and save again.
+
 A successful write's response is the written object. The editor does not read it: the watch delivers
-the same object as an ordinary event, and adopting the response could overtake a newer one. A write
-that leaves the object unchanged produces no event; if no echo arrives, a guarded read confirms the
-state.
+the same object as an ordinary event, and adopting the response could overtake a newer one. Until
+that echo arrives (the store holds any version after the one the write was based on), the next Save
+reads instead of writing. A write that leaves the object unchanged, such as one an admission webhook
+reverts, produces no event at all; call `editor.confirm()` when the host stops waiting for an echo.
+It reads without writing, and the reverted fields stay dirty.
 
 ## The host proxy
 

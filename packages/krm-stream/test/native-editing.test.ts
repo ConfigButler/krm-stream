@@ -242,3 +242,119 @@ test("the native editor refuses to write while the connection is not live, and r
   );
   assert.equal(store.server("u").metadata.resourceVersion, "1");
 });
+
+test("a write whose outcome is unknown is followed by a guarded read, never a second write", async () => {
+  // The network failed after sending, and the write landed.
+  const lost = seeded();
+  lost.setValue("u", ["data", "value"], "mine");
+  const network = proxy(
+    () => {
+      throw new TypeError("network error");
+    },
+    () => Response.json(native("2", "mine")),
+  );
+  const lostEditor = nativeEditor(lost, "u", source, network.request, () => true);
+  await assert.rejects(lostEditor.save(), /network error/);
+  assert.equal(await lostEditor.save(), "confirmed");
+  assert.equal(lost.patch("u"), null, "the read found the write had landed");
+  assert.equal(await lostEditor.save(), "unchanged");
+  assert.deepEqual(
+    network.calls.map((c) => c.method),
+    ["PATCH", "GET"],
+  );
+
+  // The proxy answered 502, and the write did not land: the read establishes that, and only the
+  // next deliberate Save writes again.
+  const failed = seeded();
+  failed.setValue("u", ["data", "value"], "mine");
+  const gateway = proxy(
+    () => status(502, "BadGateway"),
+    () => Response.json(native("1")),
+    () => new Response(null, { status: 200 }),
+  );
+  const failedEditor = nativeEditor(failed, "u", source, gateway.request, () => true);
+  await assert.rejects(failedEditor.save(), NativeRequestError);
+  assert.equal(await failedEditor.save(), "confirmed");
+  assert.deepEqual(failed.patch("u"), { data: { value: "mine" } });
+  assert.equal(await failedEditor.save(), "saved");
+  assert.deepEqual(
+    gateway.calls.map((c) => c.method),
+    ["PATCH", "GET", "PATCH"],
+  );
+});
+
+test("a definite refusal needs no read: the corrected draft is written next", async () => {
+  const store = seeded();
+  store.setValue("u", ["data", "value"], "invalid");
+  const { calls, request } = proxy(
+    () => status(422, "Invalid", { details: { causes: [{ field: "data.value" }] } }),
+    () => new Response(null, { status: 200 }),
+  );
+  const editor = nativeEditor(store, "u", source, request, () => true);
+  await assert.rejects(editor.save(), NativeRequestError);
+  store.setValue("u", ["data", "value"], "valid");
+  assert.equal(await editor.save(), "saved");
+  assert.deepEqual(
+    calls.map((c) => c.method),
+    ["PATCH", "PATCH"],
+  );
+});
+
+test("an accepted write is confirmed by its echo, or by a guarded read when no echo arrives", async () => {
+  // No echo: the next Save reads instead of writing again, and never adopts the write response.
+  const quiet = seeded();
+  quiet.setValue("u", ["data", "value"], "mine");
+  const read = proxy(
+    () => Response.json(native("2", "mine")),
+    () => Response.json(native("2", "mine")),
+  );
+  const quietEditor = nativeEditor(quiet, "u", source, read.request, () => true);
+  assert.equal(await quietEditor.save(), "saved");
+  assert.equal(quiet.server("u").metadata.resourceVersion, "1", "the write response is not adopted");
+  assert.equal(await quietEditor.save(), "confirmed");
+  assert.equal(quiet.patch("u"), null);
+  assert.equal(await quietEditor.save(), "unchanged");
+  assert.deepEqual(
+    read.calls.map((c) => c.method),
+    ["PATCH", "GET"],
+  );
+
+  // The host confirms explicitly, as after a timeout; an admission webhook restored the value, so
+  // the edit is still dirty and the next Save writes it again deliberately.
+  const restored = seeded();
+  restored.setValue("u", ["data", "value"], "mine");
+  const confirm = proxy(
+    () => new Response(null, { status: 200 }),
+    () => Response.json(native("1")),
+    () => new Response(null, { status: 200 }),
+  );
+  const restoredEditor = nativeEditor(restored, "u", source, confirm.request, () => true);
+  assert.equal(await restoredEditor.save(), "saved");
+  assert.equal(await restoredEditor.confirm(), "confirmed");
+  assert.deepEqual(restored.patch("u"), { data: { value: "mine" } });
+  assert.equal(await restoredEditor.save(), "saved");
+  assert.deepEqual(
+    confirm.calls.map((c) => c.method),
+    ["PATCH", "GET", "PATCH"],
+  );
+
+  // The echo arrives: nothing is owed, and the next edit is written at the echoed version.
+  const echoed = seeded();
+  echoed.setValue("u", ["data", "value"], "mine");
+  const write = proxy(
+    () => new Response(null, { status: 200 }),
+    () => new Response(null, { status: 200 }),
+  );
+  const echoedEditor = nativeEditor(echoed, "u", source, write.request, () => true);
+  assert.equal(await echoedEditor.save(), "saved");
+  echoed.applyServerEvent(native("2", "mine"));
+  echoed.setValue("u", ["data", "value"], "again");
+  assert.equal(await echoedEditor.save(), "saved");
+  assert.deepEqual(
+    write.calls.map((c) => [c.method, (c.body as { metadata: { resourceVersion: string } }).metadata.resourceVersion]),
+    [
+      ["PATCH", "1"],
+      ["PATCH", "2"],
+    ],
+  );
+});

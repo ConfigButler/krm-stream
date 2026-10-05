@@ -199,7 +199,10 @@ if (intent) {
 
 The [native editor example](../examples/native-editor/README.md) implements the whole sequence: 409
 recovery through a guarded native read, replaced and deleted objects, and refused writes. Its
-outcomes match the [table above](#what-the-person-editing-sees).
+outcomes match the [table above](#what-the-person-editing-sees). It never writes twice without
+knowing what the first write did: after a network failure or a 5xx, or an accepted write whose echo
+has not arrived, the next Save is a guarded read, and `confirm()` performs that read when the host
+stops waiting for an echo.
 
 Machinery is protected on both sides. The store makes `metadata.managedFields` and the
 `kubectl.kubernetes.io/last-applied-configuration` annotation read-only under every policy, so no

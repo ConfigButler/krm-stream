@@ -116,6 +116,9 @@ below are what it was built and tested against.
 - **Save guards.** Unchanged: atomic capture, serialized saves, writes only while live, no adoption
   of the write response, 409 recovery through `captureReconciliation`, a refused read owing another
   read, and later typing preserved. A 422 on `metadata.uid` is treated as a replaced object.
+- **Unknown outcomes and confirmation.** After a network failure or a 5xx, or an accepted write
+  whose echo has not arrived, the next Save is a guarded read, never a second PATCH; `confirm()`
+  performs that read explicitly when no echo arrives. A 4xx is a definite refusal and owes no read.
 
 ### Acceptance for slice 2
 
@@ -124,7 +127,9 @@ under a policy that makes all of `metadata` editable, and a Secret key added bes
 `packages/krm-stream/test/native-editing.test.ts` covers the request shape and URL, machinery
 rewritten by the server during editing, 409 recovery to `version-stale` and to `draft-conflict`,
 replacement by 409 and by a `metadata.uid` 422, deletion, refused writes keeping their Status, reads
-overtaken by the watch, the live check and a projected envelope. `gateway/patch_test.go` covers
+overtaken by the watch, the live check and a projected envelope, an unknown write outcome (network
+failure and 502) settled by a read, a definite 422 needing none, and confirmation by echo, by the
+next Save's read and by `confirm()` after a write a webhook reverted. `gateway/patch_test.go` covers
 `ValidateNativeMergePatch`.
 
 `TestRealAPINativeEditThroughHostProxy` (`task test-real-api`) runs the real connector and editor
