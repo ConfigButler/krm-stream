@@ -13,9 +13,11 @@
 Efficient live Kubernetes views for browser applications, with optional editing.
 
 `krm-stream` helps applications watch Kubernetes resources while controllers and other users keep
-changing them. Its gateway delivers a defined resource view, withholds selected values, suppresses
-irrelevant updates and optionally shares upstream watches. Its headless TypeScript client adds connection lifecycle, recovery and
-live state and reconciles incoming changes with local drafts when a page needs editing.
+changing them. Its headless TypeScript client adds connection lifecycle, recovery and a live resource
+store, reading native Kubernetes collections through a host proxy or projected views from the
+gateway, and reconciles incoming changes with local drafts when a page needs editing. Its gateway
+delivers a defined resource view, withholds selected values, suppresses irrelevant updates and
+optionally shares upstream watches.
 
 Your application supplies authentication, authorization policy, Kubernetes credentials, UI and writes.
 The browser client has zero runtime dependencies and chooses no UI framework.
@@ -51,18 +53,52 @@ This is a live state feed: intermediate updates may be coalesced. See [watching 
 
 Start with the resource state and guarantees the page needs; framing is an implementation detail.
 
-| Source | Use it for | Current support |
+| Source | What the page receives | Connector |
 |---|---|---|
-| Native through a host proxy | Original Kubernetes resources without adopting the gateway; credentials stay on the host | A focused read-only fetch connector is [next work](docs/field-reports/third-our-identity.md#native-watch-connector) |
-| Gateway | Named views, Secret-value redaction, suppression and optional upstream sharing | Supported today through the fetch/SSE connector |
+| Native through a host proxy | Original authorized resources, with the shared client lifecycle and store | `connectNativeWatch`, read-only: LIST, then WATCH, and a fresh LIST on every reconnect |
+| Gateway | Projected, redacted or suppressed views and optional upstream watch sharing | `connectResourceStream`, delivered over SSE |
 
-Native is the straightforward starting point for hosts that already proxy Kubernetes. Gateway SSE
-is the delivery format for projected views; its added capabilities remain useful. Both sources should
-reuse connection state, errors, cancellation, bounded recovery and state application.
-The first native slice lists then watches and re-lists on reconnect. Native editing, resume and a
-larger comparison example follow separately. No source fallback may bypass a refused view.
+Native is the straightforward starting point for hosts that already proxy Kubernetes. It delivers
+what the proxy returns, Secret values and machinery fields included; it provides no projection,
+redaction, suppression or watch sharing. Both connectors share connection state, errors,
+cancellation, bounded recovery and state events. Use a separate store per source, scope and login
+identity, and never fall back from a refused gateway view to native access.
 
-## Watch a resource view today
+## Watch native resources through a host proxy
+
+```ts
+import {
+  LiveResourceStore, readOnlyPolicy, applyStreamEvent,
+  connectNativeWatch, nativeCollectionURL,
+} from "@configbutler/krm-stream";
+
+const store = new LiveResourceStore(readOnlyPolicy);
+const stopRendering = store.subscribe(() => renderResources(store));
+const connection = connectNativeWatch(
+  // → /k8s/apis/apps/v1/namespaces/app/deployments?labelSelector=tier%3Dweb
+  nativeCollectionURL("/k8s", {
+    group: "apps", version: "v1", resource: "deployments", namespace: "app", labelSelector: "tier=web",
+  }),
+  event => applyStreamEvent(store, event),
+);
+const stopConnection = connection.subscribe(state => renderConnection(state.status));
+connection.closed.catch(reportApplicationError);
+
+// On view disposal:
+stopRendering();
+stopConnection();
+connection.close();
+```
+
+The host mounts the API server's paths under a base such as `/k8s` and owns credentials, routing and
+which collections a user may read. The connector lists the complete collection, delivers it as a
+snapshot and becomes `live` once the WATCH from the collection's resourceVersion is accepted. Every
+reconnect lists again, and the store prunes only when that snapshot completes. HTTP or in-stream 410
+recovers within the bounded retry budget; 401, 403 and other 4xx are terminal. Slice 1 does not
+paginate: a LIST that returns a continuation token is refused. The
+[native viewer example](examples/native-viewer/README.md) runs this against `kubectl proxy`.
+
+## Watch a gateway view
 
 ```ts
 import {
@@ -88,7 +124,7 @@ stopConnection();
 connection.close();
 ```
 
-The current viewer uses `LiveResourceStore(readOnlyPolicy)`; a dedicated read-only store is deferred.
+Viewers use `LiveResourceStore(readOnlyPolicy)`; a dedicated read-only store is deferred.
 The connector delivers state events independently of editing. It uses same-origin cookies by default,
 exposes connection state and bounded retries, and stops on terminal refusals. Apply each event
 synchronously. The [client README](packages/krm-stream/README.md) explains lifecycle and errors.
@@ -134,11 +170,14 @@ arrays, and [saving edits safely](docs/saving.md) for the complete host-owned wr
 ```mermaid
 flowchart LR
   api["Kubernetes API"]
+  proxy["Your native proxy<br/>Credentials and routing"]
   gateway["Go gateway<br/>Scopes, views and optional sharing"]
   connector["Fetch connector<br/>State events and recovery"]
   store["Resource store<br/>Live state and optional drafts"]
   ui["Your list, viewer or form"]
   save["Your save endpoint<br/>Authorize, validate and conditionally PATCH"]
+  api -->|"LIST and WATCH"| proxy
+  proxy -->|"Native watch JSON"| connector
   api -->|"Snapshot and watch"| gateway
   gateway -->|"SSE"| connector
   connector --> store
@@ -148,7 +187,8 @@ flowchart LR
   save --> api
 ```
 
-The gateway runs inside your Go application. Per-user backends let Kubernetes authorize the caller's
+A page uses one source per store: the native proxy or the gateway. The gateway runs inside your
+Go application. Per-user backends let Kubernetes authorize the caller's
 reads; a shared backend uses a service identity and requires checks for each subscriber. Sharing
 reduces duplicate upstream work; access controls and host limits govern who can consume it.
 Gateway upstream continuation and improved save progress during suppressed churn are proposed work.
@@ -168,7 +208,7 @@ such as `spec`, `status` or ConfigMap `data`. Custom resources follow the same c
 |---|---|
 | `github.com/ConfigButler/krm-stream/gateway` | Dependency-free Go stream gateway and SSE handler |
 | `github.com/ConfigButler/krm-stream/gateway/kube` | Optional client-go backend and SubjectAccessReview authorizer |
-| `@configbutler/krm-stream` | Dependency-free ESM connector and resource/editor store |
+| `@configbutler/krm-stream` | Dependency-free ESM native and gateway connectors, and the resource/editor store |
 | [spec/v1.md](spec/v1.md) and [conformance](conformance/README.md) | Shared normative contract and executable fixtures |
 
 ## Guides
@@ -178,7 +218,7 @@ such as `spec`, `status` or ConfigMap `data`. Custom resources follow the same c
 - [Editor state model](docs/client-state-model.md): drafts, conflicts, redactions and arrays.
 - [Saving](docs/saving.md): conditional writes, recovery and user-facing outcomes.
 - [Authorization](docs/auth.md) and [operations](docs/operations.md): identity, revocation and runtime limits.
-- [Examples](examples/README.md): browser, conditional editor, recovery recipes and Vue integration.
+- [Examples](examples/README.md): native viewer, gateway browser demo, conditional editor, recovery recipes and Vue integration.
 - [Delivery plan](docs/proposals/0006-stream-and-save-implementation-plan.md): completed work, open work, ordering and dependencies.
 - [Upgrading from 0.7](docs/migrating.md) and [releasing](docs/releasing.md).
 

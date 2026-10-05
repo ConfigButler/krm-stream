@@ -57,7 +57,7 @@ and `synced`; only completion prunes unseen UIDs. A partial snapshot cannot esta
 **SSE (Server-Sent Events)** is the current gateway's text-event framing, consumed by the official
 connector through **fetch**. Browser `EventSource` is another SSE client with different header/retry
 limitations. Fetch can read SSE or native Kubernetes watch JSON and inspect HTTP responses; both
-formats can carry errors. A native fetch/watch connector is requested, while SSE remains supported.
+formats can carry errors. `connectNativeWatch` reads native watch JSON; `connectResourceStream` reads gateway SSE.
 
 **Gateway** is the embeddable Go read layer. It enforces host scope/view policy, projects resources
 and delivers the current SSE protocol. A host can separately proxy native Kubernetes access with a

@@ -1,13 +1,14 @@
 # Proposal 0006: Delivery plan for watch streams and optional editing
 
 **Status: active delivery plan, updated 2026-10-05.** This is the single inventory of completed work,
-open work and ordering. The starting implementation includes connector separation, Go API cleanup
-and real-API save-composition tests. Detailed contracts stay in the linked proposals and guides
+open work and ordering. The implementation includes connector separation, Go API cleanup,
+real-API save-composition tests and the read-only native viewer. Detailed contracts stay in the linked proposals and guides
 rather than becoming another roadmap.
 
 Start with [watching resources](../why-a-gateway.md); add the [editor](../client-state-model.md) only
-where a page needs drafts. Prioritize a read-only native fetch connector for hosts with a proxy;
-the gateway remains the projected source with redaction, suppression and sharing, delivered over SSE.
+where a page needs drafts. Hosts with a Kubernetes proxy can read native collections with the
+read-only native connector; the gateway remains the projected source with redaction, suppression and
+sharing, delivered over SSE.
 Follow the [design rules](../../CONTRIBUTING.md#design-rules) and [release policy](../releasing.md).
 [Proposal 0005](0005-kubernetes-stream-and-save-semantics.md) owns the stream/save tradeoffs.
 
@@ -28,6 +29,7 @@ remain separate delivery steps.
 | Optional editor and safe-save baseline | Draft reconciliation, explicit conflicts, atomic intent capture and guarded projected reads; recovery remains review plus another deliberate Save | [Editor model](../client-state-model.md), [saving](../saving.md) |
 | Editor integration and recovery recipes | Tested deletion recovery, keep-local resolution and Vue subscription ownership | [Recipes](../../examples/editor-recipes/README.md), [Vue](../../examples/vue/README.md) |
 | Real-API save composition | Cases for suppressed churn, guarded-read overlap, structured errors and same-name UID replacement | [Completed baseline](#completed-baseline) |
+| Native viewer (slice 1) | `connectNativeWatch` and `nativeCollectionURL`: unpaginated LIST, WATCH from the collection RV, fresh LIST on reconnect, native 410 recovery and terminal refusals on a lifecycle shared with the gateway connector; fake-fetch, Chromium and real-API tests; minimal example | [Request](../field-reports/third-our-identity.md#slice-1-a-native-viewer), [example](../../examples/native-viewer/README.md), [client](../../packages/krm-stream/README.md#native-connections) |
 | Watch-first documentation | README, watch/edit/save guides, native-fetch request and compact decision records; duplicate/superseded guides removed | [README](../../README.md), [current request](../field-reports/third-our-identity.md) |
 
 ## Open work and delivery order
@@ -37,7 +39,7 @@ before starting a later one. Deliver separately reviewable changes and use the p
 
 | Order | Open work | Dependencies and completion |
 |---|---|---|
-| 1 | Native viewer: a short contract, shared lifecycle refactor, LIST/WATCH connector, tests and minimal example in one focused PR | Use today's event consumer and read-only store; re-list on reconnect. Native editing, editor cleanup, resume and benchmarks do not gate this slice. Acceptance lives in the [request](../field-reports/third-our-identity.md#slice-1-a-native-viewer). |
+| 1 | Native viewer — **completed** | See [completed work](#completed-work); acceptance evidence is recorded in the [request](../field-reports/third-our-identity.md#acceptance-for-slice-1). |
 | 2 | Native editing | After the viewer; define source-bound edit policy and host validation, protect machinery fields and preserve save guards. Coordinate any public editor changes with proposal 0009. |
 | 3 | Native reconnect efficiency | After the viewer; evaluate resumable watches, streaming-list initialization and pagination with explicit membership/checkpoint tests. Do not claim these efficiencies for slice 1. |
 | 4 | Gateway upstream continuation | Independent track with a design below; review reopen/credential bounds, record a baseline, implement and measure. No dependency on native transport. |
@@ -48,22 +50,17 @@ before starting a later one. Deliver separately reviewable changes and use the p
 
 ### Next implementation
 
-Start the native viewer from the branch containing the implemented connector separation and Go API
-cleanup. Keep native frame parsing separate from SSE while sharing lifecycle and useful HTTP helpers.
-The short read-only contract and test results belong in the implementation PR; no additional
-editor-design review or comparison campaign must finish first.
+The native viewer is in place: native frame parsing stays separate from SSE, and both connectors share
+the lifecycle and HTTP helpers. It re-lists on every reconnect and refuses paginated responses; it
+claims no resume efficiency. Choose the next change from orders 2 and 3, or from the independent
+tracks; none of them waits for another.
 
-Preserve existing SSE behavior and public APIs during the lifecycle refactor. Slice 1 requires complete
-LIST membership, correct type/UID handling, an accepted WATCH before live readiness, transport-specific
-410 recovery, terminal refusals, bounded repeated failure and cancellation. Use unpaginated lists;
-reject unexpected continuation rather than pruning a partial snapshot. Add one small runnable native
-viewer and document the two sources. See the [request](../field-reports/third-our-identity.md#acceptance-for-slice-1).
-
-Keep the current standalone state-input helper. Proposed editor removals remain in
+Native editing (order 2) builds on the viewer without waiting for resume or streaming lists. Native
+reconnect efficiency (order 3) needs its own membership and checkpoint tests. Keep the current
+standalone state-input helper; proposed editor removals remain in
 [proposal 0009](0009-stream-and-editor-separation.md#proposed-editor-cleanup), with brief API change notes
-when implemented. Native editing can follow the viewer without waiting for resume or streaming lists.
-Gateway continuation and save measurements can proceed independently. Retain the existing projected
-save flow and explicit protocol-version policy; neither needs redesign to deliver a native viewer.
+when implemented. Gateway continuation and save measurements proceed independently. Retain the existing
+projected save flow and explicit protocol-version policy.
 
 ## Deferred work
 

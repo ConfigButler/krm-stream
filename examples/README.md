@@ -1,11 +1,13 @@
 # Examples
 
 Start with [watching resources](../docs/why-a-gateway.md) and supported host wiring, then add the
-optional editor. The checked browser example in [`vanilla-browser/`](vanilla-browser/) runs against
-the current gateway source over SSE. A minimal native viewer is
-[next work](../docs/field-reports/third-our-identity.md#slice-1-a-native-viewer); it reuses the current
-read-only store and lifecycle. Native editing and the larger view/sharing comparison follow separately.
-For current host integration patterns, use these small recipes:
+optional editor.
+
+[Native viewer](native-viewer/README.md) is a read-only page that lists and watches native resources
+through an existing host proxy, such as `kubectl proxy`, with the shared lifecycle and read-only store.
+The checked browser example in [`vanilla-browser/`](vanilla-browser/) runs against the gateway source
+over SSE. Native editing and the larger view/sharing comparison follow separately.
+For gateway host integration patterns, use these small recipes:
 
 - [Same-origin cookie application](../docs/adopting.md#1-mount-the-stream-endpoint): fetch
   connector, session cookie, dynamic client acting as the user.

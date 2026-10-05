@@ -1,7 +1,8 @@
 # Watch streams, optional editing and native access
 
-**Current request, 2026-10-05. Slice 1 is not implemented.** The implementation starting point includes
-connector separation, Go API cleanup and real-API save tests. Use [proposal 0006](../proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order)
+**Request of 2026-10-05. Slice 1, the native viewer, is implemented; the follow-ups below remain
+open.** It builds on the connector separation, Go API cleanup and real-API save tests. Use
+[proposal 0006](../proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order)
 for completed work, delivery order and independent tracks.
 
 ## Identity and ownership
@@ -13,13 +14,13 @@ conflict review and captured save intent; the host owns every write.
 
 | Source | Delivered content | Added value |
 |---|---|---|
-| Native through a host proxy — requested | Original Kubernetes resources the host authorizes, including Secret values and machinery fields | Reuse connection lifecycle and live state without adopting the gateway |
-| Gateway — supported today | Named projected views delivered over SSE | Selected disclosure, fewer downstream events and optional shared upstream watches |
+| Native through a host proxy — read-only viewing implemented | Original Kubernetes resources the host authorizes, including Secret values and machinery fields | Reuse connection lifecycle and live state without adopting the gateway |
+| Gateway — supported | Named projected views delivered over SSE | Selected disclosure, fewer downstream events and optional shared upstream watches |
 
 Native is the straightforward entry point for a host that already proxies Kubernetes. Gateway SSE
 is the delivery format of the projected source, not a legacy label for its capabilities. Both sources
-use fetch and should share frontend lifecycle and state application. SSE and native JSON can both
-carry errors. The existing SSE connector already handles HTTP refusals and in-stream errors.
+use fetch and share frontend lifecycle and state application. SSE and native JSON can both carry
+errors; each connector classifies its own HTTP refusals and in-stream errors.
 
 Scope, projection, suppression and sharing have separate costs and guarantees; see
 [watching resources](../why-a-gateway.md). Full/spec redaction withholds core Secret values while
@@ -33,6 +34,11 @@ session-authenticated `/k8s` proxy. Its page should reuse krm-stream lifecycle a
 wrapping native watch frames in SSE. Keep the projected gateway and its current v1 wire contract.
 
 ### Slice 1: a native viewer
+
+**Implemented** as `connectNativeWatch` and `nativeCollectionURL`, with a shared internal lifecycle
+used by both connectors, the [native viewer example](../../examples/native-viewer/README.md) and the
+[client reference](../../packages/krm-stream/README.md#native-connections). The requirements below are
+the contract it was built and tested against.
 
 Deliver one small read-only connector, using the existing `ResourceStateEvent` consumer and
 `LiveResourceStore(readOnlyPolicy)`. Keep the standalone `applyStreamEvent` API for this slice;
@@ -68,6 +74,12 @@ change; native editing and the larger comparison project do not gate it.
 
 ### Acceptance for slice 1
 
+**Met.** Deterministic fake-fetch tests in `packages/krm-stream/test/native.test.ts` cover the list
+below; the existing SSE lifecycle suite passes unchanged. `task e2e-browser` loads the example on both
+entry points against a Playwright-played proxy, and `TestRealAPINativeWatchThroughHostProxy`
+(`task test-real-api`) runs the connector through a credential-holding `/k8s` proxy against a real
+API server: typed-list type metadata, modification, deletion, selector exit and same-name recreation.
+
 Tests cover an empty collection; complete-list validation, unexpected continuation and type metadata;
 chunked frames; malformed/truncated input; initial/list/watch failures; HTTP/in-stream 410 and auth
 refusal; transient retries, exhaustion and retry hints; close during fetch/read/backoff; host callback
@@ -80,6 +92,14 @@ harness can exercise LIST/WATCH cheaply, add one focused integration case and re
 a new cluster campaign is not a prerequisite. Existing tests still apply to any changed lifecycle.
 
 ## Follow-ups after the viewer
+
+Each is separate from slice 1 and from the others:
+
+- Native editing with machinery/last-applied protections and a source-bound write contract.
+- Native resume, streaming lists and pagination.
+- Comparative view and sharing measurements.
+- Independent gateway continuation and save-progress evaluation.
+- The independently proposed editor API cleanup in proposal 0009.
 
 Native editing is a separate slice: define the editable policy, exclude machinery and last-applied
 annotation changes, and bind host reads/writes to the same source and UID. Preserve later typing,

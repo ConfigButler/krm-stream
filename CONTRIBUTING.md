@@ -16,10 +16,10 @@ Run `task fixtures-check`, `task test`, and `task lint` before opening a pull re
 ## Design rules
 
 Start with watch streams and authoritative resource views; add editing as an optional layer.
-The [README](README.md) explains current capabilities and the native-fetch direction. Current API
-examples must match this branch. The next native slice is read-only LIST/WATCH using the existing
-lifecycle and state-input helper; editor cleanup, native editing and larger comparisons are separate.
-Native transport and save-progress evaluation remain proposals until implemented.
+The [README](README.md) explains current capabilities and how to choose a native or gateway source.
+Current API examples must match this branch. Native viewing is read-only LIST/WATCH on the shared
+connection lifecycle; native editing, native resume, editor cleanup and larger comparisons are
+separate. Save-progress evaluation remains a proposal until implemented.
 
 - Keep the core gateway free of `client-go`; Kubernetes integration belongs in `gateway/kube`.
 - Keep the browser client framework-free and free of runtime dependencies.
@@ -62,9 +62,9 @@ the rule it protects.
 |---|---|
 | `task test` | Deterministic gateway, adapter, client, and shared-fixture coverage. |
 | `task e2e-wire` | Real Go SSE bytes consumed by the TypeScript client over HTTP. |
-| `task e2e-browser` | Native `EventSource` and unbundled ESM in Chromium. |
+| `task e2e-browser` | Native `EventSource`, unbundled ESM and the native viewer example in Chromium. |
 | `task cluster-facts` | Record observed Kubernetes behavior for the supported cluster version. |
-| `task test-real-api` | Compose the save path against a real API server: gateway, host endpoint and browser store. |
+| `task test-real-api` | Compose the save path and native viewing against a real API server: gateway or host proxy, host endpoint and browser store. |
 | `task test-cluster` | Exercise the Kubernetes backend against a real API server. |
 
 The cluster tasks need Docker and take longer; the fixture suites are the per-pull-request baseline.

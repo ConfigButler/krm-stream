@@ -9,9 +9,9 @@ PR #54. Use [the gateway README](../../gateway/README.md) for current setup and
 Keep one name per API, share stream configuration and remove repository-only runtime exports before
 1.0. Preserve authorization, named projections, bounded HTTP delivery, shared-watch lifecycle and
 v1 wire behavior. The gateway remains the projected watch layer and current SSE delivery path;
-[native browser transport](../field-reports/third-our-identity.md#native-watch-connector) is separate
-requested work. The gateway remains the projected source over SSE; a native viewer does not require
-changes to its APIs or framing.
+[native browser transport](../field-reports/third-our-identity.md#native-watch-connector) is separate.
+The gateway remains the projected source over SSE; the native viewer required no change to its APIs
+or framing.
 
 | Area | Implemented result |
 |---|---|

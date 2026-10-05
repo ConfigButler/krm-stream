@@ -60,9 +60,9 @@ recreated resource from an earlier object with the same name.
 
 The fetch connector exposes `connecting`, `syncing`, `live`, `retrying`, `closed`, `terminal` and
 `exhausted`. Apply state events synchronously before rendering completion. Retryable failures recover
-within the connector's bounded budget. For the current SSE connector, every HTTP 4xx except 408/429,
-terminal stream errors and a mismatched protocol header stop the connection. Native history-expiry
-410 needs different recovery; it must be classified by native transport, not this SSE rule.
+within the connector's bounded budget. For the gateway SSE connector, every HTTP 4xx except 408/429,
+terminal stream errors and a mismatched protocol header stop the connection. The native connector
+classifies HTTP and in-stream 410 (expired watch history) as recoverable by a fresh LIST instead.
 Dispose subscriptions and close the handle when their owner leaves. See the
 [client lifecycle reference](../packages/krm-stream/README.md#connections).
 
@@ -86,23 +86,25 @@ Sharing reduces duplicate resource consumption; it does not supply a rate limite
 ## Native and gateway sources
 
 Native access is the straightforward starting point for a host that already proxies Kubernetes.
-The requested native fetch connector adds lifecycle and state-store reuse while retaining original
-resource fields. The gateway adds defined views, redaction, suppression and watch sharing, delivered
+The native connector, `connectNativeWatch`, adds lifecycle and state-store reuse while retaining
+original resource fields. The gateway adds defined views, redaction, suppression and watch sharing, delivered
 over SSE. Choose the guarantees the page needs. Native access alone does not provide those gateway
 capabilities, and `krm-raw/v1` still differs from native data.
 
 Both sources use fetch; native Kubernetes JSON and gateway SSE are different framing formats, and
-both can carry errors. The existing SSE connector already handles refusal, expiry, cancellation and
-bounded retries. Browser `EventSource` is a different client mechanism with header/retry limitations.
+both can carry errors. Both connectors handle refusal, expiry, cancellation and bounded retries
+through one shared lifecycle; each classifies its own framing and HTTP responses. Browser `EventSource` is a different client mechanism with header/retry limitations.
 
-The [first native slice](field-reports/third-our-identity.md#slice-1-a-native-viewer) is a read-only
-viewer: ordinary LIST, then WATCH from the collection version, with a fresh LIST on every reconnect.
-It reuses the existing lifecycle and `LiveResourceStore(readOnlyPolicy)`. HTTP/in-stream 410 recovers
-within the bounded policy; terminal auth refusal never selects another source. An unexpected paginated
-response must be refused rather than marked complete. Native editing, resume and streaming lists follow
-separately; neither editor cleanup nor a comparative benchmark blocks the viewer.
+The native connector is a read-only viewer source: an ordinary LIST, then a WATCH from the
+collection's resourceVersion, with a fresh LIST on every reconnect. It uses the shared lifecycle and
+`LiveResourceStore(readOnlyPolicy)`, and is `live` only once the snapshot is applied and the WATCH is
+accepted. HTTP/in-stream 410 recovers within the bounded policy; terminal auth refusal never selects
+another source. A paginated LIST response is refused rather than marked complete. Native editing,
+resume, streaming lists and pagination follow separately.
 
-Today use the [gateway wiring](adopting.md); native code snippets will be added with the implementation.
-A same-origin, cookie-authenticated host proxy keeps Kubernetes credentials server-side. Keep stores
-separate across sources, scopes and identities and never fall back from a refused projected source
-into native access. The native connector is not implemented by this documentation change.
+See the [native usage snippet](../README.md#watch-native-resources-through-a-host-proxy), the
+[client reference](../packages/krm-stream/README.md#native-connections) and the
+[native viewer example](../examples/native-viewer/README.md); use the [gateway wiring](adopting.md) for
+projected views. A same-origin, cookie-authenticated host proxy keeps Kubernetes credentials
+server-side. Keep stores separate across sources, scopes and identities and never fall back from a
+refused projected source into native access.

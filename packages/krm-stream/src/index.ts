@@ -2,11 +2,14 @@
 //
 // The public surface is small on purpose:
 //
-//   connectResourceStream  a conforming SSE consumer: delivers each resource state event to a
-//                          callback, and recovers with bounded retries and a fresh snapshot.
+//   connectResourceStream  a conforming gateway SSE consumer: delivers each resource state event to
+//                          a callback, and recovers with bounded retries and a fresh snapshot.
+//   connectNativeWatch     the same lifecycle and events over a native Kubernetes LIST and WATCH,
+//                          through a proxy the host already runs.
 //   LiveResourceStore      holds server truth + your draft; three-way merges every watch event;
 //                          derives dirtiness; tracks conflicts; builds the merge patch.
 //   resourceStreamURL      builds the stream URL from a scope — the encoding the gateway parses back.
+//   nativeCollectionURL    builds a native collection URL behind a host proxy.
 //
 // The store is built test-first against conformance/ — the same fixtures the Go gateway runs. See
 // ../../../docs/client-state-model.md for the algorithm, ../../../spec/v1.md for the wire, and
@@ -25,6 +28,7 @@ export type {
 export { connectResourceStream } from "./connection.ts";
 // Useful to a host that renders paths, and to anyone writing a policy: identity is a segment ARRAY.
 export { clone, deepEqual } from "./deep.ts";
+export { connectNativeWatch } from "./native.ts";
 export { get, has, isPrefix, parsePointer, pathKey } from "./path.ts";
 export { DEFAULT_EDITABLE_REGIONS, defaultPolicy, readOnlyPolicy, regionPolicy } from "./policy.ts";
 export type { KubernetesStructuralSchema } from "./schema.ts";
@@ -47,6 +51,6 @@ export type {
   Scope,
   StreamEvent,
 } from "./types.ts";
-export type { ScopeQuery } from "./url.ts";
-export { resourceStreamURL } from "./url.ts";
+export type { NativeScope, ScopeQuery } from "./url.ts";
+export { nativeCollectionURL, resourceStreamURL } from "./url.ts";
 export { PROTOCOL_VERSION, VERSION } from "./version.ts";

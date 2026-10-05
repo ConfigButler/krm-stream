@@ -50,3 +50,52 @@ export function resourceStreamURL(base: string, scope: ScopeQuery): string {
 
   return `${base}${base.includes("?") ? "&" : "?"}${q.toString()}`;
 }
+
+/** A native collection: what nativeCollectionURL needs to address it through a host proxy. An
+ * empty or absent `group` is the core API; an empty or absent `namespace` is cluster-wide (or every
+ * namespace, for a namespaced resource the host allows that for). */
+export type NativeScope = Omit<Scope, "target">;
+
+/**
+ * Build the URL of a native Kubernetes collection behind a host proxy, for connectNativeWatch.
+ *
+ * ```ts
+ * connectNativeWatch(nativeCollectionURL("/k8s", {
+ *   group: "apps", version: "v1", resource: "deployments", namespace: "app", labelSelector: "tier=web",
+ * }), (event) => applyStreamEvent(store, event));
+ * // → /k8s/apis/apps/v1/namespaces/app/deployments?labelSelector=tier%3Dweb
+ * ```
+ *
+ * `proxyBase` is wherever the host mounts the API server's paths: `/k8s` for a proxy at
+ * `/k8s/api/v1/...`, or an empty string for one at the origin's root. A single object is watched by
+ * name with `fieldSelector=metadata.name=<name>`, so it can be absent, deleted and recreated like
+ * any other collection member. The host owns credentials, routing and which collections it allows.
+ */
+export function nativeCollectionURL(proxyBase: string, scope: NativeScope): string {
+  const segment = (what: string, value: string | undefined) => {
+    if (!value || value === "." || value === ".." || value.includes("/")) {
+      throw new Error(`krm-stream: invalid ${what} ${JSON.stringify(value ?? "")}`);
+    }
+    return encodeURIComponent(value);
+  };
+  const path = [withoutTrailingSlashes(proxyBase)];
+  if (scope.group) path.push("apis", segment("group", scope.group));
+  else path.push("api");
+  path.push(segment("version", scope.version));
+  if (scope.namespace) path.push("namespaces", segment("namespace", scope.namespace));
+  path.push(segment("resource", scope.resource));
+
+  const q = new URLSearchParams();
+  if (scope.labelSelector) q.append("labelSelector", scope.labelSelector);
+  if (scope.name) q.append("fieldSelector", `metadata.name=${scope.name}`);
+  const query = q.toString();
+  return path.join("/") + (query ? `?${query}` : "");
+}
+
+/** The base without its trailing slashes. A loop, not `/\/+$/`: that pattern retries from every
+ * slash in a long run that does not end the string, which is quadratic in the caller's input. */
+function withoutTrailingSlashes(base: string): string {
+  let end = base.length;
+  while (end > 0 && base[end - 1] === "/") end--;
+  return base.slice(0, end);
+}

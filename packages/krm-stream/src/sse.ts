@@ -3,8 +3,8 @@
 //
 // One connection at a time, over fetch: fetch sends the same-origin session cookie a v1 gateway must
 // accept (spec §7) and, unlike native EventSource, can also send `Authorization: Bearer`. It also
-// works in Node, so it is what the conformance suite drives. connection.ts owns everything that spans
-// connections — retries, lifecycle state and the public handle — and is the only caller.
+// works in Node, so it is what the conformance suite drives. lifecycle.ts owns everything that spans
+// connections — retries, lifecycle state and the public handle — and connection.ts is the only caller.
 //
 // The rule that is easy to get wrong: on a TERMINAL error, close the connection and do not come back.
 // A client that reconnects anyway will hammer a scope it can never be allowed to see — forever, from
@@ -13,7 +13,9 @@
 // Nothing here knows about a store. State events go to a consumer, and what it does with them is its
 // own business.
 
-import type { ErrorCode, ResourceStateEvent, StreamEvent } from "./types.ts";
+import { type RequestOptions, refusal, request, retryAfter, statusMessage } from "./http.ts";
+import type { TransportHooks } from "./lifecycle.ts";
+import type { ResourceStateEvent, StreamEvent } from "./types.ts";
 import { PROTOCOL_VERSION } from "./version.ts";
 
 /** Incremental SSE parser. Bytes arrive in whatever chunks the network feels like — a frame can be
@@ -118,32 +120,6 @@ export function toStateEvent(wire: StreamEvent): ResourceStateEvent | null {
   }
 }
 
-/** What one connection reports to connectResourceStream. A host observes the same moments through
- * the handle's state, and the events themselves through its consumer. None of these throw:
- * connectResourceStream catches the host's exceptions itself and aborts the signal instead. */
-export interface ConnectionHooks {
-  /** Receives each state event synchronously, in stream order. */
-  consume: (event: ResourceStateEvent) => void;
-  /** The gateway accepted the stream. Its snapshot has not started yet. */
-  opened(): void;
-  /** A `reset` arrived. Called before the consumer sees it. */
-  reset(): void;
-  /** The consumer has applied `synced` and the connection is still open. */
-  synced(): void;
-  /** A missing or duplicated event. The event beyond the gap was discarded; the connection ends. */
-  gap(expected: number, received: number): void;
-  /** A protocol or HTTP error. A terminal one ends the connection. */
-  error(code: ErrorCode, message: string, terminal: boolean, retryAfterMs?: number): void;
-}
-
-export interface ConnectionOptions {
-  /** Defaults to same-origin; use include for a cross-origin cookie gateway. */
-  credentials?: RequestCredentials;
-  /** Injectable for tests. Defaults to the global fetch. */
-  fetch?: typeof globalThis.fetch;
-  headers?: Record<string, string>;
-}
-
 /** Open one fetch connection and deliver its state events until it ends: EOF, a network failure, a
  * refusal, a terminal error, a sequence gap or `signal`.
  *
@@ -151,9 +127,9 @@ export interface ConnectionOptions {
  * back is the caller's decision. */
 export async function streamOnce(
   url: string,
-  hooks: ConnectionHooks,
+  hooks: TransportHooks,
   signal: AbortSignal,
-  opts: ConnectionOptions = {},
+  opts: RequestOptions = {},
 ): Promise<void> {
   const controller = new AbortController();
   const abort = () => controller.abort();
@@ -191,23 +167,9 @@ export async function streamOnce(
 
   try {
     if (controller.signal.aborted) return;
-    const res = await (opts.fetch ?? globalThis.fetch)(url, {
-      signal: controller.signal,
-      headers: { Accept: "text/event-stream", ...opts.headers },
-      // The stream IS the response body; a cached one is a stream that never moves.
-      cache: "no-store",
-      credentials: opts.credentials ?? "same-origin",
-    });
+    const res = await request(url, "text/event-stream", controller.signal, opts);
     if (!res.ok || !res.body) {
-      const code: ErrorCode =
-        res.status === 401
-          ? "UNAUTHENTICATED"
-          : res.status === 403
-            ? "FORBIDDEN"
-            : res.status === 429 || res.status === 502 || res.status === 503 || res.status === 504
-              ? "UPSTREAM_UNAVAILABLE"
-              : "INTERNAL";
-      const terminal = res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429;
+      const { code, terminal } = refusal(res.status);
       const message = (await statusMessage(res, controller.signal)) ?? `stream: HTTP ${res.status}`;
       if (controller.signal.aborted) return; // closed while reading the refusal: report nothing
       hooks.error(code, message, terminal, retryAfter(res.headers.get("Retry-After")));
@@ -258,75 +220,8 @@ export async function streamOnce(
     }
   } catch {
     // The network failed. This connection is over, and the caller decides about the next. Host
-    // callbacks never land here: connectResourceStream catches their exceptions itself.
+    // callbacks never land here: the lifecycle catches their exceptions itself.
   } finally {
     signal.removeEventListener("abort", abort);
   }
-}
-
-/** The largest refusal body read in search of a Kubernetes Status message. */
-const maxStatusBytes = 16 * 1024;
-/** How long a refusal body may take to arrive. A known 401, 403 or 429 must not wait on a server
- * that stalls the body explaining it. */
-const statusBudgetMs = 2_000;
-
-/** The `message` of a Kubernetes `Status` body, as a host proxying `/k8s` refuses with, or
- * undefined. It reads at most maxStatusBytes for at most budgetMs, stops when `signal` aborts, and
- * always releases the body. */
-export async function statusMessage(
-  res: Response,
-  signal: AbortSignal,
-  budgetMs = statusBudgetMs,
-): Promise<string | undefined> {
-  if (!res.body) return undefined;
-  if (signal.aborted || !/^application\/json\b/i.test(res.headers.get("Content-Type") ?? "")) {
-    await res.body.cancel().catch(() => {});
-    return undefined;
-  }
-  const reader = res.body.getReader();
-  let gaveUp = false;
-  // Cancelling the reader settles a pending read(), so a quiet body cannot hold this open.
-  const giveUp = () => {
-    gaveUp = true;
-    void reader.cancel().catch(() => {});
-  };
-  const timer = setTimeout(giveUp, budgetMs);
-  signal.addEventListener("abort", giveUp, { once: true });
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (gaveUp) return undefined;
-      if (done) break;
-      size += value.byteLength;
-      if (size > maxStatusBytes) return undefined;
-      chunks.push(value);
-    }
-    const bytes = new Uint8Array(size);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    const status: unknown = JSON.parse(new TextDecoder().decode(bytes));
-    if (typeof status !== "object" || status === null) return undefined;
-    const { kind, message } = status as { kind?: unknown; message?: unknown };
-    return kind === "Status" && typeof message === "string" && message !== "" ? message : undefined;
-  } catch {
-    return undefined;
-  } finally {
-    clearTimeout(timer);
-    signal.removeEventListener("abort", giveUp);
-    await reader.cancel().catch(() => {});
-  }
-}
-
-/** An HTTP `Retry-After` in milliseconds: delay-seconds or an HTTP-date. */
-export function retryAfter(header: string | null, now = Date.now()): number | undefined {
-  if (header === null) return undefined;
-  const value = header.trim();
-  if (/^\d+$/.test(value)) return Number(value) * 1000;
-  const at = Date.parse(value);
-  return Number.isNaN(at) ? undefined : Math.max(0, at - now);
 }

@@ -11,7 +11,8 @@ task demo
 
 Use `task e2e-browser` to run the Chromium check. It loads both published entry points, and also
 reads the gateway with a raw native `EventSource` to check its framing, reconnect snapshots and
-terminal shutdown.
+terminal shutdown. The same run loads the [native viewer](../native-viewer/README.md) against a
+Playwright-played host proxy.
 
 The page demonstrates live status updates, three-way conflict handling, draft edits, and redacted
 Secret values. Useful fixtures include:
@@ -27,9 +28,9 @@ Secret values. Useful fixtures include:
 
 Add `pace=0ms` for the fastest replay or use a positive value to inspect each event.
 
-The example uses today's projected SSE connector over fetch. For a read-only page, render server
-state with `LiveResourceStore(readOnlyPolicy)` as shown in the [README](../../README.md#watch-a-resource-view-today).
+The example uses the gateway's projected SSE connector over fetch. For a read-only page, render server
+state with `LiveResourceStore(readOnlyPolicy)` as shown in the [README](../../README.md#watch-a-gateway-view).
 Editing is an optional layer; the [editor model](../../docs/client-state-model.md) and
-[saving guide](../../docs/saving.md) describe its intended use. A small native viewer is the next
-slice; native editing and a larger source comparison follow separately. They are not features of
-this gateway replay demo.
+[saving guide](../../docs/saving.md) describe its intended use. For native resources through a host
+proxy, see the [native viewer](../native-viewer/README.md), which this suite also loads; native
+editing and a larger source comparison follow separately.
