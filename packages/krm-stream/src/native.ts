@@ -85,7 +85,7 @@ async function watchOnce(
   // Called detached, so a consumer never sees this hooks object as `this`.
   const { consume } = hooks;
 
-  /** Report a refused response; false when the connection must end. */
+  /** Report a refused response. The connection ends either way. */
   const refused = async (phase: string, res: Response) => {
     const { code, terminal } = classify(res.status);
     const message = (await statusMessage(res, controller.signal)) ?? `native ${phase}: HTTP ${res.status}`;
