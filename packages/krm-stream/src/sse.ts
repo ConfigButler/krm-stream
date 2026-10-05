@@ -119,7 +119,8 @@ export function toStateEvent(wire: StreamEvent): ResourceStateEvent | null {
 }
 
 /** What one connection reports to connectResourceStream. A host observes the same moments through
- * the handle's state, and the events themselves through its consumer. */
+ * the handle's state, and the events themselves through its consumer. None of these throw:
+ * connectResourceStream catches the host's exceptions itself and aborts the signal instead. */
 export interface ConnectionHooks {
   /** Receives each state event synchronously, in stream order. */
   consume: (event: ResourceStateEvent) => void;
@@ -143,24 +144,17 @@ export interface ConnectionOptions {
   headers?: Record<string, string>;
 }
 
-/** The consumer's exception, boxed so that even `throw undefined` cannot pass for a clean end. */
-export interface ConsumerFailure {
-  error: unknown;
-}
-
 /** Open one fetch connection and deliver its state events until it ends: EOF, a network failure, a
- * refusal, a terminal error, a sequence gap, `signal`, or an exception from the consumer.
+ * refusal, a terminal error, a sequence gap or `signal`.
  *
  * It resolves in every case, after the reader and listeners are released, because whether to come
- * back is the caller's decision. Only the consumer's own exception is returned. It is captured where
- * it was thrown, so neither a close() from inside the consumer nor the clean-up after it can turn it
- * into an ordinary ending. */
+ * back is the caller's decision. */
 export async function streamOnce(
   url: string,
   hooks: ConnectionHooks,
   signal: AbortSignal,
   opts: ConnectionOptions = {},
-): Promise<ConsumerFailure | undefined> {
+): Promise<void> {
   const controller = new AbortController();
   const abort = () => controller.abort();
   signal.addEventListener("abort", abort, { once: true });
@@ -168,7 +162,6 @@ export async function streamOnce(
   const sequence = new StreamSequence();
   // Called detached, so a consumer never sees this hooks object as `this`.
   const { consume } = hooks;
-  let failure: ConsumerFailure | undefined;
 
   /** Check and deliver one decoded event; false when the connection must end. */
   const deliver = (wire: StreamEvent): boolean => {
@@ -190,19 +183,14 @@ export async function streamOnce(
       hooks.reset();
       if (controller.signal.aborted) return false;
     }
-    try {
-      consume(event);
-    } catch (error) {
-      failure = { error };
-      return false;
-    }
-    // A consumer that closed the stream while applying `synced` gets no later `live`.
+    consume(event);
+    // A consumer that closed the stream — or threw — while applying `synced` gets no later `live`.
     if (event.type === "synced" && !controller.signal.aborted) hooks.synced();
     return true;
   };
 
   try {
-    if (controller.signal.aborted) return undefined;
+    if (controller.signal.aborted) return;
     const res = await (opts.fetch ?? globalThis.fetch)(url, {
       signal: controller.signal,
       headers: { Accept: "text/event-stream", ...opts.headers },
@@ -221,26 +209,26 @@ export async function streamOnce(
               : "INTERNAL";
       const terminal = res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429;
       const message = (await statusMessage(res, controller.signal)) ?? `stream: HTTP ${res.status}`;
-      if (controller.signal.aborted) return undefined; // closed while reading the refusal: report nothing
+      if (controller.signal.aborted) return; // closed while reading the refusal: report nothing
       hooks.error(code, message, terminal, retryAfter(res.headers.get("Retry-After")));
-      return undefined;
+      return;
     }
     if (controller.signal.aborted) {
       await res.body.cancel().catch(() => {});
-      return undefined;
+      return;
     }
     // The header is optional (spec §0), and a cross-origin response may hide it. Only a version
     // that is present and different is refused, before a single event of it is applied.
     const protocol = res.headers.get("X-KRM-Stream-Protocol");
     if (protocol !== null && protocol.trim() !== String(PROTOCOL_VERSION)) {
       await res.body.cancel().catch(() => {});
-      if (controller.signal.aborted) return undefined;
+      if (controller.signal.aborted) return;
       hooks.error(
         "INTERNAL",
         `stream: protocol mismatch: the gateway speaks X-KRM-Stream-Protocol ${JSON.stringify(protocol)}, this client speaks ${PROTOCOL_VERSION}`,
         true,
       );
-      return undefined;
+      return;
     }
 
     hooks.opened();
@@ -254,13 +242,13 @@ export async function streamOnce(
     try {
       for (;;) {
         const { done, value } = await reader.read();
-        if (done || controller.signal.aborted) return failure;
+        if (done || controller.signal.aborted) return;
         for (const ev of decoder.push(value)) {
           // One chunk can hold many events. Nothing after a close is delivered.
-          if (controller.signal.aborted) return failure;
+          if (controller.signal.aborted) return;
           if (!deliver(ev)) {
-            controller.abort(); // gap, terminal error or consumer failure: stop this connection
-            return failure;
+            controller.abort(); // a gap or a terminal error: stop this connection
+            return;
           }
         }
       }
@@ -269,9 +257,8 @@ export async function streamOnce(
       await reader.cancel().catch(() => {});
     }
   } catch {
-    // The network failed, or an observer threw. Either way this connection is over and the caller
-    // decides about the next. A consumer exception never lands here: deliver() captured it.
-    return failure;
+    // The network failed. This connection is over, and the caller decides about the next. Host
+    // callbacks never land here: connectResourceStream catches their exceptions itself.
   } finally {
     signal.removeEventListener("abort", abort);
   }

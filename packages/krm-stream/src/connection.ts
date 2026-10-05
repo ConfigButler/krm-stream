@@ -16,7 +16,9 @@ export interface ConnectionState {
 
 /** Receives every resource state event exactly once, synchronously and in stream order. It must
  * finish applying the event before it returns: `live` is published only after it has applied
- * `synced`. An exception it throws ends the stream; see ResourceStreamHandle.closed. */
+ * `synced`. Do not pass an `async` function: it type-checks, because the result is ignored, but it
+ * returns before applying anything and its exceptions never reach `closed`. An exception it throws
+ * ends the stream; see ResourceStreamHandle.closed. */
 export type ResourceEventConsumer = (event: ResourceStateEvent) => void;
 
 export interface ResourceStreamOptions {
@@ -46,8 +48,9 @@ export interface ResourceStreamHandle {
   subscribe(callback: (state: Readonly<ConnectionState>) => void): () => void;
   close(): void;
   /** Settles once the stream has ended — closed, aborted, terminal or exhausted — and its reader,
-   * timers and listeners are released. It rejects, after the same clean-up and a `closed` state, with
-   * the consumer's own exception when the consumer threw, even if it called close() first. */
+   * timers and listeners are released. It rejects, after the same clean-up, with the first exception
+   * your own code threw: the consumer, a `subscribe` callback or `onError`, even after calling
+   * close(). Attach a rejection handler, or a thrown render bug becomes an unhandled rejection. */
   closed: Promise<void>;
 }
 
@@ -55,7 +58,13 @@ export interface ResourceStreamHandle {
  * each state event to `consume`. Every reconnect requests a fresh snapshot; whatever the consumer
  * holds survives it. HTTP 401/403, terminal protocol errors and a different protocol version stop
  * permanently. EOF, network failures, sequence gaps and retryable errors such as
- * UPSTREAM_UNAVAILABLE consume a bounded retry budget. A consumer exception stops at once.
+ * UPSTREAM_UNAVAILABLE consume a bounded retry budget.
+ *
+ * An exception from the host's own code — the consumer, a `subscribe` callback or `onError` — is a
+ * bug, not a network failure: retrying would turn it into a reconnect storm. It stops the stream at
+ * once without a retry, every subscriber still sees the state being published, the final state is
+ * `closed` (unless the stream had already ended `terminal` or `exhausted`), and `closed` rejects with
+ * the first exception.
  *
  * A server's retry hint (an HTTP `Retry-After`, or an error event's `retryAfterMs`) sets the least
  * the next reconnect waits, within `maxRetryDelayMs`. A non-terminal event on an open connection does
@@ -94,9 +103,24 @@ export function connectResourceStream(
     clearTimeout(healthTimer);
     healthTimer = undefined;
   };
+  // The first exception the host's own code threw. Recorded wherever it happens, so a close() from
+  // inside the same callback cannot turn it into an ordinary ending.
+  let failure: { error: unknown } | undefined;
+  const fail = (error: unknown) => {
+    failure ??= { error };
+    clearHealthTimer();
+    controller.abort();
+  };
+  const call = (callback: () => void) => {
+    try {
+      callback();
+    } catch (error) {
+      fail(error);
+    }
+  };
   const publish = (status: ConnectionStatus, detail: Pick<ConnectionState, "retryInMs" | "gap"> = {}) => {
     state = Object.freeze({ status, retries: state.retries, ...detail });
-    for (const callback of subscribers) callback(state);
+    for (const callback of subscribers) call(() => callback(state));
   };
   const close = () => {
     clearHealthTimer();
@@ -105,88 +129,84 @@ export function connectResourceStream(
   opts.signal?.addEventListener("abort", close, { once: true });
   if (opts.signal?.aborted) close();
 
+  /** Connect and reconnect until the stream ends, and say how it ended. */
+  const run = async (): Promise<"closed" | "terminal" | "exhausted"> => {
+    while (!controller.signal.aborted) {
+      publish("connecting");
+      if (controller.signal.aborted) break;
+      hintMs = undefined;
+      let gap: ConnectionState["gap"];
+      await streamOnce(
+        url,
+        {
+          consume: (event) => call(() => consume(event)),
+          opened: () => publish("syncing"),
+          reset: () => {
+            clearHealthTimer();
+            publish("syncing");
+          },
+          synced: () => {
+            hintMs = undefined;
+            if (state.status !== "live") {
+              healthTimer = setTimeout(() => {
+                healthTimer = undefined;
+                if (!controller.signal.aborted && state.status === "live") {
+                  state = { ...state, retries: 0 };
+                  publish("live");
+                }
+              }, healthyResetMs);
+            }
+            publish("live");
+          },
+          gap: (expected, received) => {
+            clearHealthTimer();
+            gap = Object.freeze({ expected, received });
+          },
+          error: (code, message, isTerminal, retryAfterMs) => {
+            if (isTerminal) clearHealthTimer();
+            terminal ||= isTerminal;
+            if (!isTerminal && retryAfterMs !== undefined) hintMs = retryAfterMs;
+            call(() => opts.onError?.(code, message, isTerminal, retryAfterMs));
+          },
+        },
+        controller.signal,
+        opts,
+      );
+      clearHealthTimer();
+      if (controller.signal.aborted) break;
+      if (terminal) return "terminal";
+      if (state.retries >= maxRetries) return "exhausted";
+      const ceiling = Math.min(cap, delay * 2 ** Math.min(state.retries, 30));
+      const jittered = Math.floor(ceiling * (0.5 + Math.random() * 0.5));
+      const wait = Math.min(cap, Math.max(jittered, hintMs ?? 0));
+      state = { ...state, retries: state.retries + 1 };
+      publish("retrying", { retryInMs: wait, ...(gap && { gap }) });
+      await new Promise<void>((resolve) => {
+        const done = () => {
+          clearTimeout(timer);
+          controller.signal.removeEventListener("abort", done);
+          resolve();
+        };
+        const timer = setTimeout(done, wait);
+        controller.signal.addEventListener("abort", done, { once: true });
+        if (controller.signal.aborted) done();
+      });
+    }
+    return "closed";
+  };
+
   // Defer opening until the handle exists, so subscribers can observe the first transition.
   const closed = Promise.resolve().then(async () => {
     try {
-      while (!controller.signal.aborted) {
-        publish("connecting");
-        if (controller.signal.aborted) break;
-        hintMs = undefined;
-        let gap: ConnectionState["gap"];
-        const failure = await streamOnce(
-          url,
-          {
-            consume,
-            opened: () => publish("syncing"),
-            reset: () => {
-              clearHealthTimer();
-              publish("syncing");
-            },
-            synced: () => {
-              hintMs = undefined;
-              if (state.status !== "live") {
-                healthTimer = setTimeout(() => {
-                  healthTimer = undefined;
-                  if (!controller.signal.aborted && state.status === "live") {
-                    state = { ...state, retries: 0 };
-                    publish("live");
-                  }
-                }, healthyResetMs);
-              }
-              publish("live");
-            },
-            gap: (expected, received) => {
-              clearHealthTimer();
-              gap = Object.freeze({ expected, received });
-            },
-            error: (code, message, isTerminal, retryAfterMs) => {
-              if (isTerminal) clearHealthTimer();
-              terminal ||= isTerminal;
-              if (!isTerminal && retryAfterMs !== undefined) hintMs = retryAfterMs;
-              opts.onError?.(code, message, isTerminal, retryAfterMs);
-            },
-          },
-          controller.signal,
-          opts,
-        );
-        clearHealthTimer();
-        if (failure) {
-          // Not a Kubernetes error and not retryable: the application's own code failed. The reader is
-          // already released; report the end, then the exception itself.
-          publish("closed");
-          throw failure.error;
-        }
-        if (controller.signal.aborted) break;
-        if (terminal) {
-          publish("terminal");
-          return;
-        }
-        if (state.retries >= maxRetries) {
-          publish("exhausted");
-          return;
-        }
-        const ceiling = Math.min(cap, delay * 2 ** Math.min(state.retries, 30));
-        const jittered = Math.floor(ceiling * (0.5 + Math.random() * 0.5));
-        const wait = Math.min(cap, Math.max(jittered, hintMs ?? 0));
-        state = { ...state, retries: state.retries + 1 };
-        publish("retrying", { retryInMs: wait, ...(gap && { gap }) });
-        await new Promise<void>((resolve) => {
-          const done = () => {
-            clearTimeout(timer);
-            controller.signal.removeEventListener("abort", done);
-            resolve();
-          };
-          const timer = setTimeout(done, wait);
-          controller.signal.addEventListener("abort", done, { once: true });
-          if (controller.signal.aborted) done();
-        });
-      }
-      publish("closed");
+      const ended = await run();
+      // A host exception ends the stream as closed, whatever the loop was doing when it happened.
+      publish(failure ? "closed" : ended);
     } finally {
       clearHealthTimer();
       opts.signal?.removeEventListener("abort", close);
       subscribers.clear();
     }
+    if (failure) throw failure.error;
   });
   return {
     close,

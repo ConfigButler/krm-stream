@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { LiveResourceStore } from "../src/index.ts";
+import { applyStreamEvent, LiveResourceStore } from "../src/index.ts";
 
 const object = (rv: string, value = "base") => ({
   apiVersion: "v1",
@@ -129,6 +129,31 @@ test("a late GET cannot mark an object present in a recovery snapshot", () => {
   store.endSnapshot();
   assert.deepEqual(store.ids(), []);
   assert.equal(beforeReset(object("2")), false);
+});
+
+// The adopted-save ghost. A save response that lands after a reconnect's reset is not evidence that
+// the object survived the disconnect: only the snapshot is. Counting it as seen kept a deleted UID
+// alive through an empty snapshot, with nothing left that would ever remove it.
+test("an adopted save response never counts as snapshot membership", () => {
+  const store = new LiveResourceStore();
+  applyStreamEvent(store, { type: "reset" });
+  applyStreamEvent(store, { type: "added", object: object("1") });
+  applyStreamEvent(store, { type: "synced" });
+
+  applyStreamEvent(store, { type: "reset" });
+  store.adoptSaved(object("2", "saved"));
+  assert.equal(store.server("u").metadata.resourceVersion, "2", "the response is still adopted");
+  applyStreamEvent(store, { type: "synced" });
+  assert.deepEqual(store.ids(), [], "deleted while disconnected: the empty snapshot prunes it");
+
+  // A create response mid-snapshot is held until synced, and kept only if the snapshot sends it.
+  const created = { ...object("3"), metadata: { uid: "new", name: "created", resourceVersion: "3" } };
+  applyStreamEvent(store, { type: "reset" });
+  store.adoptSaved(created);
+  assert.deepEqual(store.ids(), ["new"]);
+  applyStreamEvent(store, { type: "added", object: created });
+  applyStreamEvent(store, { type: "synced" });
+  assert.deepEqual(store.ids(), ["new"]);
 });
 
 test("stateless reconciliation preserves redaction protection without inventing revisions", () => {

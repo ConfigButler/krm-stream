@@ -1,15 +1,15 @@
 # Proposal 0010 Gateway API cleanup
 
-**Status: proposed implementation plan.** No Go APIs are changed by this document.
-Source review baseline: `a8281c5`; proposal review branch: `0cde13b`, 2026-10-04.
+**Status: implemented** in [#54](https://github.com/ConfigButler/krm-stream/pull/54), as the two
+changes below, pending review. Source review baseline: `a8281c5`; proposal review branch: `0cde13b`,
+2026-10-04.
 
 Simplify gateway configuration and remove duplicate entry points and repository-only harness
-exports.
-Preserve authorization, projection, bounded HTTP delivery, shared-watch lifecycle and v1 wire
-behavior.
-Deliver independently from [browser separation](0009-stream-and-editor-separation.md). Follow the
-[design rules](../../CONTRIBUTING.md#design-rules) and [release policy](../releasing.md): remove
-superseded names before 1.0 and migrate callers together.
+exports. Preserve authorization, projection, bounded HTTP delivery, shared-watch lifecycle and v1
+wire behavior. Deliver independently from [browser
+separation](0009-stream-and-editor-separation.md). Follow the [design
+rules](../../CONTRIBUTING.md#design-rules) and [release policy](../releasing.md): remove superseded
+names before 1.0 and migrate callers together.
 
 The source audit establishes repository use, not every consumer's use. Field reports record
 krm-foyer adoption but do not establish which exports its current checkout imports. Inventory
@@ -69,10 +69,10 @@ type Gateway struct {
 ```
 
 `StreamConfig` contains `Authorizer`, `Clients`, `Projections`, `Ordering`, `Observer`,
-`Diagnostics`,
-`HeartbeatInterval`, `WriteTimeout`, `ReauthorizationInterval` and `ReauthorizationTimeout`.
-Use Authorizer consistently, removing Gateway.Auth. Handler copies the single config value rather
-than assigning every shared field individually. Preserve host-callback validation.
+`Diagnostics`, `HeartbeatInterval`, `WriteTimeout`, `ReauthorizationInterval` and
+`ReauthorizationTimeout`. Use Authorizer consistently, removing Gateway.Auth. Handler copies the
+single config value rather than assigning every shared field individually. Preserve host-callback
+validation.
 
 Go composite literals must explicitly name the embedded configuration:
 
@@ -91,6 +91,10 @@ gateway.Options{
 }
 ```
 
+The cost is one level of nesting in a host's literals. Assignments such as `options.Authorizer = …`
+keep working through field promotion, and the [upgrade guide](../migrating.md) maps each old literal
+to the new one.
+
 Remove the Projection configuration field. Nil Projections retains the safe full policy through
 `StaticProjection(ProjectionFull)`. A host with one view supplies StaticProjection; a host selecting
 by principal/scope supplies ProjectionPolicy. Raw Secret disclosure continues to require explicit
@@ -100,25 +104,26 @@ Preserve validation, including negative values and positive HTTP write timeout w
 The shared struct must not impose HTTP-only restrictions on transport-neutral sinks. Direct HTTP
 validation still occurs before response I/O or backend opening. Update comments and error messages
 to identify the shared Ordering setting without assuming Handler users configure a Gateway literal.
+The strict-ordering refusal is the one message on the wire this touches: its golden transcript
+changes in message prose only, which both suites compare loosely.
 
 ## Repository-only exports
 
-Move [conformance.go](../../gateway/conformance.go) and
-[scripted.go](../../gateway/scripted.go) into `gateway/internal/conformance` or similarly narrow
-internal packages. Move Fixture, WatchOp, FixtureEvent, Corpus, loaders and ScriptedBackend together
-as needed. The harness may import gateway domain types; production gateway must not import it.
-Use explicit corpus paths from commands/tests. Remove the production relative-path convenience
-loader; a test helper may supply the repository path.
+Move [conformance.go](../../gateway/conformance.go) and [scripted.go](../../gateway/scripted.go)
+into `gateway/internal/conformance` or similarly narrow internal packages. Move Fixture, WatchOp,
+FixtureEvent, Corpus, loaders and ScriptedBackend together as needed. The harness may import gateway
+domain types; production gateway must not import it. Use explicit corpus paths from commands/tests.
+Remove the production relative-path convenience loader; a test helper may supply the repository
+path.
 
 A `package gateway` test importing a harness that imports gateway creates a cycle. Move
-fixture-driven
-conformance and golden tests to `package gateway_test`, including fixture-dependent cases currently
-in `stream_test.go`; adapt their recording/replay helpers. Leave private implementation tests in
-`package gateway`. Do not convert the entire suite or export private helpers to avoid the cycle.
-Inspect shared helper dependencies before editing.
+fixture-driven conformance and golden tests to `package gateway_test`, including fixture-dependent
+cases currently in `stream_test.go`; adapt their recording/replay helpers. Leave private
+implementation tests in `package gateway`. Do not convert the entire suite or export private helpers
+to avoid the cycle. Inspect shared helper dependencies before editing.
 
-Keep replay and tests on the same fixture interpreter. Preserve use of the production SSE encoder
-in golden generation, update flags, protocol.json generation, fixture paths and task names. Do not
+Keep replay and tests on the same fixture interpreter. Preserve use of the production SSE encoder in
+golden generation, update flags, protocol.json generation, fixture paths and task names. Do not
 replace executable wire evidence with manually encoded transcripts. Core gateway must no longer
 include repository corpus filesystem loading in its runtime module graph.
 
@@ -139,8 +144,7 @@ canonical parser/TypeScript URL checks against the existing corpus.
 For generic sinks, clarify the existing requirement that the host bounds delivery and honors
 cancellation. Proposal 0008 repaired library-owned HTTP configuration; it did not promise to bound
 arbitrary host I/O. Keep generic bounded-sink tests separate from HTTP blocked-reader/deadline
-tests.
-Deleting the protocol seam is not needed to preserve the HTTP guarantee.
+tests. Deleting the protocol seam is not needed to preserve the HTTP guarantee.
 
 Protocol removals require a separately reviewed compatibility/version decision. This cleanup removes
 duplicate configuration and forwarding paths while preserving the protocol and backend contract.
@@ -156,9 +160,9 @@ Deliver two changes, each buildable and fully migrated:
 
 Update READMEs, adoption, auth and operations guides, root examples and kube examples. Historical
 proposals and dated field reports remain historical: update current-guidance links or add a short
-migration note when useful, rather than rewriting the APIs they originally reviewed.
-[Proposal 0006](0006-stream-and-save-implementation-plan.md) keeps its acceptance criteria and uses
-the final method/configuration names in later work.
+migration note when useful, rather than rewriting the APIs they originally reviewed. [Proposal
+0006](0006-stream-and-save-implementation-plan.md) keeps its acceptance criteria and uses the final
+method/configuration names in later work.
 
 Run `task fixtures-check`, `task test`, `task lint`, `task e2e-wire`, `task e2e-browser` and
 `task pack-client`. Run race checks in both Go modules for changed lifecycle paths. No new cluster
@@ -169,8 +173,7 @@ Focused acceptance must establish:
 - Nil projection policy redacts Secrets; static policy refuses a different requested view; dynamic
   policy runs at opening, cycles and timed checks.
 - Handler/direct HTTP preserve fail-before-I/O validation, unsupported-writer refusal,
-  blocked-client
-  deadlines and healthy-peer isolation. Generic bounded sinks remain usable.
+  blocked-client deadlines and healthy-peer isolation. Generic bounded sinks remain usable.
 - Shared-backend zero/explicit options preserve cancellable openings, sharing, overflow recovery,
   backoff, last-subscriber cleanup and balanced observations.
 - Both config entry points use the same fields/names without per-field mapping. Current code and

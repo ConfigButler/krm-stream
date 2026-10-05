@@ -126,16 +126,23 @@ export class LiveResourceStore {
   // ------------------------------------------------------------------ the stream in --
 
   /** `added` and `modified` — the only two upsert spellings, and they are treated identically
-   * (spec §4). Both mean "here is this object's complete current state". */
+   * (spec §4). Both mean "here is this object's complete current state", and during a snapshot cycle
+   * that the object is still in scope. */
   applyServerEvent(object: KRMObject, opts: ApplyOptions = {}): ApplyResult {
+    this.#seen?.add(object.metadata.uid);
+    return this.#upsert(object, opts);
+  }
+
+  /** Replace the server object and reconcile the draft. Membership is the caller's business: only the
+   * stream's own upserts count towards a snapshot, so a save or read response that lands mid-cycle
+   * can never keep alive an object the snapshot no longer contains. */
+  #upsert(object: KRMObject, opts: ApplyOptions): ApplyResult {
     const id = object.metadata.uid;
     const incoming = clone(object);
     const redacted = (opts.redacted ?? []).map((entry) => ({
       path: typeof entry.path === "string" ? parsePointer(entry.path) : [...entry.path],
       rev: entry.rev,
     }));
-
-    this.#seen?.add(id);
 
     const existing = this.#resources.get(id);
     if (!existing) {
@@ -222,14 +229,16 @@ export class LiveResourceStore {
    * wait for the echo. Unguarded adoption can overwrite newer watch state: for asynchronous
    * responses use captureReconciliation before the request instead. See docs/saving.md. */
   adoptSaved(object: KRMObject): void {
+    // Not snapshot membership: a response to a save that started before a resync says nothing about
+    // whether the object survived it. Only the snapshot does, and synced prunes what it did not send.
     const existing = this.#resources.get(object.metadata.uid);
     if (!existing) {
-      this.applyServerEvent(object);
+      this.#upsert(object, {});
       return;
     }
     // A save response is another complete server object. Reconcile it rather than replacing the
     // draft so an edit made after the request was sent survives the response arriving.
-    this.applyServerEvent(object, { redacted: existing.redacted });
+    this.#upsert(object, { redacted: existing.redacted });
   }
 
   // ------------------------------------------------------------------------- edits --
@@ -417,7 +426,7 @@ export class LiveResourceStore {
         if (paths.some((path) => !known.has(pathKey(path)))) return false;
         redacted = paths.map((path) => known.get(pathKey(path))!);
       }
-      this.applyServerEvent(object, { redacted });
+      this.#upsert(object, { redacted });
       return true;
     };
   }

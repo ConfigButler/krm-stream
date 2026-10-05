@@ -47,7 +47,8 @@ Chromium. Neither has a runtime dependency.
 ## Status
 
 Install `@configbutler/krm-stream`. This project is pre-1.0: the protocol and API may still change
-before 1.0. Renamed APIs are removed rather than retained as compatibility aliases. See the repository [README](../../README.md),
+before 1.0. Renamed APIs are removed rather than retained as compatibility aliases; see
+[upgrading from 0.7](../../docs/migrating.md). See the repository [README](../../README.md),
 [client state model](../../docs/client-state-model.md), and [release guide](../../docs/releasing.md).
 
 ## Connections and conditional saves
@@ -70,7 +71,10 @@ connection.close();
 bearer headers; `credentials: "include"` opts into cross-origin cookies. It decodes and
 sequence-checks the stream, and calls your callback synchronously, exactly once per state event
 (`reset`, `added`, `modified`, `deleted`, `synced`), in stream order, without the wire `seq`.
-Errors go to `onError`, never to the callback; unknown event types are ignored. It requests a fresh
+The callback must finish applying each event before it returns, so do not pass an `async` function:
+it type-checks, but `live` could then be published before `synced` is applied, and its exceptions
+would never reach `closed`. Errors go to `onError`, never to the callback; unknown event types are
+ignored. It requests a fresh
 snapshot on sequence gaps, network failures, HTTP 408/429/5xx, EOF, and a connection the gateway
 closes after a retryable error such as `UPSTREAM_UNAVAILABLE`. Existing drafts survive recovery.
 
@@ -88,9 +92,12 @@ errors (including 401/403, excluding 408/429) stop retries. `close()` or `signal
 pending backoff; `closed` resolves after cleanup. Create a new handle after credentials change or an
 explicit user retry.
 
-If your callback throws, even after calling `close()`, the stream stops without retrying, publishes
-`closed`, and `closed` rejects with that exception once the reader, timers and listeners are released.
-Await `closed` or attach a rejection handler. A gateway's `X-KRM-Stream-Protocol` header is optional;
+An exception from your own code is a bug, not a network failure, so it is never retried. If the
+callback, a `subscribe` callback or `onError` throws, even after calling `close()`, the stream stops,
+every subscriber still receives the state being published, the final state is `closed`, and `closed`
+rejects with the first exception once the reader, timers and listeners are released. Always attach
+a rejection handler (`connection.closed.catch(reportApplicationError)`) or await `closed`; otherwise
+such a bug surfaces as an unhandled rejection. A gateway's `X-KRM-Stream-Protocol` header is optional;
 a stream that names a different protocol version is refused as a terminal `INTERNAL` error before any
 event is applied.
 
