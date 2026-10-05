@@ -6,7 +6,7 @@ and optional draft reconciliation. Choose tools according to the part your appli
 
 | Need | Relevant approach | Where krm-stream fits |
 |---|---|---|
-| Native watch through an existing browser proxy | Host proxy plus a native fetch/watch consumer | `connectNativeWatch` lists and watches through the proxy with the shared lifecycle and store, read-only; the gateway adds projected views over SSE. |
+| Native watch through an existing browser proxy | Host proxy plus a native fetch/watch consumer | `connectNativeWatch` lists and watches through the proxy with the shared lifecycle and store, and edits write conditional merge patches back through it; the gateway adds projected views over SSE. |
 | Kubernetes API access from a server | Kubernetes client libraries and raw watches | The Go adapter uses `client-go`; the gateway adds projections and browser snapshot framing. |
 | A complete Kubernetes UI | Dashboard applications and their plugin APIs | krm-stream supplies state and transport; the host builds the UI. |
 | Review and deliver configuration packages | KRM package and GitOps systems | The host can record accepted writes in its delivery workflow. |

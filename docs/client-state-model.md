@@ -19,13 +19,14 @@ The connector consumes and delivers state events independently of the editor.
 
 Do not mutate a `draft()` return value directly: reads are detached copies, and that bypasses edit
 policy and notifications. Independent sources/scopes need separate stores. Switching identity or view
-must not silently reuse drafts, redactions or snapshot state. The native connector,
-`connectNativeWatch`, uses the store read-only; this guide's editing and save examples use gateway
-views. Native editing requires a source-bound policy and host read/write contract in a later slice.
+must not silently reuse drafts, redactions or snapshot state. The same store edits objects from
+`connectNativeWatch`: native writes and recovery reads go through the proxy the watch reads, as
+[native editing](saving.md#native-editing-through-a-host-proxy) describes. Never mix native and
+projected objects, responses or editors in one store.
 
-The native viewer uses the existing standalone `applyStreamEvent(store, event)`. A bound store
-method is proposed editor cleanup in proposal 0009, not a current API or a prerequisite for native
-transport. No new store is needed.
+Both connectors feed the store through the existing standalone `applyStreamEvent(store, event)`. A
+bound store method is proposed editor cleanup in proposal 0009, not a current API or a prerequisite
+for native transport. No new store is needed.
 
 ## State per resource
 
@@ -62,6 +63,12 @@ objects it has not yet reloaded.
 
 The default editable regions are `spec`, `metadata.labels`, `metadata.annotations`, `data`, and
 `stringData`. `status`, immutable metadata, and redacted paths are read-only.
+
+Under every policy, the store also keeps `metadata.managedFields` and the
+`kubectl.kubernetes.io/last-applied-configuration` annotation read-only. These are the machinery
+that gateway projections remove and native objects carry. A map that holds a protected path, such
+as `metadata.annotations` beside the last-applied annotation or a Secret's `data` beside withheld
+values, cannot be replaced or removed whole. It is merged and edited key by key instead.
 
 Suppose a Deployment starts with image `v1` and replicas `3`. The person types image `v2`, then an
 autoscaler changes replicas to `5`. The draft becomes image `v2`, replicas `5`: untouched fields follow

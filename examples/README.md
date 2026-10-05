@@ -6,7 +6,9 @@ optional editor.
 [Native viewer](native-viewer/README.md) is a read-only page that lists and watches native resources
 through an existing host proxy, such as `kubectl proxy`, with the shared lifecycle and read-only store.
 The checked browser example in [`vanilla-browser/`](vanilla-browser/) runs against the gateway source
-over SSE. Native editing and the larger view/sharing comparison follow separately.
+over SSE. [Native editor](native-editor/README.md) adds conditional saves through the same proxy,
+with machinery protection and guarded native recovery reads. The larger view/sharing comparison
+follows separately.
 For gateway host integration patterns, use these small recipes:
 
 - [Same-origin cookie application](../docs/adopting.md#1-mount-the-stream-endpoint): fetch

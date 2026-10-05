@@ -10,6 +10,7 @@
 //                          derives dirtiness; tracks conflicts; builds the merge patch.
 //   resourceStreamURL      builds the stream URL from a scope — the encoding the gateway parses back.
 //   nativeCollectionURL    builds a native collection URL behind a host proxy.
+//   nativeObjectURL        builds the URL of one native object behind it, for reads and writes.
 //
 // The store is built test-first against conformance/ — the same fixtures the Go gateway runs. See
 // ../../../docs/client-state-model.md for the algorithm, ../../../spec/v1.md for the wire, and
@@ -52,5 +53,5 @@ export type {
   StreamEvent,
 } from "./types.ts";
 export type { NativeScope, ScopeQuery } from "./url.ts";
-export { nativeCollectionURL, resourceStreamURL } from "./url.ts";
+export { nativeCollectionURL, nativeObjectURL, resourceStreamURL } from "./url.ts";
 export { PROTOCOL_VERSION, VERSION } from "./version.ts";

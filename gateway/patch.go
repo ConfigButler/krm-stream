@@ -51,12 +51,55 @@ func projectionProtectedPaths(projection Projection, object KRMObject) map[strin
 
 	// These paths are projection policy, not a property of this particular object. Rejecting an
 	// attempt to add one back is as important as rejecting an attempt to modify one that existed.
-	paths["/metadata/managedFields"] = "removed by the projection"
-	paths["/metadata/annotations/"+escapePointer(lastAppliedAnnotation)] = "removed by the projection"
+	for _, path := range machineryPaths {
+		paths[path] = "removed by the projection"
+	}
 	if projection == ProjectionSpec {
 		paths["/status"] = "ignored by the projection"
 	}
 	return paths
+}
+
+// machineryPaths are written by the API server and by `kubectl apply`, never by a person editing an
+// object. Every projection removes them, and the browser store keeps them read-only for every source.
+var machineryPaths = []string{
+	"/metadata/managedFields",
+	"/metadata/annotations/" + escapePointer(lastAppliedAnnotation),
+}
+
+// ValidateNativeMergePatch checks an RFC 7386 JSON merge patch a browser sends to a host proxy that
+// forwards native Kubernetes requests, before the host forwards it.
+//
+// A native editor writes through the proxy its watch reads from, so the patch arrives with its
+// preconditions already in place: metadata.uid and metadata.resourceVersion, captured with the edit
+// and checked by Kubernetes atomically with the write. This refuses a patch without both, so the
+// proxy never forwards a write that could overwrite a change its author never saw or land on a
+// replacement object of the same name. It also refuses a patch touching metadata.managedFields or the
+// last-applied-configuration annotation, including through a parent such as `annotations: null`.
+//
+// The host still owns everything else: authenticating the caller and forwarding as that caller,
+// accepting PATCH only with Content-Type application/merge-patch+json (a JSON Patch or an apply
+// patch has other semantics this does not check), which resources and fields it lets a user write,
+// size limits and audit. The function sends nothing and does not mutate patch.
+func ValidateNativeMergePatch(patch []byte) error {
+	var parsed map[string]any
+	if err := json.Unmarshal(patch, &parsed); err != nil {
+		return fmt.Errorf("krm-stream: invalid JSON merge patch: %w", err)
+	}
+	if parsed == nil {
+		return fmt.Errorf("krm-stream: JSON merge patch must be an object")
+	}
+	metadata, _ := parsed["metadata"].(map[string]any)
+	for _, field := range []string{"uid", "resourceVersion"} {
+		if value, _ := metadata[field].(string); value == "" {
+			return fmt.Errorf("krm-stream: a native write must be conditional: the patch has no metadata.%s", field)
+		}
+	}
+	protected := make(map[string]string, len(machineryPaths))
+	for _, path := range machineryPaths {
+		protected[path] = "written by the API server or kubectl apply"
+	}
+	return validatePatchObject(parsed, nil, protected)
 }
 
 func validatePatchObject(patch map[string]any, path []string, protected map[string]string) error {

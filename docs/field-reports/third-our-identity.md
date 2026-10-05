@@ -1,7 +1,7 @@
 # Watch streams, optional editing and native access
 
-**Request of 2026-10-05. Slice 1, the native viewer, is implemented; the follow-ups below remain
-open.** It builds on the connector separation, Go API cleanup and real-API save tests. Use
+**Request of 2026-10-05. Slice 1, the native viewer, and slice 2, native editing, are implemented;
+the other follow-ups below remain open.** It builds on the connector separation, Go API cleanup and real-API save tests. Use
 [proposal 0006](../proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order)
 for completed work, delivery order and independent tracks.
 
@@ -14,7 +14,7 @@ conflict review and captured save intent; the host owns every write.
 
 | Source | Delivered content | Added value |
 |---|---|---|
-| Native through a host proxy — read-only viewing implemented | Original Kubernetes resources the host authorizes, including Secret values and machinery fields | Reuse connection lifecycle and live state without adopting the gateway |
+| Native through a host proxy — viewing and editing implemented | Original Kubernetes resources the host authorizes, including Secret values and machinery fields | Reuse connection lifecycle and live state without adopting the gateway |
 | Gateway — supported | Named projected views delivered over SSE | Selected disclosure, fewer downstream events and optional shared upstream watches |
 
 Native is the straightforward entry point for a host that already proxies Kubernetes. Gateway SSE
@@ -91,20 +91,65 @@ claims and demonstrates cleanup. Show how to target an existing host proxy. If a
 harness can exercise LIST/WATCH cheaply, add one focused integration case and report its actual run;
 a new cluster campaign is not a prerequisite. Existing tests still apply to any changed lifecycle.
 
+### Slice 2: native editing
+
+**Implemented** as store-level machinery protection, `nativeObjectURL`,
+`gateway.ValidateNativeMergePatch` and the [native editor example](../../examples/native-editor/README.md),
+with the contract in [saving](../saving.md#native-editing-through-a-host-proxy). The requirements
+below are what it was built and tested against.
+
+- **Edit policy.** No new policy and no new store. `metadata.managedFields` and the
+  `kubectl.kubernetes.io/last-applied-configuration` annotation are read-only under every policy, as
+  redacted paths are: the same two paths `ValidateMergePatch` refuses for every projection. A map
+  holding a protected path cannot be replaced or removed whole; where the policy makes it editable it
+  is merged and edited key by key. This also makes a new Secret key beside redacted values reach the
+  patch, which it previously did not.
+- **Source binding.** Writes and recovery reads address the object through the same proxy and
+  collection the watch reads (`nativeObjectURL`), under the object's own namespace and name. A
+  recovery read must be a Kubernetes object with the editor's UID; a projected envelope or another
+  UID is never reconciled. A native response never reaches a projected editor.
+- **Write contract.** The browser sends the captured intent as `application/merge-patch+json` with
+  `metadata.uid` and `metadata.resourceVersion` from the capture, never from a newer read. The host
+  proxy accepts only that content type, bounds the body and runs `ValidateNativeMergePatch`, which
+  refuses a patch missing either precondition or touching machinery. The host keeps authentication,
+  write authorization and audit; Kubernetes RBAC still applies.
+- **Save guards.** Unchanged: atomic capture, serialized saves, writes only while live, no adoption
+  of the write response, 409 recovery through `captureReconciliation`, a refused read owing another
+  read, and later typing preserved. A 422 on `metadata.uid` is treated as a replaced object.
+- **Unknown outcomes and confirmation.** After a network failure or a 5xx, or an accepted write
+  whose echo has not arrived, the next Save is a guarded read, never a second PATCH; `confirm()`
+  performs that read explicitly when no echo arrives. A 4xx is a definite refusal and owes no read.
+
+### Acceptance for slice 2
+
+**Met.** `packages/krm-stream/test/invariants.test.ts` covers machinery under the default policy and
+under a policy that makes all of `metadata` editable, and a Secret key added beside redacted values.
+`packages/krm-stream/test/native-editing.test.ts` covers the request shape and URL, machinery
+rewritten by the server during editing, 409 recovery to `version-stale` and to `draft-conflict`,
+replacement by 409 and by a `metadata.uid` 422, deletion, refused writes keeping their Status, reads
+overtaken by the watch, the live check and a projected envelope, an unknown write outcome (network
+failure and 502) settled by a read, a definite 422 needing none, and confirmation by echo, by the
+next Save's read and by `confirm()` after a write a webhook reverted. `gateway/patch_test.go` covers
+`ValidateNativeMergePatch`.
+
+`TestRealAPINativeEditThroughHostProxy` (`task test-real-api`) runs the real connector and editor
+through a credential-holding `/k8s` proxy that validates every PATCH, against a real API server: a
+save and its watch echo with the last-applied annotation untouched, a competing write landed between
+capture and PATCH (409, guarded read, a second deliberate save, neither write lost), the proxy
+refusing an unconditional patch and a machinery patch before they reach the API server, and an
+object replaced under the same name reported `unavailable` with the replacement untouched.
+
+There is no browser page for native editing yet; the comparative frontend (order 6) is where one
+belongs.
+
 ## Follow-ups after the viewer
 
-Each is separate from slice 1 and from the others:
+Each is separate from the slices above and from the others:
 
-- Native editing with machinery/last-applied protections and a source-bound write contract.
 - Native resume, streaming lists and pagination.
 - Comparative view and sharing measurements.
 - Independent gateway continuation and save-progress evaluation.
 - The independently proposed editor API cleanup in proposal 0009.
-
-Native editing is a separate slice: define the editable policy, exclude machinery and last-applied
-annotation changes, and bind host reads/writes to the same source and UID. Preserve later typing,
-submitted intent and reconciliation guards. A native response must not recover a projected editor.
-Keep [the editor model](../client-state-model.md) and [saving guide](../saving.md) as the detailed contracts.
 
 Resumable native watches, streaming-list initialization and pagination are later improvements with
 their own recovery tests. Slice 1 improves adoption and lifecycle reuse; re-listing on every reconnect
@@ -115,7 +160,7 @@ can proceed independently. Neither implies browser replay for gateway SSE v1.
 
 After the viewer works, compare native/full/spec and shared/unshared gateway runs using the same
 objects and churn. Demonstrate Secret disclosure, downstream bytes/events, notifications/renders,
-snapshots, authorization work and upstream watches. Add editing once its native contract exists.
+snapshots, authorization work and upstream watches. Include editing on both sources.
 Keep this comparison and the larger benchmark outside slice 1; begin with the small viewer.
 
 ## Save progress under suppressed churn

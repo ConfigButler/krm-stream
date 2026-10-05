@@ -440,7 +440,7 @@ tasks:
   # The save path, composed against a real API server: the real gateway, a real host endpoint and the
   # real browser store (run by node).
   test-real-api:
-    desc: "Real-API composition: save path (status churn, overlapping recovery, UID race) and native viewing through a host proxy."
+    desc: "Real-API composition: save path (status churn, overlapping recovery, UID race) and native viewing and editing through a host proxy."
     deps: [cluster-up]
     dir: gateway/kube
     env:

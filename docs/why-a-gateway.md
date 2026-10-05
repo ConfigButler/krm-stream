@@ -95,12 +95,12 @@ Both sources use fetch; native Kubernetes JSON and gateway SSE are different fra
 both can carry errors. Both connectors handle refusal, expiry, cancellation and bounded retries
 through one shared lifecycle; each classifies its own framing and HTTP responses. Browser `EventSource` is a different client mechanism with header/retry limitations.
 
-The native connector is a read-only viewer source: an ordinary LIST, then a WATCH from the
-collection's resourceVersion, with a fresh LIST on every reconnect. It uses the shared lifecycle and
-`LiveResourceStore(readOnlyPolicy)`, and is `live` only once the snapshot is applied and the WATCH is
-accepted. HTTP/in-stream 410 recovers within the bounded policy; terminal auth refusal never selects
-another source. A paginated LIST response is refused rather than marked complete. Native editing,
-resume, streaming lists and pagination follow separately.
+The native connector reads with an ordinary LIST, then a WATCH from the collection's
+resourceVersion, with a fresh LIST on every reconnect. It uses the shared lifecycle and
+`LiveResourceStore`, and is `live` only once the snapshot is applied and the WATCH is accepted. HTTP/in-stream 410 recovers within the bounded policy; terminal auth refusal never selects
+another source. A paginated LIST response is refused rather than marked complete.
+[Native editing](saving.md#native-editing-through-a-host-proxy) writes conditional merge patches back
+through the same proxy. Resume, streaming lists and pagination follow separately.
 
 See the [native usage snippet](../README.md#watch-native-resources-through-a-host-proxy), the
 [client reference](../packages/krm-stream/README.md#native-connections) and the

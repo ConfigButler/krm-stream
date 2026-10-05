@@ -66,7 +66,9 @@ automatically redacted. Suppression compares projected content excluding RV plus
 a hidden Secret rotation still emits an update. It reduces downstream work, not incoming watch changes.
 
 The gateway never writes. `ValidateMergePatch` checks a browser's patch against the projection before
-the host sends it; see [saving](../docs/saving.md).
+the host sends it; see [saving](../docs/saving.md). A host proxy forwarding native writes runs
+`ValidateNativeMergePatch` instead: it requires the captured UID and resourceVersion preconditions
+and refuses machinery; see [native editing](../docs/saving.md#native-editing-through-a-host-proxy).
 
 ## Shared backends
 

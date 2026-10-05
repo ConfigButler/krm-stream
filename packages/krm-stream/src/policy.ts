@@ -21,7 +21,8 @@ export const DEFAULT_EDITABLE_REGIONS: Path[] = [
 ];
 
 /** A policy from a list of editable region roots. Everything under a root is editable; everything
- * else follows the server. */
+ * else follows the server. Whatever the roots, the store keeps the machinery — `managedFields` and
+ * the last-applied annotation — read-only, as it does redacted paths. */
 export function regionPolicy(roots: Path[]): EditabilityPolicy {
   return {
     isEditable: (_obj: KRMObject, path: Path) => roots.some((root) => isPrefix(root, path)),
@@ -35,7 +36,8 @@ export function regionPolicy(roots: Path[]): EditabilityPolicy {
 }
 
 /** `spec`, `metadata.labels`/`annotations`, `data`, `stringData` editable; `status`, the rest of
- * `metadata`, `apiVersion`, `kind`, `binaryData` read-only. */
+ * `metadata`, `apiVersion`, `kind`, `binaryData` read-only. The same policy edits a native object:
+ * the last-applied annotation inside `annotations` stays read-only through the store. */
 export const defaultPolicy: EditabilityPolicy = regionPolicy(DEFAULT_EDITABLE_REGIONS);
 
 /** Everything read-only: the status-watch use case. Same engine, same stream, no draft — a viewer

@@ -11,7 +11,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { defaultPolicy, LiveResourceStore, readOnlyPolicy, withOpenAPIKeyedLists } from "../src/index.ts";
+import { defaultPolicy, LiveResourceStore, readOnlyPolicy, regionPolicy, withOpenAPIKeyedLists } from "../src/index.ts";
 import type { KRMObject, Path } from "../src/types.ts";
 import { body } from "./conformance.ts";
 
@@ -334,6 +334,83 @@ test("I-REDACT — a redacted value is ABSENT, is read-only, and cannot reach a 
 
   store.setValue(id, ["metadata", "labels", "app.kubernetes.io/name"], "checkout");
   assert.deepEqual(store.patch(id), { metadata: { labels: { "app.kubernetes.io/name": "checkout" } } });
+});
+
+test("I-REDACT — a new key beside withheld values is an ordinary edit", () => {
+  const [store, id] = seeded("secret-token.v1-wire", [
+    { path: "/data/token", rev: 1 },
+    { path: "/data/username", rev: 1 },
+  ]);
+  store.setValue(id, ["data", "extra"], "ZXh0cmE=");
+  assert.deepEqual(store.patch(id), { data: { extra: "ZXh0cmE=" } });
+  assert.ok(store.isDirty(id, ["data"]));
+
+  // The map holding withheld values is merged key by key, so the next event keeps the new key.
+  const next = body("secret-token.v1-wire");
+  next.metadata.resourceVersion = "999";
+  store.applyServerEvent(next, { redacted: store.redactions(id) });
+  assert.deepEqual(store.draft(id).data, { extra: "ZXh0cmE=" });
+  assert.deepEqual(store.patch(id), { data: { extra: "ZXh0cmE=" } });
+});
+
+const LAST_APPLIED = "kubectl.kubernetes.io/last-applied-configuration";
+
+/** A ConfigMap as the API server itself returns it: with managedFields and the annotation
+ * `kubectl apply` records. A native source delivers both; a gateway projection removes them. */
+function nativeConfigMap(rv: string, applied: string): KRMObject {
+  return {
+    apiVersion: "v1",
+    kind: "ConfigMap",
+    metadata: {
+      uid: "u-native",
+      name: "settings",
+      namespace: "app",
+      resourceVersion: rv,
+      annotations: { [LAST_APPLIED]: applied, note: "base" },
+      managedFields: [{ manager: "kubectl", operation: "Apply", fieldsV1: { "f:data": {} } }],
+    },
+    data: { mode: "a" },
+  };
+}
+
+test("I-MACHINERY — managedFields and the last-applied annotation are read-only under every policy", () => {
+  const annotations = ["metadata", "annotations"];
+  const lastApplied = [...annotations, LAST_APPLIED];
+  // The default policy, and a host policy broad enough to make all of metadata editable.
+  for (const policy of [defaultPolicy, regionPolicy([["metadata"], ["data"]])]) {
+    const store = new LiveResourceStore(policy);
+    store.applyServerEvent(nativeConfigMap("1", '{"data":{"mode":"a"}}'));
+    const id = "u-native";
+
+    for (const p of [lastApplied, ["metadata", "managedFields"], ["metadata", "managedFields", 0, "manager"]]) {
+      assert.equal(store.isEditable(id, p), false, `${JSON.stringify(p)} must not be editable`);
+      assert.throws(() => store.setValue(id, p, "x"), /read-only/, `setValue(${JSON.stringify(p)})`);
+      assert.throws(() => store.removeKey(id, p), /read-only/, `removeKey(${JSON.stringify(p)})`);
+    }
+    assert.throws(() => store.addKey(id, annotations, LAST_APPLIED, "{}"), /read-only/);
+    // Replacing or removing the whole map would rewrite the protected annotation inside it.
+    assert.equal(store.isEditable(id, annotations), false);
+    assert.throws(() => store.setValue(id, annotations, { note: "x" }), /read-only/);
+    assert.throws(() => store.removeKey(id, annotations), /read-only/);
+    assert.throws(() => store.renameKey(id, annotations, LAST_APPLIED, "copy"), /read-only/);
+
+    // Every other annotation is still editable, one key at a time.
+    store.setValue(id, [...annotations, "note"], "mine");
+    assert.ok(store.isDirty(id, annotations));
+    assert.deepEqual(store.patch(id), { metadata: { annotations: { note: "mine" } } });
+
+    // The server rewrites both on its next write; they follow it, and the edit beside them stays.
+    const r = store.applyServerEvent(nativeConfigMap("2", '{"data":{"mode":"b"}}'));
+    assert.ok(r.flashed.some((p) => JSON.stringify(p) === JSON.stringify(lastApplied)));
+    assert.equal(store.draft(id).metadata.annotations?.[LAST_APPLIED], '{"data":{"mode":"b"}}');
+    assert.equal(store.draft(id).metadata.annotations?.note, "mine");
+    assert.deepEqual(store.patch(id), { metadata: { annotations: { note: "mine" } } });
+    assert.deepEqual(store.captureSave(id), {
+      uid: id,
+      resourceVersion: "2",
+      patch: { metadata: { annotations: { note: "mine" } } },
+    });
+  }
 });
 
 test("unknown resource — every query says so rather than inventing an empty object", () => {

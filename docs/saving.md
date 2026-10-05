@@ -18,9 +18,9 @@ accepted write and application progress are separate states; neither a clean for
 proves a rollout or Git workflow completed. A definite 409 rejection differs from a lost response
 whose write outcome is unknown; do not blindly replay an ambiguous write.
 
-This guide describes projected editing through the current gateway. The native connector is
-read-only. Native editing is a later slice requiring an explicit read/write and
-edit-policy contract before sharing these recipes. A raw response must never be fed into a
+Most of this guide describes projected editing through the gateway. Editing native objects through
+a host's Kubernetes proxy follows the same sequence with a different write contract; see
+[native editing](#native-editing-through-a-host-proxy). A native response must never be fed into a
 projected editor as recovery or save confirmation.
 
 The [conditional-save example](../examples/conditional-save/README.md) implements all of it: a
@@ -171,6 +171,51 @@ detached copy as edits change, **before** removal. Scope it to the original iden
 host-defined lifetime; it is for recovery, not a second draft to reconcile. The tested
 [recovery-copy recipe](../examples/editor-recipes/README.md#recover-work-after-a-deletion) does
 this. Resolve conflicts through the store's APIs rather than a second application conflict registry.
+
+## Native editing through a host proxy
+
+A page reading native objects with `connectNativeWatch` can edit them through the same proxy. The
+store, its default edit policy and the four steps above are unchanged; what differs is who adds the
+preconditions and what a recovery read returns.
+
+| | Projected editing (gateway) | Native editing (host proxy) |
+|---|---|---|
+| Write | The host endpoint adds `uid` and `resourceVersion` from the intent to its PATCH | The browser sends the intent as a JSON merge PATCH with both inside `metadata`, to the object's URL through the proxy |
+| Host check | `gateway.ValidateMergePatch` with the stream's projection and the current object | `gateway.ValidateNativeMergePatch`: both preconditions present, no machinery |
+| Recovery read | A projected GET with `redactedPaths` | A native GET of the same object; nothing is withheld, so there is no redaction metadata |
+| Protected | Redacted values, removed machinery, `status` under `krm-spec/v1` | `metadata.managedFields` and the last-applied annotation; `status` stays outside the default editable regions |
+
+```ts
+const intent = store.captureSave(uid); // before any await
+if (intent) {
+  const metadata = { ...intent.patch.metadata, uid: intent.uid, resourceVersion: intent.resourceVersion };
+  await fetch(nativeObjectURL("/k8s", { ...scope, namespace, name }), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/merge-patch+json" },
+    body: JSON.stringify({ ...intent.patch, metadata }),
+  });
+}
+```
+
+The [native editor example](../examples/native-editor/README.md) implements the whole sequence: 409
+recovery through a guarded native read, replaced and deleted objects, and refused writes. Its
+outcomes match the [table above](#what-the-person-editing-sees). It never writes twice without
+knowing what the first write did: after a network failure or a 5xx, or an accepted write whose echo
+has not arrived, the next Save is a guarded read, and `confirm()` performs that read when the host
+stops waiting for an echo.
+
+Machinery is protected on both sides. The store makes `metadata.managedFields` and the
+`kubectl.kubernetes.io/last-applied-configuration` annotation read-only under every policy, so no
+patch can carry them. The host proxy refuses them again with `ValidateNativeMergePatch`, which also
+refuses a patch without both preconditions. The proxy accepts only
+`application/merge-patch+json`, forwards as the signed-in person and keeps its own write
+authorization and audit; Kubernetes RBAC still applies. The browser never holds a credential.
+
+A native write's response is the complete written object, Secret values included. Do not adopt it:
+the watch delivers the same object as an ordinary event. Native objects have no projection, so the
+[quiet-stream case](#why-a-quiet-stream-can-still-reject-a-save) does not arise: every change
+to the object, status included, reaches the store with its version. A 409 still means another write
+landed between capture and PATCH, or that the object was replaced under the same name.
 
 ## Creating and deleting whole objects
 

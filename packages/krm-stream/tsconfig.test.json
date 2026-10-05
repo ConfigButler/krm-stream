@@ -17,6 +17,7 @@
     "test/**/*.ts",
     "e2e/**/*.ts",
     "../../examples/conditional-save/**/*.ts",
-    "../../examples/editor-recipes/**/*.ts"
+    "../../examples/editor-recipes/**/*.ts",
+    "../../examples/native-editor/**/*.ts"
   ]
 }
