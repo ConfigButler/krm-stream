@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.8.0...@configbutler/krm-stream-v0.9.0) (2026-10-05)
+
+
+### Features
+
+* **examples:** browser page for native editing of one ConfigMap ([#64](https://github.com/ConfigButler/krm-stream/issues/64)) ([0834162](https://github.com/ConfigButler/krm-stream/commit/083416211b652292eb5de39aad5c978e4615ebac))
+
 ## [0.8.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.7.0...@configbutler/krm-stream-v0.8.0) (2026-10-05)
 
 
