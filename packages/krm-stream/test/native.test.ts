@@ -955,3 +955,13 @@ test("nativeObjectURL addresses one object in the collection a native watch read
     );
   }
 });
+
+test("nativeCollectionURL trims any run of trailing slashes from the proxy base in linear time", () => {
+  assert.equal(nativeCollectionURL("/k8s///", { version: "v1", resource: "pods" }), "/k8s/api/v1/pods");
+  assert.equal(nativeCollectionURL("///", { version: "v1", resource: "pods" }), "/api/v1/pods");
+  // A base that is all slashes but for its last character backtracks quadratically under /\/+$/.
+  const base = `${"/".repeat(100_000)}x`;
+  const started = performance.now();
+  assert.equal(nativeCollectionURL(base, { version: "v1", resource: "pods" }), `${base}/api/v1/pods`);
+  assert.ok(performance.now() - started < 200, "trimming the proxy base must not backtrack");
+});
