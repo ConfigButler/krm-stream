@@ -6,7 +6,7 @@ package gateway
 type ObservationKind string
 
 const (
-	// ObservationStreamOpened reports StreamProjection entry, before authorization.
+	// ObservationStreamOpened reports Stream entry, before authorization.
 	// HTTP identity/scope refusals before entry are excluded.
 	ObservationStreamOpened ObservationKind = "stream_opened"
 	// ObservationStreamClosed pairs each logical stream open with return after cleanup.

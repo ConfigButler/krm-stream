@@ -97,12 +97,14 @@ func stream(t *testing.T, dyn dynamic.Interface, scope gateway.Scope) <-chan gat
 
 	backend := kube.NewBackend(dyn)
 	g := &gateway.Gateway{
-		Auth:    gateway.AllowAll{},
-		Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return backend, nil },
+		StreamConfig: gateway.StreamConfig{
+			Authorizer: gateway.AllowAll{},
+			Clients:    func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return backend, nil },
+		},
 	}
 	sink := chanSink{ch: make(chan gateway.Event, 128)}
 	go func() {
-		if err := g.Stream(ctx, nil, scope, sink); err != nil && !errors.Is(err, context.Canceled) {
+		if err := g.Stream(ctx, nil, scope, "", sink); err != nil && !errors.Is(err, context.Canceled) {
 			t.Logf("stream ended: %v", err)
 		}
 	}()

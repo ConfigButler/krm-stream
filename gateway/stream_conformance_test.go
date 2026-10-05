@@ -1,11 +1,15 @@
-package gateway
+package gateway_test
 
 import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
+
+	"github.com/ConfigButler/krm-stream/gateway"
+	"github.com/ConfigButler/krm-stream/gateway/internal/conformance"
 )
 
 // The gateway's half of the corpus, actually asserted.
@@ -32,7 +36,7 @@ func TestGatewayConformance(t *testing.T) {
 		t.Run(f.ID, func(t *testing.T) {
 			t.Logf("defends: %s", f.Why)
 
-			want := make([]Event, 0, len(f.Events))
+			want := make([]gateway.Event, 0, len(f.Events))
 			for i, fe := range f.Events {
 				ev, err := c.Resolve(f.Scope, f.Projection, fe)
 				if err != nil {
@@ -58,10 +62,10 @@ func TestGatewayConformance(t *testing.T) {
 // while the connection stayed perfectly healthy, and the gateway must recover ON the live connection
 // (protocol §5). Conflating those two is the bug `resync-midstream` exists to catch, so the harness
 // has to keep them apart or the fixture proves nothing.
-func replayFixture(t *testing.T, c Corpus, f Fixture) []Event {
+func replayFixture(t *testing.T, c conformance.Corpus, f conformance.Fixture) []gateway.Event {
 	t.Helper()
-	var got []Event
-	replay(t, c, f, func(int) Sink { return &recordingSink{} }, func(s Sink) {
+	var got []gateway.Event
+	replay(t, c, f, func(int) gateway.Sink { return &recordingSink{} }, func(s gateway.Sink) {
 		got = append(got, s.(*recordingSink).events...)
 	})
 	return got
@@ -70,25 +74,25 @@ func replayFixture(t *testing.T, c Corpus, f Fixture) []Event {
 // replay is the driver both the event assertion and the SSE goldens share. Sharing it is the point:
 // the golden transcripts are the bytes THIS gateway wrote, through its real SSE sink, rather than a
 // second encoding of the same events written for the benefit of the test.
-func replay(t *testing.T, c Corpus, f Fixture, newSink func(conn int) Sink, done func(Sink)) {
+func replay(t *testing.T, c conformance.Corpus, f conformance.Fixture, newSink func(conn int) gateway.Sink, done func(gateway.Sink)) {
 	t.Helper()
 
-	gw := &Gateway{Auth: AllowAll{}, Projection: f.Projection}
+	gw := &gateway.Gateway{StreamConfig: gateway.StreamConfig{Authorizer: gateway.AllowAll{}, Projections: gateway.StaticProjection(f.Projection)}}
 
-	connections := splitConnections(f.Watch)
-	endsTerminally := len(f.Events) > 0 && f.Events[len(f.Events)-1].Type == EventError && f.Events[len(f.Events)-1].Terminal
+	connections := conformance.Connections(f.Watch)
+	endsTerminally := len(f.Events) > 0 && f.Events[len(f.Events)-1].Type == gateway.EventError && f.Events[len(f.Events)-1].Terminal
 	for i, conn := range connections {
-		backend, err := NewScriptedBackend(c, conn)
+		backend, err := conformance.NewScriptedBackend(c, conn)
 		if err != nil {
 			t.Fatalf("scripted backend: %v", err)
 		}
-		gw.Clients = func(context.Context, string, Principal) (Backend, error) { return backend, nil }
+		gw.Clients = func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return backend, nil }
 
 		ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 		sink := newSink(i)
 
 		finished := make(chan error, 1)
-		go func() { finished <- gw.Stream(ctx, nil, *f.Scope, sink) }()
+		go func() { finished <- gw.Stream(ctx, nil, *f.Scope, "", sink) }()
 
 		// The script is exhausted the moment the gateway comes BACK for another event having been
 		// given the last one — which is proof it finished processing it. No sleeps, no polling: a
@@ -107,7 +111,7 @@ func replay(t *testing.T, c Corpus, f Fixture, newSink func(conn int) Sink, done
 			// the last event on the connection, after which the gateway closes it (spec §4.3). The
 			// gateway is entitled to decide mid-script that this upstream is not one it can serve —
 			// see resourceversion-unorderable — and refusing loudly is the whole point of that fixture.
-			var se *StreamError
+			var se *gateway.StreamError
 			if !errors.As(err, &se) || !se.Terminal {
 				t.Fatalf("the gateway stopped before the script did, and not with a terminal error: %v", err)
 			}
@@ -119,26 +123,7 @@ func replay(t *testing.T, c Corpus, f Fixture, newSink func(conn int) Sink, done
 	}
 }
 
-// splitConnections cuts the watch script at each `disconnect`.
-func splitConnections(ops []WatchOp) [][]WatchOp {
-	conns := [][]WatchOp{{}}
-	for _, op := range ops {
-		if op.Op == "disconnect" {
-			conns = append(conns, []WatchOp{})
-			continue
-		}
-		conns[len(conns)-1] = append(conns[len(conns)-1], op)
-	}
-	out := conns[:0]
-	for _, c := range conns {
-		if len(c) > 0 {
-			out = append(out, c)
-		}
-	}
-	return out
-}
-
-func assertEventsEqual(t *testing.T, want, got []Event) {
+func assertEventsEqual(t *testing.T, want, got []gateway.Event) {
 	t.Helper()
 	for i := range max(len(want), len(got)) {
 		switch {
@@ -151,7 +136,7 @@ func assertEventsEqual(t *testing.T, want, got []Event) {
 			if w != g {
 				t.Errorf("event %d differs\n  want: %s\n  got:  %s", i, w, g)
 			}
-			if got[i].Type == EventError && got[i].Message == "" {
+			if got[i].Type == gateway.EventError && got[i].Message == "" {
 				t.Errorf("event %d: an error with no message is a diagnostic that says nothing", i)
 			}
 		}
@@ -166,9 +151,9 @@ func assertEventsEqual(t *testing.T, want, got []Event) {
 // all, in either loader. Pinning the prose would be asserting a rule the contract does not make —
 // and would push a gateway towards emitting nothing, which is worse for whoever has to debug it at
 // 3am. So: the code and the terminal flag are pinned exactly, the prose must merely exist.
-func wireForm(ev Event) Event {
+func wireForm(ev gateway.Event) gateway.Event {
 	ev.Seq = 0
-	if ev.Type == EventError {
+	if ev.Type == gateway.EventError {
 		ev.Message = ""
 	}
 	return ev
@@ -189,9 +174,61 @@ func isCanceled(err error) bool {
 
 // recordingSink is the wire, minus the wire: it keeps what the gateway emitted so the test can
 // compare it to the fixture. The SSE sink is the same interface with bytes on the end of it.
-type recordingSink struct{ events []Event }
+type recordingSink struct{ events []gateway.Event }
 
-func (s *recordingSink) Emit(_ context.Context, ev Event) error {
+func (s *recordingSink) Emit(_ context.Context, ev gateway.Event) error {
 	s.events = append(s.events, ev)
 	return nil
+}
+
+// The shared fixture pins full-projection bytes. Here every built-in projection must actively
+// suppress the final bookkeeping write and retain the version of the delivered revision.
+func TestFinalBookkeepingSuppressionAcrossProjections(t *testing.T) {
+	c := corpus(t)
+	base, err := c.Body("cm-app.v1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, projection := range []gateway.Projection{gateway.ProjectionRaw, gateway.ProjectionFull, gateway.ProjectionSpec} {
+		t.Run(string(projection), func(t *testing.T) {
+			backend, err := conformance.NewScriptedBackend(c, []conformance.WatchOp{
+				{Op: "list", Bodies: []string{"cm-app.v1"}},
+				{Op: "modified", Body: "cm-app.v2-bookkeeping"},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+			defer cancel()
+			suppressed := 0
+			gw := &gateway.Gateway{
+				StreamConfig: gateway.StreamConfig{
+					Authorizer:  gateway.AllowAll{},
+					Projections: gateway.StaticProjection(projection),
+					Clients:     func(context.Context, string, gateway.Principal) (gateway.Backend, error) { return backend, nil },
+					Observer: gateway.ObserverFunc(func(o gateway.Observation) {
+						if o.Kind == gateway.ObservationEventSuppressed && o.EventType == gateway.EventModified {
+							suppressed++
+							cancel()
+						}
+					}),
+				},
+			}
+			sink := &recordingSink{}
+			err = gw.Stream(ctx, nil, gateway.Scope{Target: "demo", Version: "v1", Resource: "configmaps"}, "", sink)
+			var types []gateway.EventType
+			for _, ev := range sink.events {
+				types = append(types, ev.Type)
+			}
+			if !slices.Equal(types, []gateway.EventType{gateway.EventReset, gateway.EventAdded, gateway.EventSynced}) {
+				t.Fatalf("final bookkeeping write emitted an event: %v", types)
+			}
+			if !errors.Is(err, context.Canceled) || suppressed != 1 {
+				t.Fatalf("final write: error=%v, suppressed=%d; want cancellation after one suppression", err, suppressed)
+			}
+			if got := mustJSON(t, sink.events[1].Object); got != mustJSON(t, base) {
+				t.Fatalf("held object = %s; want original delivered content and RV 1001", got)
+			}
+		})
+	}
 }

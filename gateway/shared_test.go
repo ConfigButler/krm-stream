@@ -108,7 +108,7 @@ func drainSnapshot(t *testing.T, w Watcher) map[string]bool {
 // The headline: ten tabs, one watch.
 func TestSharedBackendOpensOneUpstreamForManySubscribers(t *testing.T) {
 	up := newFakeUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	first, err := b.Watch(t.Context(), sharedScopeUnderTest)
 	if err != nil {
@@ -158,7 +158,7 @@ func TestSharedBackendOpensOneUpstreamForManySubscribers(t *testing.T) {
 // asked for — including, potentially, ones it may not see.
 func TestDifferentScopesAreNotShared(t *testing.T) {
 	up := newFakeUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	a, err := b.Watch(t.Context(), sharedScopeUnderTest)
 	if err != nil {
@@ -183,7 +183,7 @@ func TestDifferentScopesAreNotShared(t *testing.T) {
 // It is resnapshotted instead, off the warm cache, which costs the API server nothing.
 func TestASlowSubscriberIsResnapshottedNotBlocking(t *testing.T) {
 	up := newFakeUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	slow, err := b.Watch(t.Context(), sharedScopeUnderTest)
 	if err != nil {
@@ -256,7 +256,7 @@ func TestASlowSubscriberIsResnapshottedNotBlocking(t *testing.T) {
 func TestSharedBackendOptionsBoundQueueAndReportOverflow(t *testing.T) {
 	up := newFakeUpstream()
 	overflow := make(chan Observation, 1)
-	b := NewSharedBackendWithOptions(up, SharedOptions{
+	b := NewSharedBackend(up, SharedOptions{
 		QueueDepth: 1,
 		Observer: ObserverFunc(func(observation Observation) {
 			if observation.Kind == ObservationSharedOverflow {
@@ -291,7 +291,7 @@ func TestSharedBackendOptionsBoundQueueAndReportOverflow(t *testing.T) {
 // CACHED is served to everybody who arrives later, for as long as the scope lives.
 func TestAPartialObjectPoisonsNothing(t *testing.T) {
 	up := newFakeUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	w, err := b.Watch(t.Context(), sharedScopeUnderTest)
 	if err != nil {
@@ -331,7 +331,7 @@ func TestAPartialObjectPoisonsNothing(t *testing.T) {
 // connection and a cache, all held open forever.
 func TestTheLastSubscriberOutStopsTheUpstream(t *testing.T) {
 	up := newFakeUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	a, _ := b.Watch(t.Context(), sharedScopeUnderTest)
 	c, _ := b.Watch(t.Context(), sharedScopeUnderTest)
@@ -367,7 +367,7 @@ func TestTheLastSubscriberOutStopsTheUpstream(t *testing.T) {
 // produce exactly one new upstream watch — not N.
 func TestUpstreamErrorFansOutAndDoesNotStampede(t *testing.T) {
 	up := newFakeUpstream()
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 
 	var ws []Watcher
 	for range 5 {
@@ -422,7 +422,7 @@ func TestSharedBackendBacksOffAnUnavailableUpstream(t *testing.T) {
 		opens++
 		return nil, UpstreamUnavailable("the API server is unavailable", 0)
 	})
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 	now := time.Unix(0, 0)
 	b.now = func() time.Time { return now }
 	scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
@@ -488,7 +488,7 @@ func TestSharedBackendBacksOffAWatchThatDiesAfterOpening(t *testing.T) {
 				mu.Unlock()
 				return dyingWatcher{err: UpstreamUnavailable("the API server is unavailable", 10*time.Second), asEvent: asEvent}, nil
 			})
-			b := NewSharedBackend(up)
+			b := NewSharedBackend(up, SharedOptions{})
 			var clock sync.Mutex
 			now := time.Unix(0, 0)
 			b.now = func() time.Time { clock.Lock(); defer clock.Unlock(); return now }
@@ -568,7 +568,7 @@ func TestSharedBackoffResetsOnlyAfterAUsefulWatch(t *testing.T) {
 		}
 		return dyingWatcher{err: UpstreamUnavailable("the API server is unavailable", 0)}, nil
 	})
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 	now := time.Unix(0, 0)
 	b.now = func() time.Time { return now }
 	scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
@@ -629,7 +629,7 @@ func TestAnObsoleteWatchsLateEndCannotEraseANewerBackoff(t *testing.T) {
 		}
 		return &stubWatcher{}, nil // opens, then idles: its end is replayed by hand below
 	})
-	b := NewSharedBackend(up)
+	b := NewSharedBackend(up, SharedOptions{})
 	now := time.Unix(0, 0)
 	b.now = func() time.Time { return now }
 	scope := Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}
@@ -677,17 +677,17 @@ func TestASharedUpstreamThatKeepsEndingEarlyIsBackedOffForTheWholeCohort(t *test
 	} {
 		t.Run(name, func(t *testing.T) {
 			var opens atomic.Int32
-			b := NewSharedBackend(backendFunc(func() (Watcher, error) { opens.Add(1); return watcher(), nil }))
+			b := NewSharedBackend(backendFunc(func() (Watcher, error) { opens.Add(1); return watcher(), nil }), SharedOptions{})
 			frozen := time.Unix(0, 0)
 			b.now = func() time.Time { return frozen } // the backoff never expires during the test
-			gw := &Gateway{Auth: AllowAll{}, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }}
+			gw := &Gateway{StreamConfig: StreamConfig{Authorizer: AllowAll{}, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }}}
 
 			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 			defer cancel()
 			var wg sync.WaitGroup
 			for range 100 {
 				wg.Go(func() {
-					err := gw.Stream(ctx, nil, Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}, &lockedSink{})
+					err := gw.Stream(ctx, nil, Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}, "", &lockedSink{})
 					var se *StreamError
 					if !errors.As(err, &se) || se.Code != CodeUpstreamUnavailable || se.Terminal {
 						t.Errorf("Stream() = %v, want a non-terminal UPSTREAM_UNAVAILABLE", err)
@@ -714,14 +714,14 @@ func TestASharedUpstreamsLongLivedWatchesRecoverWithoutBackoff(t *testing.T) {
 			return nil, Forbidden("stop") // ends the test
 		}
 		return &endsWith{events: []WatchEvent{boundary}, err: ErrWatchClosed}, nil
-	}))
+	}), SharedOptions{})
 	clock := steppingClock(2 * time.Second) // every watch outlives its snapshot by a second or more
 	b.now = clock
-	gw := &Gateway{Auth: AllowAll{}, now: clock, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }}
+	gw := &Gateway{now: clock, StreamConfig: StreamConfig{Authorizer: AllowAll{}, Clients: func(context.Context, string, Principal) (Backend, error) { return b, nil }}}
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	err := gw.Stream(ctx, nil, Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}, &lockedSink{})
+	err := gw.Stream(ctx, nil, Scope{Version: "v1", Resource: "configmaps", Namespace: "app"}, "", &lockedSink{})
 	var se *StreamError
 	if !errors.As(err, &se) || se.Code != CodeForbidden {
 		t.Fatalf("Stream() = %v after %d opens, want the scripted FORBIDDEN: long-lived watches were backed off", err, opens.Load())
@@ -756,7 +756,7 @@ func TestSharedSubscribersReceiveTypedErrorsCausedByAClosedWatch(t *testing.T) {
 						return &endsWith{events: []WatchEvent{boundary, {Type: WatchError, Err: sent}}, err: ErrWatchClosed}, nil
 					}
 					return &endsWith{events: []WatchEvent{boundary}, err: sent}, nil // a failing Next
-				}))
+				}), SharedOptions{})
 				w, err := b.Watch(t.Context(), Scope{Version: "v1", Resource: "configmaps", Namespace: "app"})
 				if err != nil {
 					t.Fatal(err)
@@ -790,7 +790,7 @@ func TestAStreamOverASharedBackendEndsWithTheTypedRefusal(t *testing.T) {
 	forbidden.Cause = ErrWatchClosed
 	b := NewSharedBackend(backendFunc(func() (Watcher, error) {
 		return &endsWith{events: []WatchEvent{boundary}, err: forbidden}, nil
-	}))
+	}), SharedOptions{})
 	sink, err := streamOver(t, b, nil)
 	var se *StreamError
 	if !errors.As(err, &se) || se.Code != CodeForbidden || !se.Terminal {

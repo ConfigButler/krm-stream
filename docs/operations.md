@@ -12,7 +12,7 @@ metrics := gateway.ObserverFunc(func(o gateway.Observation) {
 Do not block in `Observe`; it runs on the stream or shared-watch goroutine. Never label a metric with
 an object name, UID, principal, patch contents, scope value or error message.
 
-Error text goes to `Options.Diagnostics` instead, because it can name internal addresses and URLs; the
+Error text goes to `StreamConfig.Diagnostics` instead, because it can name internal addresses and URLs; the
 browser receives only the protocol code and a message chosen for it. Redact before logging.
 
 ## Signals to alert on
@@ -55,22 +55,22 @@ browser receives only the protocol code and a message chosen for it. Redact befo
 
 | Control | Default | Use |
 |---|---:|---|
-| `gateway.Options.WriteTimeout` | 0 (no deadline) | set a positive per-operation write-plus-flush budget for bounded HTTP delivery; required with `ReauthorizationInterval` |
-| `gateway.Options.ReauthorizationInterval` | 0 (cycle checks only) | recheck each subscriber on quiet streams; see the [revocation budget](auth.md#revocation-budget) |
-| `gateway.Options.ReauthorizationTimeout` | 10 seconds | bound each periodic check's callbacks once it holds the delivery gate |
-| `gateway.Options.HeartbeatInterval` | 20 seconds | set below the shortest proxy idle timeout |
+| `StreamConfig.WriteTimeout` | 0 (no deadline) | set a positive per-operation write-plus-flush budget for bounded HTTP delivery; required with `ReauthorizationInterval` |
+| `StreamConfig.ReauthorizationInterval` | 0 (cycle checks only) | recheck each subscriber on quiet streams; see the [revocation budget](auth.md#revocation-budget) |
+| `StreamConfig.ReauthorizationTimeout` | 10 seconds | bound each periodic check's callbacks once it holds the delivery gate |
+| `StreamConfig.HeartbeatInterval` | 20 seconds | set below the shortest proxy idle timeout |
 | `gateway.SharedOptions.QueueDepth` | 256 live events | tune after measuring; it bounds memory per slow subscriber |
 | `ScopePolicy.AllowLabelSelector` | false | enable only for an endpoint that deliberately supports caller narrowing |
 | `GroupResource.AllowAllNamespaces` | false | make all-namespaces access an explicit reviewable policy decision |
-| `Gateway.Ordering` | strict | keep strict on supported Kubernetes; use lenient only for known aggregated APIs |
-| `gateway.Options.Diagnostics` | nil (discarded) | receive the raw error behind each error event; redact before logging |
+| `StreamConfig.Ordering` | strict | keep strict on supported Kubernetes; use lenient only for known aggregated APIs |
+| `StreamConfig.Diagnostics` | nil (discarded) | receive the raw error behind each error event; redact before logging |
 
 The gateway sets no snapshot object or byte limit: what is safe depends on the product. Measure
 snapshot size and duration per allowed scope before opening broad all-namespaces endpoints.
 
 ## Counting lifetimes
 
-`stream_opened`/`stream_closed` count `StreamProjection` entry/return, including authorization
+`stream_opened`/`stream_closed` count `Stream` entry/return, including authorization
 failure, but exclude HTTP identity/scope refusals before entry. `shared_subscription_opened` and
 `shared_subscription_closed` count active attachments, including warm-cache joins. Overflow, scope
 death or leave ends an attachment once; repeated `Stop` does not count again. A resnapshot can

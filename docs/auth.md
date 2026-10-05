@@ -84,10 +84,9 @@ checks; zero timeout uses 10 seconds. Timed checks do not call `Clients`.
 A timed check shares the subscriber's delivery gate: while it runs, that subscriber receives no
 objects, and it waits for the delivery in progress. A write to a browser that has stopped reading
 blocks once the buffers fill, so HTTP serving requires a positive `WriteTimeout` with timed checks.
-`Handler` panics at construction without one, and `ServeStream` and `ServeStreamProjection` panic
-before writing. Test that your mounted middleware supports flushing and write deadlines with the
+`Handler` panics at construction without one, and `ServeStream` panics before writing. Test that your mounted middleware supports flushing and write deadlines with the
 [capability-check recipe](../gateway/kube/examples/sharedstream/README.md#middleware-capability-test).
-`Stream` and `StreamProjection` allow timed checks with any sink; the host bounds that sink's I/O.
+`Stream` allows timed checks with any sink; the host bounds that sink's I/O and honors cancellation.
 
 Each check costs the host's authorizer a call. With `SubjectAccessReviewAuthorizer`, 200 subscribers
 on a 30-second interval add about 13 reviews per second (list and watch each), plus opening and

@@ -46,7 +46,7 @@ func (g *Gateway) authorizedCycle(ctx context.Context, principal Principal, scop
 					timeout = 10 * time.Second
 				}
 				checkCtx, finish := context.WithTimeout(cycleCtx, timeout)
-				err := g.Auth.Authorize(checkCtx, principal, scope)
+				err := g.Authorizer.Authorize(checkCtx, principal, scope)
 				if err == nil {
 					var selected Projection
 					selected, err = policy.SelectProjection(checkCtx, principal, scope, requested)

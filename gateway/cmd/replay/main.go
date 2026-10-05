@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/ConfigButler/krm-stream/gateway"
+	"github.com/ConfigButler/krm-stream/gateway/internal/conformance"
 )
 
 func main() {
@@ -41,7 +42,7 @@ func main() {
 	dist := flag.String("dist", "", "directory to serve at /krm-stream/ — the built, dependency-free ESM")
 	flag.Parse()
 
-	corpus, err := gateway.LoadCorpus(*corpusDir)
+	corpus, err := conformance.LoadCorpus(*corpusDir)
 	if err != nil {
 		log.Fatalf("replay: %v", err)
 	}
@@ -91,16 +92,16 @@ func main() {
 	}
 }
 
-func stream(corpus gateway.Corpus, pace time.Duration) http.HandlerFunc {
+func stream(corpus conformance.Corpus, pace time.Duration) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		id := r.URL.Query().Get("fixture")
-		var f *gateway.Fixture
+		var f *conformance.Fixture
 		for i := range corpus.Fixtures {
 			if corpus.Fixtures[i].ID == id {
 				f = &corpus.Fixtures[i]
 			}
 		}
-		if f == nil || len(f.Watch) == 0 || f.Scope == nil {
+		if f == nil || len(conformance.Connections(f.Watch)) == 0 || f.Scope == nil {
 			http.Error(w, fmt.Sprintf("no such replayable fixture: %q (see /fixtures)", id), http.StatusNotFound)
 			return
 		}
@@ -110,7 +111,7 @@ func stream(corpus gateway.Corpus, pace time.Duration) http.HandlerFunc {
 		// up to the first disconnect and then closes; the browser's own EventSource reconnects, and
 		// gets the next segment. Which is, of course, exactly the scenario reconnect-prune describes.
 		conn := connectionFor(r, f.Watch)
-		backend, err := gateway.NewScriptedBackend(corpus, conn.ops)
+		backend, err := conformance.NewScriptedBackend(corpus, conn.ops)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -127,10 +128,12 @@ func stream(corpus gateway.Corpus, pace time.Duration) http.HandlerFunc {
 		}
 
 		gw := &gateway.Gateway{
-			Auth:       gateway.AllowAll{},
-			Projection: f.Projection,
-			Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
-				return paced{backend, delay}, nil
+			StreamConfig: gateway.StreamConfig{
+				Authorizer:  gateway.AllowAll{},
+				Projections: gateway.StaticProjection(f.Projection),
+				Clients: func(context.Context, string, gateway.Principal) (gateway.Backend, error) {
+					return paced{backend, delay}, nil
+				},
 			},
 		}
 
@@ -146,31 +149,21 @@ func stream(corpus gateway.Corpus, pace time.Duration) http.HandlerFunc {
 			cancel()
 		}()
 
-		gw.ServeStream(w, r.WithContext(ctx), nil, *f.Scope)
+		gw.ServeStream(w, r.WithContext(ctx), nil, *f.Scope, "")
 	}
 }
 
 // connectionFor picks which segment of a multi-connection script this request gets. The browser tells
 // us implicitly: EventSource reconnects, and the `connection` query param (which the demo page bumps)
-// says which one it is on. A conformance fixture with no `disconnect` has exactly one.
+// says which one it is on. A conformance fixture with no `disconnect` has exactly one. The split is
+// the harness's, the same one the golden transcripts are recorded with.
 type connection struct {
-	ops  []gateway.WatchOp
+	ops  []conformance.WatchOp
 	last bool
 }
 
-func connectionFor(r *http.Request, ops []gateway.WatchOp) connection {
-	var conns [][]gateway.WatchOp
-	cur := []gateway.WatchOp{}
-	for _, op := range ops {
-		if op.Op == "disconnect" {
-			conns = append(conns, cur)
-			cur = []gateway.WatchOp{}
-			continue
-		}
-		cur = append(cur, op)
-	}
-	conns = append(conns, cur)
-
+func connectionFor(r *http.Request, ops []conformance.WatchOp) connection {
+	conns := conformance.Connections(ops)
 	n := 0
 	if v := r.URL.Query().Get("connection"); v != "" {
 		if _, err := fmt.Sscanf(v, "%d", &n); err != nil || n < 0 {
@@ -216,7 +209,7 @@ func (p pacedWatcher) Next(ctx context.Context) (gateway.WatchEvent, error) {
 
 func (p pacedWatcher) Stop() { p.inner.Stop() }
 
-func list(corpus gateway.Corpus) http.HandlerFunc {
+func list(corpus conformance.Corpus) http.HandlerFunc {
 	return func(w http.ResponseWriter, _ *http.Request) {
 		var ids []string
 		for _, f := range corpus.Fixtures {

@@ -1,9 +1,13 @@
-package gateway
+package gateway_test
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/ConfigButler/krm-stream/gateway"
+	"github.com/ConfigButler/krm-stream/gateway/internal/conformance"
 )
 
 // These tests do not yet exercise a gateway — there isn't one. They exercise the CONTRACT: that the
@@ -14,9 +18,11 @@ import (
 // corpus, because both implementations will faithfully agree on the wrong thing. This is the test
 // that keeps the contract honest while the two sides are still being built against it.
 
-func corpus(t *testing.T) Corpus {
+// corpus loads the repository's conformance corpus. Tests run in this directory, so the path is
+// the repository's, relative to here; the production gateway never reads a corpus at all.
+func corpus(t *testing.T) conformance.Corpus {
 	t.Helper()
-	c, err := LoadConformance()
+	c, err := conformance.LoadCorpus(filepath.Join("..", "conformance"))
 	if err != nil {
 		t.Fatalf("load conformance: %v", err)
 	}
@@ -83,22 +89,22 @@ func TestSnapshotFraming(t *testing.T) {
 					t.Errorf("event %d: %s AFTER a terminal error — a terminal error is the last event (spec §4.3)", i, fe.Type)
 				}
 				switch fe.Type {
-				case EventReset:
+				case gateway.EventReset:
 					if inCycle {
 						t.Errorf("event %d: reset inside an unclosed cycle", i)
 					}
 					inCycle, sawReset = true, true
-				case EventSynced:
+				case gateway.EventSynced:
 					if !inCycle {
 						t.Errorf("event %d: synced without a reset", i)
 					}
 					inCycle = false
-				case EventError:
+				case gateway.EventError:
 					if !sawReset {
 						t.Errorf("event %d: error before the first reset — a consumer has no scope yet", i)
 					}
 					endedTerminally = fe.Terminal
-				case EventAdded, EventModified, EventDeleted:
+				case gateway.EventAdded, gateway.EventModified, gateway.EventDeleted:
 					if !sawReset {
 						t.Errorf("event %d: %s before the first reset — a consumer has no scope yet", i, fe.Type)
 					}
@@ -126,7 +132,7 @@ func TestRedactedAlwaysPresent(t *testing.T) {
 	c := corpus(t)
 	for _, f := range c.Fixtures {
 		for i, fe := range f.Events {
-			if fe.Type != EventAdded && fe.Type != EventModified {
+			if fe.Type != gateway.EventAdded && fe.Type != gateway.EventModified {
 				continue
 			}
 			ev, err := c.Resolve(f.Scope, f.Projection, fe)
@@ -150,7 +156,7 @@ func TestDeletedCarriesIdentity(t *testing.T) {
 	c := corpus(t)
 	for _, f := range c.Fixtures {
 		for i, fe := range f.Events {
-			if fe.Type != EventDeleted {
+			if fe.Type != gateway.EventDeleted {
 				continue
 			}
 			if fe.Identity == nil || fe.Identity.UID == "" || fe.Identity.Name == "" || fe.Identity.Kind == "" {

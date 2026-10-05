@@ -1,15 +1,18 @@
-package gateway
+package conformance
 
 import (
 	"context"
 	"fmt"
 	"sync"
+
+	"github.com/ConfigButler/krm-stream/gateway"
 )
 
 // ScriptedBackend is a fake Kubernetes watch driven by a fixture's `watch:` ops. It is the gateway's
 // half of the conformance corpus, and it is a normal (non-test) file on purpose: the replay server
 // serves fixtures over real SSE with exactly this backend, so a browser can be pointed at a scripted
-// cluster that behaves identically every time.
+// cluster that behaves identically every time. The tests drive the same one, so what the replay
+// serves is what the goldens record.
 //
 // It models a streaming list (see spec/v1.md, Snapshot cycles), because that is what the gateway is written
 // against: the objects in scope arrive as synthetic ADDEDs, terminated by a bookmark whose
@@ -21,7 +24,7 @@ import (
 // scriptedSegment is everything one Watch() call delivers: a snapshot, then live events, then
 // (unless it is the last) the error that ends it.
 type scriptedSegment struct {
-	events []WatchEvent
+	events []gateway.WatchEvent
 }
 
 // ScriptedBackend replays a watch script. Not safe for concurrent Watch calls, and does not need to
@@ -45,7 +48,7 @@ func NewScriptedBackend(c Corpus, ops []WatchOp) (*ScriptedBackend, error) {
 	b := &ScriptedBackend{exhausted: make(chan struct{})}
 	var cur *scriptedSegment
 
-	body := func(ref string) (KRMObject, error) { return c.Body(ref) }
+	body := func(ref string) (gateway.KRMObject, error) { return c.Body(ref) }
 
 	for _, op := range ops {
 		switch op.Op {
@@ -55,9 +58,9 @@ func NewScriptedBackend(c Corpus, ops []WatchOp) (*ScriptedBackend, error) {
 					return nil, fmt.Errorf("scripted: `relist` with no watch open")
 				}
 				// 410 Gone. The connection is fine; our knowledge of the world is not.
-				cur.events = append(cur.events, WatchEvent{
-					Type: WatchError,
-					Err:  ResyncRequired("the upstream resourceVersion expired (410 Gone)"),
+				cur.events = append(cur.events, gateway.WatchEvent{
+					Type: gateway.WatchError,
+					Err:  gateway.ResyncRequired("the upstream resourceVersion expired (410 Gone)"),
 				})
 			}
 			b.segments = append(b.segments, scriptedSegment{})
@@ -68,12 +71,12 @@ func NewScriptedBackend(c Corpus, ops []WatchOp) (*ScriptedBackend, error) {
 				if err != nil {
 					return nil, err
 				}
-				cur.events = append(cur.events, WatchEvent{Type: WatchAdded, Object: obj})
+				cur.events = append(cur.events, gateway.WatchEvent{Type: gateway.WatchAdded, Object: obj})
 			}
 			// The bookmark that closes the snapshot. An EMPTY list still gets one — that is the
 			// named-object-absent case, and emitting nothing at all instead is the mistake that
 			// leaves a deleted object on screen as a ghost forever.
-			cur.events = append(cur.events, WatchEvent{Type: WatchBookmark, InitialEventsEnd: true})
+			cur.events = append(cur.events, gateway.WatchEvent{Type: gateway.WatchBookmark, InitialEventsEnd: true})
 
 		case "added", "modified", "deleted":
 			if cur == nil {
@@ -83,7 +86,7 @@ func NewScriptedBackend(c Corpus, ops []WatchOp) (*ScriptedBackend, error) {
 			if err != nil {
 				return nil, err
 			}
-			cur.events = append(cur.events, WatchEvent{Type: WatchEventType(op.Op), Object: obj})
+			cur.events = append(cur.events, gateway.WatchEvent{Type: gateway.WatchEventType(op.Op), Object: obj})
 
 		case "bookmark":
 			// A routine BOOKMARK, exactly as Kubernetes documents it: an object of the requested type
@@ -91,9 +94,9 @@ func NewScriptedBackend(c Corpus, ops []WatchOp) (*ScriptedBackend, error) {
 			if cur == nil {
 				return nil, fmt.Errorf("scripted: bookmark before any list")
 			}
-			cur.events = append(cur.events, WatchEvent{
-				Type: WatchBookmark,
-				Object: KRMObject{
+			cur.events = append(cur.events, gateway.WatchEvent{
+				Type: gateway.WatchBookmark,
+				Object: gateway.KRMObject{
 					"apiVersion": "v1",
 					"kind":       "ConfigMap",
 					"metadata":   map[string]any{"resourceVersion": op.ResourceVersion},
@@ -111,7 +114,7 @@ func NewScriptedBackend(c Corpus, ops []WatchOp) (*ScriptedBackend, error) {
 			if err != nil {
 				return nil, err
 			}
-			cur.events = append(cur.events, WatchEvent{Type: WatchModified, Object: partialOf(full)})
+			cur.events = append(cur.events, gateway.WatchEvent{Type: gateway.WatchModified, Object: partialOf(full)})
 
 		case "tombstone":
 			// client-go's cache.DeletedFinalStateUnknown: the informer missed the delete and noticed on
@@ -123,7 +126,7 @@ func NewScriptedBackend(c Corpus, ops []WatchOp) (*ScriptedBackend, error) {
 			if err != nil {
 				return nil, err
 			}
-			cur.events = append(cur.events, WatchEvent{Type: WatchDeleted, Object: degenerateTombstoneOf(full)})
+			cur.events = append(cur.events, gateway.WatchEvent{Type: gateway.WatchDeleted, Object: degenerateTombstoneOf(full)})
 
 		case "disconnect":
 			return nil, fmt.Errorf("scripted: `disconnect` is the caller's to handle — split the script on it")
@@ -147,7 +150,7 @@ func NewScriptedBackend(c Corpus, ops []WatchOp) (*ScriptedBackend, error) {
 func (b *ScriptedBackend) Exhausted() <-chan struct{} { return b.exhausted }
 
 // Watch hands out the next segment of the script.
-func (b *ScriptedBackend) Watch(_ context.Context, _ Scope) (Watcher, error) {
+func (b *ScriptedBackend) Watch(_ context.Context, _ gateway.Scope) (gateway.Watcher, error) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	if b.segment >= len(b.segments) {
@@ -161,12 +164,12 @@ func (b *ScriptedBackend) Watch(_ context.Context, _ Scope) (Watcher, error) {
 
 type scriptedWatcher struct {
 	backend *ScriptedBackend
-	events  []WatchEvent
+	events  []gateway.WatchEvent
 	last    bool
 	i       int
 }
 
-func (w *scriptedWatcher) Next(ctx context.Context) (WatchEvent, error) {
+func (w *scriptedWatcher) Next(ctx context.Context) (gateway.WatchEvent, error) {
 	if w.i < len(w.events) {
 		ev := w.events[w.i]
 		w.i++
@@ -176,7 +179,7 @@ func (w *scriptedWatcher) Next(ctx context.Context) (WatchEvent, error) {
 		// Only the final segment runs dry: every other one ends with the error that made the gateway
 		// reopen. Reaching here otherwise means the script and the gateway disagree about how many
 		// watches this scenario opens, which is worth saying out loud rather than hanging.
-		return WatchEvent{}, fmt.Errorf("scripted: segment ended without a continuity error")
+		return gateway.WatchEvent{}, fmt.Errorf("scripted: segment ended without a continuity error")
 	}
 	w.backend.once.Do(func() { close(w.backend.exhausted) })
 
@@ -185,7 +188,7 @@ func (w *scriptedWatcher) Next(ctx context.Context) (WatchEvent, error) {
 	// synthesizing that at the end of every fixture would append a phantom cycle to the expected
 	// events of every single scenario.
 	<-ctx.Done()
-	return WatchEvent{}, ctx.Err()
+	return gateway.WatchEvent{}, ctx.Err()
 }
 
 func (w *scriptedWatcher) Stop() {}
@@ -199,12 +202,12 @@ func (w *scriptedWatcher) Stop() {}
 //
 // The uid survives. That is the whole trap: a gateway checking "does it have a uid?" waves this
 // through, and the consumer replaces a live Deployment with a husk.
-func partialOf(full KRMObject) KRMObject {
-	out := KRMObject{
+func partialOf(full gateway.KRMObject) gateway.KRMObject {
+	out := gateway.KRMObject{
 		"apiVersion": "meta.k8s.io/v1",
 		"kind":       "PartialObjectMetadata",
 	}
-	if meta, ok := deepCopyObject(full)["metadata"].(map[string]any); ok {
+	if meta, ok := deepCopy(map[string]any(full))["metadata"].(map[string]any); ok {
 		out["metadata"] = meta
 	}
 	return out
@@ -217,12 +220,36 @@ func partialOf(full KRMObject) KRMObject {
 // The name surviving is the dangerous part. It is exactly enough to tempt an implementer into
 // reconstructing the identity from it, and a delete-and-recreate under the same name (see
 // delete-recreate-uid) is precisely where that deletes the wrong object.
-func degenerateTombstoneOf(full KRMObject) KRMObject {
-	out := deepCopyObject(full)
+func degenerateTombstoneOf(full gateway.KRMObject) gateway.KRMObject {
+	out := gateway.KRMObject(deepCopy(map[string]any(full)))
 	meta, ok := out["metadata"].(map[string]any)
 	if !ok {
 		return out
 	}
 	delete(meta, "uid")
 	return out
+}
+
+// deepCopy copies a decoded JSON object, so a scripted variant never aliases a corpus body.
+func deepCopy(m map[string]any) map[string]any {
+	out := make(map[string]any, len(m))
+	for k, v := range m {
+		out[k] = deepCopyValue(v)
+	}
+	return out
+}
+
+func deepCopyValue(v any) any {
+	switch t := v.(type) {
+	case map[string]any:
+		return deepCopy(t)
+	case []any:
+		out := make([]any, len(t))
+		for i, x := range t {
+			out[i] = deepCopyValue(x)
+		}
+		return out
+	default:
+		return v
+	}
 }

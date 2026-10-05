@@ -4,17 +4,19 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"time"
 )
 
 // Handler is the paved road: it parses the scope from the query, resolves the principal, checks the
-// scope against the allowlist and serves the stream. ServeStream remains for hosts that route, name
-// or authorize scopes their own way.
+// scope against the allowlist and serves the stream. Gateway.ServeStream remains for hosts that route,
+// name or authorize scopes their own way.
 
 // Options configures a Handler. Everything without a default is required, and Handler panics at
 // construction if one is missing or an option is unsafe, so misconfiguration fails at startup rather
-// than on a request.
+// than on a request. The settings a stream needs however it is served live in the embedded
+// StreamConfig; Authorizer and Clients there are required too.
 type Options struct {
+	StreamConfig
+
 	// Principal resolves who is calling from the request: a session cookie, an mTLS peer, a header
 	// your ingress set. Required; any default would be a policy decision about the host's auth system.
 	//
@@ -23,54 +25,9 @@ type Options struct {
 	// UNAUTHENTICATED "not authenticated", and its text goes only to Diagnostics.
 	Principal func(*http.Request) (Principal, error)
 
-	// Authorizer decides whether that principal may open this scope, before any watch is opened.
-	// Required; gateway.AllowAll{} permits everything explicitly.
-	Authorizer Authorizer
-
-	// Clients resolves (target, principal) to an upstream. Required.
-	Clients ClientFor
-
 	// Scopes is the allowlist (spec §8). The zero value streams nothing. Setting both Resources and
 	// AnyResource panics.
 	Scopes ScopePolicy
-
-	// Projection defaults to ProjectionFull, which redacts Secret values.
-	Projection Projection
-
-	// Projections authorizes a requested projection for a principal and scope. It is optional only
-	// because Projection supplies a safe static policy for hosts that expose one view.
-	Projections ProjectionPolicy
-
-	// Ordering defaults to OrderingStrict (Kubernetes 1.35+ conformance). See stream.go.
-	Ordering ResourceVersionOrdering
-
-	// Observer receives low-cardinality stream lifecycle signals. It must not block.
-	Observer Observer
-
-	// Diagnostics receives the raw error behind every error event, including the detail the wire
-	// does not carry. It must not block. Nil discards it.
-	Diagnostics Diagnostics
-
-	// HeartbeatInterval defaults to HeartbeatInterval. Set a positive value to match a proxy's idle
-	// timeout; it affects HTTP streams only.
-	HeartbeatInterval time.Duration
-
-	// WriteTimeout bounds each HTTP write-plus-flush operation. Zero installs no deadline.
-	// Positive values require a writer supporting flush and write deadlines; negative values panic.
-	// Required (positive) whenever ReauthorizationInterval is.
-	WriteTimeout time.Duration
-
-	// ReauthorizationInterval rechecks each subscriber independently, even on quiet streams.
-	// Zero disables timed checks; snapshot cycles always reauthorize.
-	//
-	// A positive interval requires a positive WriteTimeout, and Handler panics without one. A timed
-	// check waits for that subscriber's write in progress, and a write to a browser that stopped
-	// reading only ends at its deadline. The revocation budget is documented in docs/auth.md.
-	ReauthorizationInterval time.Duration
-	// ReauthorizationTimeout bounds each timed check's Authorizer and projection-policy callbacks,
-	// starting once the check holds the subscriber's delivery gate. Zero defaults to 10 seconds.
-	// Authorizers and projection policies must honor context cancellation.
-	ReauthorizationTimeout time.Duration
 }
 
 // Handler mounts the stream on one route.
@@ -85,26 +42,14 @@ func Handler(o Options) http.Handler {
 	case o.Principal == nil:
 		panic("krm-stream: Options.Principal is required — the library must never assume who the caller is")
 	case o.Authorizer == nil:
-		panic("krm-stream: Options.Authorizer is required — use gateway.AllowAll{} to say you meant it")
+		panic("krm-stream: StreamConfig.Authorizer is required — use gateway.AllowAll{} to say you meant it")
 	case o.Clients == nil:
-		panic("krm-stream: Options.Clients is required — the library holds no cluster connection of its own")
+		panic("krm-stream: StreamConfig.Clients is required — the library holds no cluster connection of its own")
 	case o.Scopes.AnyResource && len(o.Scopes.Resources) > 0:
 		panic("krm-stream: ScopePolicy sets both Resources and AnyResource — choose an allowlist or delegation, not both")
 	}
 
-	g := &Gateway{
-		Auth:                    o.Authorizer,
-		Clients:                 o.Clients,
-		Projection:              o.Projection,
-		Projections:             o.Projections,
-		Ordering:                o.Ordering,
-		Observer:                o.Observer,
-		Diagnostics:             o.Diagnostics,
-		HeartbeatInterval:       o.HeartbeatInterval,
-		WriteTimeout:            o.WriteTimeout,
-		ReauthorizationInterval: o.ReauthorizationInterval,
-		ReauthorizationTimeout:  o.ReauthorizationTimeout,
-	}
+	g := &Gateway{StreamConfig: o.StreamConfig}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		principal, err := o.Principal(r)
@@ -127,7 +72,7 @@ func Handler(o Options) http.Handler {
 			return
 		}
 
-		g.ServeStreamProjection(w, r, principal, scope, Projection(r.URL.Query().Get("projection")))
+		g.ServeStream(w, r, principal, scope, Projection(r.URL.Query().Get("projection")))
 	})
 }
 

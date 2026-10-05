@@ -1,4 +1,4 @@
-package gateway
+package gateway_test
 
 import (
 	"bytes"
@@ -7,6 +7,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/ConfigButler/krm-stream/gateway"
+	"github.com/ConfigButler/krm-stream/gateway/internal/conformance"
 )
 
 // The golden SSE transcripts: conformance/gen/sse/<id>.sse.
@@ -34,7 +37,7 @@ var update = flag.Bool("update", false, "rewrite the golden SSE transcripts in c
 // the TypeScript suite reads back and asserts on. Neither side can bump it alone.
 func TestProtocolVersionIsPublished(t *testing.T) {
 	path := filepath.Join("..", "conformance", "gen", "protocol.json")
-	want := fmt.Appendf(nil, "{\n  \"protocolVersion\": %d\n}\n", ProtocolVersion)
+	want := fmt.Appendf(nil, "{\n  \"protocolVersion\": %d\n}\n", gateway.ProtocolVersion)
 
 	if *update {
 		if err := os.WriteFile(path, want, 0o600); err != nil {
@@ -96,15 +99,15 @@ func TestSSEGoldens(t *testing.T) {
 // which a conforming consumer ignores by definition (spec §7) — the same class of thing as a
 // heartbeat — so putting it in the golden costs the contract nothing and buys the TypeScript parser a
 // free proof that it really does ignore comments.
-func transcribe(t *testing.T, c Corpus, f Fixture) []byte {
+func transcribe(t *testing.T, c conformance.Corpus, f conformance.Fixture) []byte {
 	t.Helper()
 	var buf bytes.Buffer
 	replay(t, c, f,
-		func(conn int) Sink {
+		func(conn int) gateway.Sink {
 			fmt.Fprintf(&buf, ": connection %d\n\n", conn+1)
-			return NewSSESink(&buf)
+			return gateway.NewSSESink(&buf)
 		},
-		func(Sink) {},
+		func(gateway.Sink) {},
 	)
 	return buf.Bytes()
 }

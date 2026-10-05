@@ -36,7 +36,7 @@ func (c *lifecycleCounter) assert(t *testing.T, open, closed int) {
 func TestSharedSubscriptionLifecycle(t *testing.T) {
 	b := newFakeUpstream()
 	counter := &lifecycleCounter{}
-	shared := NewSharedBackendWithOptions(b, SharedOptions{QueueDepth: 1, Observer: counter})
+	shared := NewSharedBackend(b, SharedOptions{QueueDepth: 1, Observer: counter})
 	first, err := shared.Watch(t.Context(), sharedScopeUnderTest)
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +75,7 @@ func TestSharedSubscriptionLifecycle(t *testing.T) {
 
 func TestScopeDeathAndFailedAttachmentLifetimes(t *testing.T) {
 	counter := &lifecycleCounter{}
-	shared := NewSharedBackendWithOptions(newFakeUpstream(), SharedOptions{Observer: counter})
+	shared := NewSharedBackend(newFakeUpstream(), SharedOptions{Observer: counter})
 	w, err := shared.Watch(t.Context(), sharedScopeUnderTest)
 	if err != nil {
 		t.Fatal(err)
@@ -98,7 +98,7 @@ func (failedOpenBackend) Watch(context.Context, Scope) (Watcher, error) {
 }
 func TestFailedSharedOpenHasNoLifetime(t *testing.T) {
 	counter := &lifecycleCounter{}
-	b := NewSharedBackendWithOptions(failedOpenBackend{}, SharedOptions{Observer: counter})
+	b := NewSharedBackend(failedOpenBackend{}, SharedOptions{Observer: counter})
 	if _, err := b.Watch(t.Context(), sharedScopeUnderTest); err == nil {
 		t.Fatal("expected failure")
 	}

@@ -66,18 +66,20 @@ func TestRevokedAccessTerminatesAnOpenStream(t *testing.T) {
 
 	sink := &authSink{}
 	g := &Gateway{
-		// Entitlement changes UNDER the stream: the first cycle is authorized, and by the time the
-		// gateway asks again — which, before this was fixed, it never did — the answer has flipped.
-		Auth: AuthorizerFunc(func(context.Context, Principal, Scope) error {
-			if asked.Add(1) == 1 {
-				return nil
-			}
-			return Forbidden("your access to this scope was revoked")
-		}),
-		Clients: func(context.Context, string, Principal) (Backend, error) { return &closingBackend{}, nil },
+		StreamConfig: StreamConfig{
+			// Entitlement changes UNDER the stream: the first cycle is authorized, and by the time the
+			// gateway asks again — which, before this was fixed, it never did — the answer has flipped.
+			Authorizer: AuthorizerFunc(func(context.Context, Principal, Scope) error {
+				if asked.Add(1) == 1 {
+					return nil
+				}
+				return Forbidden("your access to this scope was revoked")
+			}),
+			Clients: func(context.Context, string, Principal) (Backend, error) { return &closingBackend{}, nil },
+		},
 	}
 
-	_ = g.Stream(t.Context(), "alice", Scope{Version: "v1", Resource: "configmaps"}, sink)
+	_ = g.Stream(t.Context(), "alice", Scope{Version: "v1", Resource: "configmaps"}, "", sink)
 
 	if asked.Load() < 2 {
 		t.Fatal("the Authorizer was consulted once and never again: a revoked user's open stream " +
@@ -102,20 +104,22 @@ func TestTheClientIsResolvedOnEveryCycle(t *testing.T) {
 
 	sink := &authSink{}
 	g := &Gateway{
-		Auth: AllowAll{},
-		Clients: func(context.Context, string, Principal) (Backend, error) {
-			// Three cycles is enough to show it is per-cycle and not once-ever.
-			if resolved.Add(1) >= 3 {
-				return nil, Forbidden("the credential could not be refreshed")
-			}
-			return backend, nil
-		},
 		// Each cycle stands in for a long-lived one: without this, instant cycles are an upstream
 		// ending every watch early, which the gateway stops reopening after the second.
 		now: steppingClock(2 * time.Second),
+		StreamConfig: StreamConfig{
+			Authorizer: AllowAll{},
+			Clients: func(context.Context, string, Principal) (Backend, error) {
+				// Three cycles is enough to show it is per-cycle and not once-ever.
+				if resolved.Add(1) >= 3 {
+					return nil, Forbidden("the credential could not be refreshed")
+				}
+				return backend, nil
+			},
+		},
 	}
 
-	_ = g.Stream(t.Context(), "alice", Scope{Version: "v1", Resource: "configmaps"}, sink)
+	_ = g.Stream(t.Context(), "alice", Scope{Version: "v1", Resource: "configmaps"}, "", sink)
 
 	if got := resolved.Load(); got < 3 {
 		t.Errorf("ClientFor was called %d times across several cycles — a host has nowhere to refresh "+
@@ -135,13 +139,15 @@ func TestClientResolutionReceivesTheStreamContext(t *testing.T) {
 	var received any
 
 	g := &Gateway{
-		Auth: AllowAll{},
-		Clients: func(ctx context.Context, _ string, _ Principal) (Backend, error) {
-			received = ctx.Value(contextKey{})
-			return nil, Forbidden("stop after checking context")
+		StreamConfig: StreamConfig{
+			Authorizer: AllowAll{},
+			Clients: func(ctx context.Context, _ string, _ Principal) (Backend, error) {
+				received = ctx.Value(contextKey{})
+				return nil, Forbidden("stop after checking context")
+			},
 		},
 	}
-	_ = g.Stream(ctx, "alice", Scope{Version: "v1", Resource: "configmaps"}, &authSink{})
+	_ = g.Stream(ctx, "alice", Scope{Version: "v1", Resource: "configmaps"}, "", &authSink{})
 	if received != "request-value" {
 		t.Errorf("ClientFor context value = %v, want request context value", received)
 	}
@@ -153,11 +159,13 @@ func TestDenialOpensNoWatchAtAll(t *testing.T) {
 	backend := &closingBackend{}
 	sink := &authSink{}
 	g := &Gateway{
-		Auth:    AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("no") }),
-		Clients: func(context.Context, string, Principal) (Backend, error) { return backend, nil },
+		StreamConfig: StreamConfig{
+			Authorizer: AuthorizerFunc(func(context.Context, Principal, Scope) error { return Forbidden("no") }),
+			Clients:    func(context.Context, string, Principal) (Backend, error) { return backend, nil },
+		},
 	}
 
-	_ = g.Stream(t.Context(), "mallory", Scope{Version: "v1", Resource: "secrets"}, sink)
+	_ = g.Stream(t.Context(), "mallory", Scope{Version: "v1", Resource: "secrets"}, "", sink)
 
 	if backend.opened.Load() != 0 {
 		t.Error("a watch was opened for a caller who was refused — the object's existence has leaked")

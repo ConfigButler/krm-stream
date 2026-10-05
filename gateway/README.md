@@ -7,24 +7,32 @@ SubjectAccessReview authorizer.
 
 ```go
 handler := gateway.Handler(gateway.Options{
-	Principal:  principalFromSession, // who is calling
-	Authorizer: authorizeScope,       // may they open this scope?
-	Clients: func(_ context.Context, target string, p gateway.Principal) (gateway.Backend, error) {
-		return kube.NewBackendForConfig(restConfigFor(target, p)) // acting as the caller
-	},
+	Principal: principalFromSession, // who is calling
 	Scopes: gateway.ScopePolicy{ // the allowlist; the zero value denies everything
 		Targets: []string{"production"},
 		Resources: []gateway.GroupResource{
 			{Group: "", Resource: "configmaps", Scope: gateway.ResourceScopeNamespaced},
 		},
 	},
-	Projection:   gateway.ProjectionFull,
-	WriteTimeout: 10 * time.Second,
+	StreamConfig: gateway.StreamConfig{
+		Authorizer: authorizeScope, // may they open this scope?
+		Clients: func(_ context.Context, target string, p gateway.Principal) (gateway.Backend, error) {
+			return kube.NewBackendForConfig(restConfigFor(target, p)) // acting as the caller
+		},
+		Projections:  gateway.StaticProjection(gateway.ProjectionFull),
+		WriteTimeout: 10 * time.Second,
+	},
 })
 ```
 
 `Handler` panics at construction on a missing seam or an unsafe option. The gateway never accepts an
 API-server URL or a credential from a browser request.
+
+`StreamConfig` holds the settings a stream needs however it is served, with one name each. `Options`
+adds the HTTP-only `Principal` and `Scopes`; a host that routes and authorizes its own requests embeds
+the same `StreamConfig` in a `Gateway` and calls `ServeStream`, or `Stream` with its own `Sink`. Both
+take the projection name the caller requested; empty asks the `Projections` policy for its default.
+Nil `Projections` grants only `ProjectionFull`.
 
 ## Stream behavior
 
@@ -32,10 +40,10 @@ Every snapshot cycle emits `reset`, zero or more `added` events, then `synced`; 
 complete-object replacements. Lost upstream continuity emits `RESYNC_REQUIRED` and starts a new cycle
 on the same connection. Any other error ends the connection: a non-terminal one such as
 `UPSTREAM_UNAVAILABLE` carries `retryAfterMs` and the client retries; a terminal one is the final
-event. Unexpected error text goes only to `Options.Diagnostics`.
+event. Unexpected error text goes only to `StreamConfig.Diagnostics`.
 
 The gateway absorbs bookmarks, relists, 410 responses, partial metadata objects and ambiguous
-deletion tombstones. `Gateway.Ordering` defaults to strict decimal `resourceVersion` ordering for
+deletion tombstones. `StreamConfig.Ordering` defaults to strict decimal `resourceVersion` ordering for
 Kubernetes 1.35+, preserving per-object monotonicity within a cycle; use `OrderingLenient` only for an
 upstream whose versions cannot be ordered. The normative details are in [`spec/v1.md`](../spec/v1.md).
 

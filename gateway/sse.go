@@ -26,9 +26,10 @@ import (
 //   - Flush after every frame. An unflushed SSE stream is a stream that arrives when the buffer
 //     happens to fill, which for a live status watch is indistinguishable from being broken.
 
-// HeartbeatInterval is how often a quiet connection is kept alive. ~20s: comfortably under the 30–60s
-// idle timeout of every proxy anyone actually deploys behind.
-const HeartbeatInterval = 20 * time.Second
+// defaultHeartbeatInterval is how often a quiet connection is kept alive unless
+// StreamConfig.HeartbeatInterval says otherwise. ~20s: comfortably under the 30–60s idle timeout of
+// every proxy anyone actually deploys behind.
+const defaultHeartbeatInterval = 20 * time.Second
 
 // SSESink frames events for an io.Writer. Calls are serialized. Generic writers have
 // no library-installed deadline; HTTP callers should use Gateway.ServeStream.
@@ -110,16 +111,16 @@ func (s *SSESink) Emit(ctx context.Context, ev Event) error {
 	return s.write(ctx, frame)
 }
 
-// Comment writes an SSE comment, not a protocol event.
-func (s *SSESink) Comment(text string) error {
-	return s.write(context.Background(), []byte(": "+text+"\n\n"))
+// comment writes an SSE comment, not a protocol event: a consumer ignores it by definition.
+func (s *SSESink) comment(ctx context.Context, text string) error {
+	return s.write(ctx, []byte(": "+text+"\n\n"))
 }
 
 // Heartbeat runs until cancellation or an I/O failure. Its owner must handle the
-// returned error and stop the stream on failure. Nonpositive intervals use the default.
+// returned error and stop the stream on failure. Nonpositive intervals use 20 seconds.
 func (s *SSESink) Heartbeat(ctx context.Context, every time.Duration) error {
 	if every <= 0 {
-		every = HeartbeatInterval
+		every = defaultHeartbeatInterval
 	}
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -128,7 +129,7 @@ func (s *SSESink) Heartbeat(ctx context.Context, every time.Duration) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-t.C:
-			if err := s.write(ctx, []byte(": heartbeat\n\n")); err != nil {
+			if err := s.comment(ctx, "heartbeat"); err != nil {
 				return err
 			}
 		}
@@ -175,19 +176,15 @@ func writeSSEHeaders(ctx context.Context, w http.ResponseWriter, s *SSESink) err
 	})
 }
 
-// ServeStream runs one HTTP stream, including headers, heartbeats and cleanup.
-func (g *Gateway) ServeStream(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope) {
-	g.ServeStreamProjection(w, r, principal, scope, "")
-}
-
-// ServeStreamProjection serves a requested projection under the gateway's policy.
-// With WriteTimeout enabled, unsupported writers abort before a stream opens. A positive
-// ReauthorizationInterval requires a positive WriteTimeout; without one it panics before
+// ServeStream runs one HTTP stream, including headers, heartbeats and cleanup. requested is the
+// projection name the caller asked for, which the Projections policy grants or refuses; empty asks it
+// for its default. With WriteTimeout enabled, unsupported writers abort before a stream opens. A
+// positive ReauthorizationInterval requires a positive WriteTimeout; without one it panics before
 // writing anything, as Handler does at construction.
-func (g *Gateway) ServeStreamProjection(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope, projection Projection) {
+func (g *Gateway) ServeStream(w http.ResponseWriter, r *http.Request, principal Principal, scope Scope, requested Projection) {
 	g.serveHTTP(w, r, func(ctx context.Context, sink *SSESink) {
 		// A terminal frame may itself fail; delivery is not guaranteed on a failed transport.
-		_ = g.StreamProjection(ctx, principal, scope, projection, sink)
+		_ = g.Stream(ctx, principal, scope, requested, sink)
 	})
 }
 
