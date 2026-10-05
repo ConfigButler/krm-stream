@@ -11,6 +11,11 @@ algorithm or shared watch implementation.
 - [saving tests](../../packages/krm-stream/test/saving.test.ts) exercise the response races.
 - `TestConditionalSaveConflict` in the Kubernetes e2e suite exercises this handler against a real API
   server: a competing update makes a captured save return 409 without overwriting the winner.
+- The `TestRealAPI` cases (`task test-real-api`) compose the editor, a real gateway stream and a host
+  endpoint against a real API server, with the browser store run by node. They cover status churn
+  behind `krm-spec/v1`, a bookkeeping-only write behind `krm-full/v1`, a reconciliation read that lands
+  during snapshot recovery, a deletion and recreation between this handler's preflight GET and its
+  PATCH, and a real validation error.
 
 ```ts
 const store = new LiveResourceStore();
@@ -34,8 +39,8 @@ connection.close();
 Use the same scope and `krm-full/v1` projection on the stream and this example endpoint. The GET
 returns a complete projected object with redacted paths; it must use a most-recent Kubernetes read, with
 no HTTP or application cache. A recreated name has a different UID and must be opened as a new editor.
-Keep an external draft archive if users need to recover edits after deletion: the store intentionally
-removes drafts of deleted objects.
+The store intentionally removes drafts of deleted objects; if users need to recover edits after a
+deletion, keep a copy with the [recovery-copy recipe](../editor-recipes/README.md#recover-work-after-a-deletion).
 
 A narrow merge patch is **not concurrency protection**. JSON merge patch replaces arrays as a whole,
 even when the client merges keyed list items intelligently. This endpoint puts the captured UID and
@@ -60,9 +65,15 @@ that array when `redactedPaths` is absent. If both are supplied, `redactedPaths`
 Omitted redaction metadata never clears protection.
 
 The example distinguishes `draft-conflict` (show conflicting paths), `version-stale` (base refreshed,
-o field disagreement), `recovering` (a usable base is not established), and `unavailable` (missing or
-replacement UID), alongside `unchanged`, `busy` and `saved`. Transport and validation failures throw
-host errors. The live-state callback is checked before saving and after reconciliation.
+no field disagreement), `recovering` (a usable base is not established), and `unavailable` (missing,
+deleted or replacement UID), alongside `unchanged`, `busy` and `saved`. Transport and validation
+failures throw host errors. The live-state callback is checked before saving and after reconciliation.
+
+The endpoint answers every Kubernetes error with the Kubernetes `Status` as JSON, so a 422 keeps its
+reason and field causes for the form to show. Because Kubernetes checks the captured
+`resourceVersion` before the UID, an object deleted and recreated after the preflight GET fails as a
+plain 409; the endpoint then reads it once and answers 409 "object was replaced" with the new UID in
+`details.uid`, or 404 if it is simply gone. It never turns any other 422 into a conflict.
 
 After a refused read, `recovering` preserves the draft. Wait for stream recovery or authoritative
 metadata, then the next Save performs only a guarded GET. An accepted read returns `version-stale`

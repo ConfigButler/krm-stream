@@ -192,6 +192,27 @@ test("save after deletion returns unavailable without making a request", async (
   assert.equal(await editor.save(), "unavailable");
 });
 
+test("a save whose object was deleted after the preflight read reports unavailable, not a host error", async () => {
+  const { conditionalEditor } = await import("../../../examples/conditional-save/editor.ts");
+  const store = new LiveResourceStore();
+  store.applyServerEvent(object("1"));
+  store.setValue("u", ["data", "value"], "mine");
+  const methods: string[] = [];
+  const editor = conditionalEditor(
+    store,
+    "u",
+    "/save",
+    async (_url, init) => {
+      methods.push(init?.method ?? "GET");
+      return new Response(JSON.stringify({ kind: "Status", code: 404, reason: "NotFound" }), { status: 404 });
+    },
+    () => true,
+  );
+  assert.equal(await editor.save(), "unavailable");
+  assert.deepEqual(methods, ["PATCH"], "no retry and no reconciliation read");
+  assert.deepEqual(store.draft("u").data, { value: "mine" }, "the draft stays until the watch removes it");
+});
+
 test("editor distinguishes version rejection and captures a fresh intent only on the next save", async () => {
   const { conditionalEditor } = await import("../../../examples/conditional-save/editor.ts");
   const store = new LiveResourceStore();

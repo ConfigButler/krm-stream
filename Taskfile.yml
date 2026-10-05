@@ -437,6 +437,17 @@ tasks:
   # API server, on BOTH paths: the streaming list against kube-apiserver, and list-then-watch against
   # the aggregated API that refuses it (F6). It does not run in per-PR CI: it needs Docker-in-Docker
   # and it takes minutes, while the fixtures gate every PR in milliseconds.
+  # The save path, composed against a real API server: the real gateway, a real host endpoint and the
+  # real browser store (run by node).
+  test-real-api:
+    desc: "Real-API save composition: status churn, overlapping recovery and the UID race (proposal 0006)."
+    deps: [cluster-up]
+    dir: gateway/kube
+    env:
+      KUBECONFIG: '{{.KUBECONFIG_PATH}}'
+    cmds:
+      - go test -tags e2e -v -count=1 -run '^TestRealAPI' .
+
   test-cluster:
     desc: "The kube backend against a real API server on both watch paths."
     deps: [cluster-up, cluster-aggregated-api]

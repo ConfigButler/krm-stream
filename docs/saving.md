@@ -83,6 +83,14 @@ current draft and any conflicts, and let the person review before capturing a ne
 retry the old patch with a newer version, and do not apply a response for a replacement UID to the
 old editor.
 
+A 409 does not always mean a newer version of the same object. Kubernetes checks the captured
+`resourceVersion` before the UID, so an object deleted and recreated under the same name since the
+host's preflight read also fails as a plain conflict. The guarded read above refuses the replacement's
+UID, so the editor reports it unavailable. A host can say so directly: the
+[conditional-save host](../gateway/kube/examples/conditionalsave/handler.go) answers with the
+Kubernetes `Status`, and after a 409 reads the object once, naming a replacement in `details.uid`.
+It never turns a 422 validation error into a conflict.
+
 ## Why a quiet stream can still reject a save
 
 The gateway sends the fields your view needs. It suppresses updates that change only ignored fields

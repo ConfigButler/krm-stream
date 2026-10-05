@@ -74,7 +74,7 @@ func Handler(clientFor func(*http.Request) (kubernetes.Interface, error), namesp
 			return
 		}
 		if request.UID != string(current.UID) {
-			http.Error(w, "object was replaced", http.StatusConflict)
+			writeReplaced(w, name, current.UID)
 			return
 		}
 		// Application edit policy is separate from projection protection. Metadata identity and version
@@ -116,6 +116,18 @@ func Handler(clientFor func(*http.Request) (kubernetes.Interface, error), namesp
 			return
 		}
 		_, err = client.Patch(r.Context(), name, types.MergePatchType, patch, metav1.PatchOptions{})
+		if err != nil && (apierrors.IsConflict(err) || uidRejected(err)) {
+			// Kubernetes checks the captured resourceVersion before the UID, so an object deleted and
+			// recreated since the preflight GET fails exactly like a stale write. Ask which it was.
+			latest, getErr := client.Get(r.Context(), name, metav1.GetOptions{})
+			switch {
+			case apierrors.IsNotFound(getErr):
+				err = getErr
+			case getErr == nil && string(latest.UID) != request.UID:
+				writeReplaced(w, name, latest.UID)
+				return
+			}
+		}
 		if err != nil {
 			writeError(w, err)
 			return
@@ -124,14 +136,51 @@ func Handler(clientFor func(*http.Request) (kubernetes.Interface, error), namesp
 	})
 }
 
+// writeError answers with the Kubernetes Status behind err, so the editor keeps its code, reason and
+// causes (a 422's field errors, say). An error that is not an API response is reported without its
+// text, which can name internal addresses.
 func writeError(w http.ResponseWriter, err error) {
-	status := http.StatusBadGateway
 	var apiStatus apierrors.APIStatus
 	if errors.As(err, &apiStatus) {
-		status = int(apiStatus.Status().Code)
+		writeStatus(w, apiStatus.Status())
+		return
 	}
-	if status < 400 || status > 599 {
-		status = http.StatusBadGateway
+	writeStatus(w, metav1.Status{Code: http.StatusBadGateway, Message: "the Kubernetes request failed"})
+}
+
+// writeReplaced reports that the object at this name is no longer the one the save was captured
+// against. Details.UID names the replacement, which the editor must open separately.
+func writeReplaced(w http.ResponseWriter, name string, current types.UID) {
+	writeStatus(w, metav1.Status{
+		Code:    http.StatusConflict,
+		Reason:  metav1.StatusReasonConflict,
+		Message: "object was replaced",
+		Details: &metav1.StatusDetails{Name: name, Kind: "configmaps", UID: current},
+	})
+}
+
+func writeStatus(w http.ResponseWriter, status metav1.Status) {
+	if status.Code < 400 || status.Code > 599 {
+		status.Code = http.StatusBadGateway
 	}
-	http.Error(w, http.StatusText(status), status)
+	status.TypeMeta = metav1.TypeMeta{Kind: "Status", APIVersion: "v1"}
+	status.Status = metav1.StatusFailure
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(int(status.Code))
+	_ = json.NewEncoder(w).Encode(status)
+}
+
+// uidRejected reports a 422 whose cause is metadata.uid: the identity precondition, not the patch's
+// content. Every other validation error stays a validation error.
+func uidRejected(err error) bool {
+	var apiStatus apierrors.APIStatus
+	if !apierrors.IsInvalid(err) || !errors.As(err, &apiStatus) || apiStatus.Status().Details == nil {
+		return false
+	}
+	for _, cause := range apiStatus.Status().Details.Causes {
+		if cause.Field == "metadata.uid" {
+			return true
+		}
+	}
+	return false
 }
