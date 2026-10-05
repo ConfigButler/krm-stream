@@ -13,6 +13,7 @@ import {
   connectNativeWatch,
   LiveResourceStore,
   nativeCollectionURL,
+  nativeObjectURL,
   type ResourceStateEvent,
   type ResourceStreamHandle,
   readOnlyPolicy,
@@ -924,4 +925,33 @@ test("nativeCollectionURL refuses segments that would change the path", () => {
     nativeCollectionURL("/k8s", { version: "v1", resource: "pods", namespace: "a b" }),
     "/k8s/api/v1/namespaces/a%20b/pods",
   );
+});
+
+test("nativeObjectURL addresses one object in the collection a native watch reads", () => {
+  assert.equal(
+    nativeObjectURL("/k8s", { version: "v1", resource: "configmaps", namespace: "app", name: "settings" }),
+    "/k8s/api/v1/namespaces/app/configmaps/settings",
+  );
+  assert.equal(
+    nativeObjectURL("/k8s/", {
+      group: "apps",
+      version: "v1",
+      resource: "deployments",
+      name: "web",
+      labelSelector: "a=b",
+    }),
+    "/k8s/apis/apps/v1/deployments/web",
+    "a selector does not address an object",
+  );
+  assert.equal(
+    nativeObjectURL("", { version: "v1", resource: "namespaces", name: "team a" }),
+    "/api/v1/namespaces/team%20a",
+  );
+  for (const name of ["", ".", "..", "a/b"]) {
+    assert.throws(
+      () => nativeObjectURL("/k8s", { version: "v1", resource: "configmaps", namespace: "app", name }),
+      /krm-stream: invalid name/,
+      JSON.stringify(name),
+    );
+  }
 });

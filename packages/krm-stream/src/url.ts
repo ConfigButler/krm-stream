@@ -72,22 +72,44 @@ export type NativeScope = Omit<Scope, "target">;
  * any other collection member. The host owns credentials, routing and which collections it allows.
  */
 export function nativeCollectionURL(proxyBase: string, scope: NativeScope): string {
-  const segment = (what: string, value: string | undefined) => {
-    if (!value || value === "." || value === ".." || value.includes("/")) {
-      throw new Error(`krm-stream: invalid ${what} ${JSON.stringify(value ?? "")}`);
-    }
-    return encodeURIComponent(value);
-  };
+  const q = new URLSearchParams();
+  if (scope.labelSelector) q.append("labelSelector", scope.labelSelector);
+  if (scope.name) q.append("fieldSelector", `metadata.name=${scope.name}`);
+  const query = q.toString();
+  return collectionPath(proxyBase, scope) + (query ? `?${query}` : "");
+}
+
+/**
+ * Build the URL of one native Kubernetes object behind a host proxy: where a native editor reads it
+ * back and sends its conditional PATCH, through the same proxy and collection it watches.
+ *
+ * ```ts
+ * const { namespace, name } = store.server(uid).metadata;
+ * nativeObjectURL("/k8s", { version: "v1", resource: "configmaps", namespace, name });
+ * // → /k8s/api/v1/namespaces/app/configmaps/settings
+ * ```
+ *
+ * Take `namespace` and `name` from the object itself, so a collection watched across namespaces
+ * still addresses each member. A label selector does not address an object and is ignored.
+ */
+export function nativeObjectURL(proxyBase: string, scope: NativeScope & { name: string }): string {
+  return `${collectionPath(proxyBase, scope)}/${segment("name", scope.name)}`;
+}
+
+function collectionPath(proxyBase: string, scope: NativeScope): string {
   const path = [proxyBase.replace(/\/+$/, "")];
   if (scope.group) path.push("apis", segment("group", scope.group));
   else path.push("api");
   path.push(segment("version", scope.version));
   if (scope.namespace) path.push("namespaces", segment("namespace", scope.namespace));
   path.push(segment("resource", scope.resource));
+  return path.join("/");
+}
 
-  const q = new URLSearchParams();
-  if (scope.labelSelector) q.append("labelSelector", scope.labelSelector);
-  if (scope.name) q.append("fieldSelector", `metadata.name=${scope.name}`);
-  const query = q.toString();
-  return path.join("/") + (query ? `?${query}` : "");
+/** One path segment, refused when it would leave or change the path it is placed in. */
+function segment(what: string, value: string | undefined): string {
+  if (!value || value === "." || value === ".." || value.includes("/")) {
+    throw new Error(`krm-stream: invalid ${what} ${JSON.stringify(value ?? "")}`);
+  }
+  return encodeURIComponent(value);
 }
