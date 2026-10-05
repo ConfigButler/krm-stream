@@ -78,7 +78,7 @@ export function nativeCollectionURL(proxyBase: string, scope: NativeScope): stri
     }
     return encodeURIComponent(value);
   };
-  const path = [proxyBase.replace(/\/+$/, "")];
+  const path = [withoutTrailingSlashes(proxyBase)];
   if (scope.group) path.push("apis", segment("group", scope.group));
   else path.push("api");
   path.push(segment("version", scope.version));
@@ -90,4 +90,12 @@ export function nativeCollectionURL(proxyBase: string, scope: NativeScope): stri
   if (scope.name) q.append("fieldSelector", `metadata.name=${scope.name}`);
   const query = q.toString();
   return path.join("/") + (query ? `?${query}` : "");
+}
+
+/** The base without its trailing slashes. A loop, not `/\/+$/`: that pattern retries from every
+ * slash in a long run that does not end the string, which is quadratic in the caller's input. */
+function withoutTrailingSlashes(base: string): string {
+  let end = base.length;
+  while (end > 0 && base[end - 1] === "/") end--;
+  return base.slice(0, end);
 }
