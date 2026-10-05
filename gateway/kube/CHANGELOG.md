@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.8.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.7.0...gateway/kube/v0.8.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **client:** setValue and removeKey on metadata.annotations as a whole are refused; edit each annotation key instead. isEditable on that map is now false.
+* **gateway:** Options and Gateway embed StreamConfig, so composite literals set Authorizer, Clients, Projections, Ordering, Observer, Diagnostics, HeartbeatInterval, WriteTimeout and the reauthorization settings inside StreamConfig: gateway.StreamConfig{...}. Gateway.Auth is renamed Authorizer. The Projection field is removed: use Projections: gateway.StaticProjection(p), or leave it nil for ProjectionFull. ServeStream(w, r, principal, scope, requested) and Stream(ctx, principal, scope, requested, sink) replace ServeStreamProjection and StreamProjection; pass "" for the default view. NewSharedBackend(upstream, options) replaces NewSharedBackendWithOptions; pass gateway.SharedOptions{} for the defaults.
+
+### Features
+
+* **client:** native editing through the host proxy (slice 2) ([#61](https://github.com/ConfigButler/krm-stream/issues/61)) ([66f306b](https://github.com/ConfigButler/krm-stream/commit/66f306bbaa3f8b5c0fc4c990f8a793b287a69191))
+* **client:** native Kubernetes viewer over LIST/WATCH (slice 1) ([#60](https://github.com/ConfigButler/krm-stream/issues/60)) ([79fb86e](https://github.com/ConfigButler/krm-stream/commit/79fb86e29fb9543418b5594ab03805bae2c2ea5c))
+* **gateway:** share one stream configuration and move the test harness out of the gateway ([#54](https://github.com/ConfigButler/krm-stream/issues/54)) ([f39d365](https://github.com/ConfigButler/krm-stream/commit/f39d3650c89f322eae33884fe8fb614819b7c8a5))
+
 ## [0.7.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.6.0...gateway/kube/v0.7.0) (2026-10-04)
 
 

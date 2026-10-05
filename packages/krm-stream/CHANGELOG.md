@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.8.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.7.0...@configbutler/krm-stream-v0.8.0) (2026-10-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **client:** setValue and removeKey on metadata.annotations as a whole are refused; edit each annotation key instead. isEditable on that map is now false.
+* **client:** stop the stream when any host callback throws
+* **client:** an exception thrown by a subscribe callback or onError now stops the stream without retrying and rejects closed with that exception, as a consumer exception does.
+* **client:** connectManagedResourceStream is renamed connectResourceStream(url, consume, options), and the old single-connection connectResourceStream and connectWithEventSource are removed without aliases. ManagedStreamOptions/StreamOptions become ResourceStreamOptions and ManagedStreamHandle/StreamHandle become ResourceStreamHandle; onOpen, onSynced, onGap, onStateChange and onChange are removed in favour of state, subscribe and the callback. applyStreamEvent takes a ResourceStateEvent, without seq or error events. closed now rejects with a callback's exception, and a mismatched X-KRM-Stream-Protocol header is terminal.
+
+### Features
+
+* **client:** deliver resource state events from one stream connector ([#53](https://github.com/ConfigButler/krm-stream/issues/53)) ([d054745](https://github.com/ConfigButler/krm-stream/commit/d0547459594f9c5025aac81c9c5734f7ebfc1f87))
+* **client:** native editing through the host proxy (slice 2) ([#61](https://github.com/ConfigButler/krm-stream/issues/61)) ([66f306b](https://github.com/ConfigButler/krm-stream/commit/66f306bbaa3f8b5c0fc4c990f8a793b287a69191))
+* **client:** native Kubernetes viewer over LIST/WATCH (slice 1) ([#60](https://github.com/ConfigButler/krm-stream/issues/60)) ([79fb86e](https://github.com/ConfigButler/krm-stream/commit/79fb86e29fb9543418b5594ab03805bae2c2ea5c))
+
+
+### Bug Fixes
+
+* **client:** never count an adopted save response as snapshot membership ([d7e0677](https://github.com/ConfigButler/krm-stream/commit/d7e0677066cd3433471e15a0d6bd2a5dc4699844))
+* **client:** stop the stream when any host callback throws ([d7e0677](https://github.com/ConfigButler/krm-stream/commit/d7e0677066cd3433471e15a0d6bd2a5dc4699844))
+
+
+### Documentation
+
+* add an upgrade guide from 0.7 ([d7e0677](https://github.com/ConfigButler/krm-stream/commit/d7e0677066cd3433471e15a0d6bd2a5dc4699844))
+* **examples:** add tested deletion-recovery and keep-local editor recipes ([#57](https://github.com/ConfigButler/krm-stream/issues/57)) ([939b262](https://github.com/ConfigButler/krm-stream/commit/939b2622e9a3905c364457c6d463508f119ab1a6))
+* re-center on watch streams and a native watch direction ([#59](https://github.com/ConfigButler/krm-stream/issues/59)) ([523fd7a](https://github.com/ConfigButler/krm-stream/commit/523fd7a7fbd314472197d106426d6b1a418715e3))
+
 ## [0.7.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.6.0...@configbutler/krm-stream-v0.7.0) (2026-10-04)
 
 
