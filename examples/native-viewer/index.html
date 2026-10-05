@@ -1,0 +1,117 @@
+<!doctype html>
+<!--
+  examples/native-viewer — a read-only live list of native Kubernetes resources, through a proxy the
+  host already runs. No gateway, no framework, no bundler, no editor and no write endpoint.
+
+  The page asks the host's proxy for an ordinary LIST and a WATCH with connectNativeWatch, applies
+  every state event to LiveResourceStore(readOnlyPolicy), and renders identity, current fields and the
+  connection state. Disconnect (or leaving the page) closes the connection.
+
+  Query parameters choose the collection:
+
+    proxy=/k8s  version=v1  resource=configmaps  namespace=default  [group=]  [labelSelector=]  [name=]
+
+  `entry=bundle` loads the single-file build instead of the per-module one. The library path is
+  relative to this file in the repository; see README.md for serving both through `kubectl proxy`.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>krm-stream — native viewer</title>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 1.5rem; max-width: 70rem; }
+      h1 { font-size: 1rem; margin: 0 0 .25rem; }
+      .sub { opacity: .65; margin: 0 0 1rem; overflow-wrap: anywhere; }
+      button { font: inherit; }
+      table { border-collapse: collapse; width: 100%; margin-top: 1rem; }
+      th, td { text-align: left; padding: .35rem .5rem; vertical-align: top; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
+      th { font-weight: normal; opacity: .6; }
+      pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+      .muted { opacity: .6; }
+      #error { color: #dc2626; }
+    </style>
+  </head>
+  <body>
+    <h1>Native viewer</h1>
+    <p class="sub" id="collection"></p>
+    <p>
+      State: <strong id="state">loading</strong> <span id="detail" class="muted"></span>
+      <button id="disconnect" type="button">Disconnect</button>
+    </p>
+    <p id="error" role="status"></p>
+    <p class="muted">History: <span id="history"></span></p>
+    <table>
+      <thead><tr><th>Name</th><th>Kind</th><th>UID</th><th>resourceVersion</th><th>Fields</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+
+    <script type="module">
+      const params = new URLSearchParams(location.search);
+      const library = params.get("entry") === "bundle" ? "krm-stream.js" : "index.js";
+      const { LiveResourceStore, applyStreamEvent, connectNativeWatch, nativeCollectionURL, readOnlyPolicy } =
+        await import(new URL(`../../packages/krm-stream/dist/${library}`, import.meta.url).href);
+
+      const scope = {
+        group: params.get("group") ?? "",
+        version: params.get("version") ?? "v1",
+        resource: params.get("resource") ?? "configmaps",
+        namespace: params.get("namespace") ?? "default",
+        labelSelector: params.get("labelSelector") ?? "",
+        name: params.get("name") ?? "",
+      };
+      const url = nativeCollectionURL(params.get("proxy") ?? "/k8s", scope);
+      document.getElementById("collection").textContent = url;
+
+      // One store per source, scope and login identity: never reuse it for another collection.
+      const store = new LiveResourceStore(readOnlyPolicy);
+      const cell = (text, className) => {
+        const td = document.createElement("td");
+        if (className) td.className = className;
+        td.textContent = text;
+        return td;
+      };
+      const render = () => {
+        const rows = store.ids().map((uid) => {
+          const object = store.server(uid);
+          const { apiVersion, kind, metadata, ...fields } = object;
+          const tr = document.createElement("tr");
+          tr.dataset.uid = uid;
+          const name = metadata.namespace ? `${metadata.namespace}/${metadata.name}` : metadata.name;
+          const pre = document.createElement("pre");
+          pre.textContent = JSON.stringify({ labels: metadata.labels, ...fields }, null, 2);
+          const td = document.createElement("td");
+          td.append(pre);
+          tr.append(cell(name), cell(`${apiVersion} ${kind}`), cell(uid, "muted"), cell(metadata.resourceVersion ?? ""), td);
+          return [name, tr];
+        });
+        rows.sort(([a], [b]) => a.localeCompare(b));
+        document.getElementById("rows").replaceChildren(...rows.map(([, tr]) => tr));
+      };
+
+      const history = [];
+      const connection = connectNativeWatch(url, (event) => applyStreamEvent(store, event), {
+        onError: (code, message, terminal) => {
+          document.getElementById("error").textContent = `${code}${terminal ? " (terminal)" : ""}: ${message}`;
+        },
+      });
+      store.subscribe(render);
+      connection.subscribe((state) => {
+        document.getElementById("state").textContent = state.status;
+        document.getElementById("detail").textContent =
+          state.status === "retrying" ? `retry ${state.retries} in ${state.retryInMs} ms` : "";
+        history.push(state.status);
+        document.getElementById("history").textContent = history.join(" → ");
+        if (state.status === "live") document.getElementById("error").textContent = "";
+        render();
+      });
+      const disconnect = () => connection.close();
+      document.getElementById("disconnect").addEventListener("click", disconnect);
+      addEventListener("pagehide", disconnect);
+      connection.closed.catch((error) => {
+        document.getElementById("error").textContent = `stopped by a page error: ${error}`;
+      });
+    </script>
+  </body>
+</html>
