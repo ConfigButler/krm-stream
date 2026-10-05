@@ -1,0 +1,598 @@
+<!doctype html>
+<!--
+  examples/native-editor — edit one ConfigMap through the proxy that watches it. No gateway and no
+  framework.
+
+  The page watches one named ConfigMap with connectNativeWatch, applies every state event to a
+  LiveResourceStore under the default edit policy, and edits its `data` and ordinary annotations.
+  Save is the native editor from editor.ts: a conditional JSON merge PATCH through the same proxy,
+  guarded recovery reads and confirm(). Conflicts are resolved with store.revert or the keep-local
+  recipe; the recovery-copy recipe keeps unsaved edits of an object that is removed.
+
+  Query parameters:
+
+    proxy=/k8s  namespace=default  name=settings  [entry=bundle]  [echoWaitMs=5000]
+
+  Build first: `task build-native-editor` compiles editor.ts and the recipes into dist/. See README.md
+  for serving the page and the API through `kubectl proxy`.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>krm-stream — native editor</title>
+    <script>
+      // Where "@configbutler/krm-stream" lives, for this page and for dist/editor.js: the per-module
+      // build or, with ?entry=bundle, the single file. A host without a bundler writes this map once.
+      {
+        const entry = new URLSearchParams(location.search).get("entry") === "bundle" ? "krm-stream.js" : "index.js";
+        const library = new URL(`../../packages/krm-stream/dist/${entry}`, location.href).href;
+        const map = document.createElement("script");
+        map.type = "importmap";
+        map.textContent = JSON.stringify({ imports: { "@configbutler/krm-stream": library } });
+        document.currentScript.after(map);
+      }
+    </script>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font: 14px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 1.5rem; max-width: 70rem; }
+      h1 { font-size: 1rem; margin: 0 0 .25rem; }
+      h2 { font-size: .8rem; text-transform: uppercase; letter-spacing: .08em; opacity: .7; margin: 0 0 .5rem; }
+      section { margin: 1.25rem 0; }
+      fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+      .sub { opacity: .65; margin: 0 0 1rem; overflow-wrap: anywhere; }
+      button, input, select, textarea { font: inherit; }
+      /* A textarea, not an input: ConfigMap values and annotations can hold newlines, and an
+         <input> strips them from its value. */
+      td textarea { width: 100%; box-sizing: border-box; resize: vertical; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { text-align: left; padding: .3rem .5rem; vertical-align: top; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
+      th { font-weight: normal; white-space: nowrap; width: 1%; }
+      dl { display: grid; grid-template-columns: max-content 1fr; gap: 0 1rem; margin: 0; }
+      dd { margin: 0; overflow-wrap: anywhere; }
+      pre { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+      ul { margin: 0; padding-left: 1.25rem; }
+      li { margin: .2rem 0; }
+      .muted, dt { opacity: .6; }
+      .readonly { opacity: .7; overflow-wrap: anywhere; }
+      .badge { font-size: .75rem; padding: 0 .4rem; border-radius: 999px; margin-right: .3rem; }
+      .edited { background: #2563eb; color: #fff; }
+      .conflict { background: #dc2626; color: #fff; }
+      .locked { background: color-mix(in srgb, currentColor 15%, transparent); }
+      #error { color: #dc2626; }
+      #outcome:empty { display: none; }
+      #outcome { padding: .5rem .75rem; border-left: 3px solid currentColor; }
+    </style>
+  </head>
+  <body>
+    <h1>Native editor</h1>
+    <p class="sub" id="target"></p>
+    <p>
+      Connection: <strong id="state">connecting</strong> <span id="detail" class="muted"></span>
+      <button id="disconnect" type="button">Disconnect</button>
+    </p>
+    <p id="error" role="status"></p>
+
+    <section>
+      <h2>Identity</h2>
+      <dl id="identity"></dl>
+    </section>
+
+    <fieldset id="editor" disabled>
+      <section>
+        <h2>Draft <span class="muted">— edits stay local until Save</span></h2>
+        <table><tbody id="fields"></tbody></table>
+        <form id="add">
+          <select id="add-section" aria-label="Add to">
+            <option value="data">data</option>
+            <option value="annotation">annotation</option>
+          </select>
+          <input id="add-key" aria-label="New key" placeholder="key" required />
+          <textarea id="add-value" aria-label="New value" placeholder="value" rows="1"></textarea>
+          <button type="submit">Add</button>
+        </form>
+      </section>
+
+      <section id="conflicts-section" hidden>
+        <h2>Conflicts</h2>
+        <p class="muted">The server changed fields you also edited. Choose a value for each before saving.</p>
+        <ul id="conflicts"></ul>
+      </section>
+
+      <section>
+        <h2>Pending edits</h2>
+        <ul id="changes"></ul>
+        <p>
+          <button id="save" type="button">Save</button>
+          <button id="confirm" type="button" hidden>Confirm current state</button>
+          <span id="hint" class="muted"></span>
+        </p>
+        <p id="outcome" role="status"></p>
+      </section>
+    </fieldset>
+
+    <section id="removed" hidden>
+      <h2>Removed</h2>
+      <p>
+        This ConfigMap was deleted, or replaced by a new object with the same name. Its unsaved edits
+        are kept below for copying; they are never applied to a replacement.
+      </p>
+      <pre id="recovery"></pre>
+      <button id="open-replacement" type="button" hidden>Discard these edits and open the replacement</button>
+    </section>
+
+    <section>
+      <h2>Server state <span class="muted">— read-only, follows the watch</span></h2>
+      <pre id="server"></pre>
+    </section>
+
+    <script type="module">
+      import {
+        LiveResourceStore,
+        applyStreamEvent,
+        connectNativeWatch,
+        get,
+        has,
+        nativeCollectionURL,
+      } from "@configbutler/krm-stream";
+      import { NativeRequestError, nativeEditor } from "./dist/editor.js";
+      import { keepLocal } from "./dist/keepLocal.js";
+      import { retainRecoveryCopy } from "./dist/recoveryCopy.js";
+
+      const params = new URLSearchParams(location.search);
+      const proxy = params.get("proxy") ?? "/k8s";
+      const namespace = params.get("namespace") ?? "default";
+      const name = params.get("name") ?? "settings";
+      // How long an accepted write waits for its watch echo before the page offers Confirm. Host policy.
+      const echoWaitMs = Number(params.get("echoWaitMs") ?? 5000);
+      const scope = { version: "v1", resource: "configmaps", namespace, name };
+      const $ = (id) => document.getElementById(id);
+      $("target").textContent = `ConfigMap ${namespace}/${name} through ${proxy}`;
+
+      let closed = false;
+      let uid; // the object being edited; a replacement under the same name is opened explicitly
+      let editor;
+      let recovery;
+      // An accepted write awaiting its echo ({ rv, overdue, timer }) or a write whose outcome is
+      // unknown ({ unknown: true }). Both owe a guarded read before the editor writes again; Confirm
+      // performs it.
+      let awaiting;
+
+      // One store per source, scope and login identity. The default policy makes data and annotations
+      // editable; managedFields and the last-applied annotation stay read-only under every policy.
+      const store = new LiveResourceStore();
+      const connection = connectNativeWatch(
+        nativeCollectionURL(proxy, scope),
+        (event) => applyStreamEvent(store, event),
+        {
+          onError: (code, message, terminal) => {
+            $("error").textContent = `${code}${terminal ? " (terminal)" : ""}: ${message}`;
+          },
+        },
+      );
+      // The host's fetch. Add a CSRF header or other session policy here; same-origin cookies are sent.
+      const request = (input, init) => fetch(input, init);
+      const live = () => !closed && connection.state.status === "live";
+
+      function open(id) {
+        recovery?.dispose();
+        uid = id;
+        editor = nativeEditor(store, id, { proxy, scope }, request, live);
+        // A detached copy of the draft while the object exists, for copy-out once it is removed.
+        recovery = retainRecoveryCopy(store, id);
+        settle();
+        report("", "");
+      }
+
+      const candidate = () =>
+        store.ids().find((id) => {
+          const { metadata } = store.server(id);
+          return id !== uid && metadata.namespace === namespace && metadata.name === name;
+        });
+      const present = () => uid !== undefined && store.ids().includes(uid);
+
+      function settle() {
+        clearTimeout(awaiting?.timer);
+        awaiting = undefined;
+      }
+
+      function awaitEcho(rv) {
+        settle();
+        const timer = setTimeout(() => {
+          if (closed || awaiting?.timer !== timer) return;
+          awaiting.overdue = true;
+          // A read already in flight answers this itself.
+          if (!editor.saving) {
+            report(
+              "no-echo",
+              `Accepted, but the watch has delivered no newer version after ${echoWaitMs / 1000} s. The write may ` +
+                "have left the object unchanged; an admission webhook can do that. Confirm reads the current state " +
+                "without writing.",
+            );
+          }
+          render();
+        }, echoWaitMs);
+        awaiting = { rv, overdue: false, timer };
+      }
+
+      function unknown(cause) {
+        settle();
+        awaiting = { unknown: true };
+        report(
+          "unknown",
+          `${cause} If a write was sent, it may have been applied. Confirm reads the current state; until a read ` +
+            "succeeds, Save also only reads. Nothing is written again automatically.",
+        );
+      }
+
+      function report(kind, text) {
+        $("outcome").dataset.kind = kind;
+        $("outcome").textContent = text;
+      }
+
+      function remaining() {
+        const n = store.changes(uid).length;
+        return n === 0
+          ? "Every field matches the server."
+          : `${n} field${n === 1 ? "" : "s"} still differ from the server and were not saved by this write. ` +
+              "Save writes them.";
+      }
+
+      /** Present what a save or confirm returned. `base` is the version a write was conditional on. */
+      function handle(result, base) {
+        const rv = () => store.server(uid).metadata.resourceVersion;
+        switch (result) {
+          case "saved":
+            awaitEcho(base);
+            return report("saved", "Accepted by Kubernetes. Waiting for the watch to deliver it…");
+          case "confirmed":
+            settle();
+            return report(
+              "confirmed",
+              `Confirmed: the form now builds on the server's state at resourceVersion ${rv()}. ${remaining()}`,
+            );
+          case "version-stale":
+            settle();
+            return report(
+              "version-stale",
+              "The ConfigMap changed on the server first, so nothing was written. Your edits are kept on top of " +
+                `resourceVersion ${rv()}; review them and Save again.`,
+            );
+          case "draft-conflict":
+            return report(
+              "draft-conflict",
+              "The server changed fields you edited. Nothing was written; choose a value for each conflict, then " +
+                "Save again.",
+            );
+          case "recovering":
+            return report(
+              "recovering",
+              "Could not establish the server's current state: the watch moved on or is reconnecting. Your edits " +
+                "are still here, and the next Save reads again before writing.",
+            );
+          case "unavailable":
+            settle();
+            return report(
+              "unavailable",
+              "This ConfigMap was deleted or replaced under the same name. Nothing was written.",
+            );
+          case "unchanged":
+            return report("unchanged", "Nothing to save: the draft matches the server.");
+          case "busy":
+            return report("busy", "A request is already in flight.");
+        }
+      }
+
+      function failed(error) {
+        if (error instanceof NativeRequestError) {
+          if (error.httpStatus >= 500) return unknown(`The proxy answered HTTP ${error.httpStatus}.`);
+          // A definite refusal, with the Kubernetes Status: a 422 keeps its field causes. The API server
+          // usually folds them into its message already; add only those it did not.
+          const status = error.status ?? {};
+          const message = status.message ?? error.message;
+          const causes = (status.details?.causes ?? [])
+            .filter((c) => !message.includes(c.message))
+            .map((c) => `${c.field ?? "object"}: ${c.message ?? c.reason}`);
+          let text = `Refused with HTTP ${error.httpStatus}: ${message}`;
+          if (causes.length) text += ` (${causes.join("; ")})`;
+          text += awaiting
+            ? ". The earlier write is still unconfirmed."
+            : ". Nothing was written; your edits are still here.";
+          if (error.httpStatus === 401 || error.httpStatus === 403) {
+            return report("forbidden", `${text} Sign in again or ask for access.`);
+          }
+          if (error.httpStatus === 422) return report("invalid", `${text} Correct the draft and Save again.`);
+          return report("refused", text);
+        }
+        // fetch rejects with a TypeError when no answer arrives: the request may still have landed.
+        if (error instanceof TypeError) return unknown(`The request got no answer (${error.message}).`);
+        report("error", String(error));
+      }
+
+      async function run(action) {
+        const mine = editor;
+        const base = store.server(uid).metadata.resourceVersion; // what a write would be conditional on
+        const pending = action(mine);
+        report("pending", "Waiting for the proxy…");
+        render();
+        let result;
+        try {
+          result = await pending;
+        } catch (error) {
+          if (closed || mine !== editor) return; // torn down or reopened: nothing left to update
+          failed(error);
+          return render();
+        }
+        if (closed || mine !== editor) return;
+        handle(result, base);
+        render();
+      }
+
+      $("save").addEventListener("click", () => run((e) => e.save()));
+      $("confirm").addEventListener("click", () => run((e) => e.confirm()));
+      $("open-replacement").addEventListener("click", () => {
+        const next = candidate();
+        if (next) open(next);
+        $("fields").replaceChildren();
+        render();
+      });
+      $("add").addEventListener("submit", (event) => {
+        event.preventDefault();
+        const key = $("add-key").value;
+        const map = $("add-section").value === "data" ? ["data"] : ["metadata", "annotations"];
+        try {
+          if (has(store.draft(uid), [...map, key])) throw new Error(`${label([...map, key])} already exists`);
+          store.addKey(uid, map, key, $("add-value").value);
+          $("add").reset();
+        } catch (error) {
+          report("error", error.message); // a read-only key, such as the last-applied annotation
+          render();
+        }
+      });
+
+      // ------------------------------------------------------------------------------- render --
+
+      function render() {
+        if (!closed) {
+          if (uid === undefined && candidate()) open(candidate());
+          if (awaiting && !present()) settle();
+          // Any later version includes the write: it was conditional on the version it replaced.
+          if (awaiting?.rv !== undefined && present() && store.server(uid).metadata.resourceVersion !== awaiting.rv) {
+            settle();
+            const rv = store.server(uid).metadata.resourceVersion;
+            report("echoed", `Saved: the watch delivered resourceVersion ${rv}. ${remaining()}`);
+          }
+        }
+        const state = connection.state;
+        $("state").textContent = closed ? "closed" : state.status;
+        $("detail").textContent = state.status === "retrying" ? `retry ${state.retries} in ${state.retryInMs} ms` : "";
+
+        const here = present();
+        renderIdentity(here);
+        renderDraft(here);
+        renderRemoved(here);
+        const server = here ? store.server(uid) : undefined;
+        $("server").textContent = server
+          ? JSON.stringify(
+              {
+                data: server.data ?? {},
+                annotations: server.metadata.annotations ?? {},
+                managedFields: (server.metadata.managedFields ?? []).map((f) => `${f.manager} (${f.operation})`),
+              },
+              null,
+              2,
+            )
+          : "";
+
+        const saving = editor?.saving ?? false;
+        const conflicts = here ? store.conflicts(uid).length : 0;
+        $("editor").disabled = closed || !here;
+        $("save").disabled = !live() || saving || conflicts > 0;
+        $("confirm").hidden = !awaiting || (awaiting.rv !== undefined && !awaiting.overdue);
+        $("confirm").disabled = !live() || saving;
+        $("hint").textContent = hint(here, saving, conflicts);
+      }
+
+      function hint(here, saving, conflicts) {
+        if (closed) return "Disconnected.";
+        if (!here) return "";
+        if (!live()) return "Saving resumes once the watch is live; your edits stay here.";
+        if (saving) return "One request at a time.";
+        if (conflicts) return "Resolve the conflicts to save.";
+        return "";
+      }
+
+      function renderIdentity(here) {
+        if (!here) {
+          let text = "Waiting for the ConfigMap…";
+          if (uid) text = "Removed from the server.";
+          else if (live()) text = `ConfigMap ${namespace}/${name} does not exist.`;
+          return $("identity").replaceChildren(...term("object", text));
+        }
+        const { apiVersion, kind, metadata } = store.server(uid);
+        $("identity").replaceChildren(
+          ...term("object", `${metadata.namespace}/${metadata.name}`),
+          ...term("kind", `${apiVersion} ${kind}`),
+          ...term("uid", metadata.uid),
+          ...term("resourceVersion", metadata.resourceVersion),
+        );
+      }
+
+      function renderDraft(here) {
+        const draft = here ? store.draft(uid) : undefined;
+        const fields = draft
+          ? [
+              ...Object.keys(draft.data ?? {}).sort().map((k) => ({ path: ["data", k] })),
+              ...Object.keys(draft.metadata.annotations ?? {})
+                .sort()
+                .map((k) => ({ path: ["metadata", "annotations", k] })),
+            ]
+          : [];
+        reconcile($("fields"), fields, fieldRow, (tr, { path }) => {
+          const value = String(get(draft, path) ?? "");
+          const input = tr.querySelector("textarea");
+          if (input) input.rows = Math.min(10, value.split("\n").length);
+          if (input && input.value !== value) {
+            // Only a server change reaches here: typing already updated the draft to match. Keep the
+            // caret where it was if the person is in this field.
+            const focused = document.activeElement === input;
+            const { selectionStart, selectionEnd } = input;
+            input.value = value;
+            if (focused) {
+              input.setSelectionRange(Math.min(selectionStart, value.length), Math.min(selectionEnd, value.length));
+            }
+          }
+          if (!input) tr.querySelector(".value").textContent = value;
+          tr.querySelector(".edited").hidden = !store.isDirty(uid, path);
+          tr.querySelector(".conflict").hidden = !store.conflicts(uid).some((c) => key(c.path) === key(path));
+        });
+
+        const changes = draft ? store.changes(uid) : [];
+        reconcile($("changes"), changes.length ? changes : [{ path: [], none: true }], changeItem, (li, change) => {
+          li.querySelector("span").textContent = change.none ? "No pending edits." : describe(change);
+        });
+
+        const conflicts = draft ? store.conflicts(uid) : [];
+        $("conflicts-section").hidden = conflicts.length === 0;
+        reconcile($("conflicts"), conflicts, conflictItem, (li, { path, theirs }) => {
+          const mine = has(draft, path) ? JSON.stringify(get(draft, path)) : "(removed)";
+          li.querySelector("span").textContent =
+            `${label(path)} — yours: ${mine}, server: ${theirs === undefined ? "(removed)" : JSON.stringify(theirs)}`;
+        });
+      }
+
+      function renderRemoved(here) {
+        $("removed").hidden = here || uid === undefined;
+        if ($("removed").hidden) return;
+        const copy = recovery?.copy();
+        $("recovery").textContent = copy?.edits.length ? copy.edits.map(describe).join("\n") : "No unsaved edits.";
+        $("open-replacement").hidden = closed || !candidate();
+      }
+
+      /** Keep one element per item, in order. Existing elements are updated in place and never moved
+       * past each other, so a focused input keeps its focus and caret through every render. */
+      function reconcile(container, items, create, update) {
+        const wanted = new Set(items.map((item) => key(item.path)));
+        for (const el of [...container.children]) if (!wanted.has(el.dataset.key)) el.remove();
+        let cursor = container.firstElementChild;
+        for (const item of items) {
+          let el = [...container.children].find((child) => child.dataset.key === key(item.path));
+          if (!el) {
+            el = create(item.path);
+            el.dataset.key = key(item.path);
+          }
+          update(el, item);
+          if (el === cursor) cursor = cursor.nextElementSibling;
+          else container.insertBefore(el, cursor);
+        }
+      }
+
+      function fieldRow(path) {
+        const tr = document.createElement("tr");
+        const th = document.createElement("th");
+        th.textContent = label(path);
+        const value = document.createElement("td");
+        const actions = document.createElement("td");
+        actions.append(badge("edited", "edited"), badge("conflict", "conflict"));
+        if (store.isEditable(uid, path)) {
+          const input = document.createElement("textarea");
+          input.setAttribute("aria-label", label(path));
+          input.addEventListener("input", () => store.setValue(uid, path, input.value));
+          value.append(input);
+          actions.append(button("Remove", () => store.removeKey(uid, path)));
+        } else {
+          // managedFields never appear here; the last-applied annotation does, and follows the server.
+          const text = document.createElement("span");
+          text.className = "value readonly";
+          value.append(text);
+          const locked = badge("read-only", "locked");
+          locked.hidden = false;
+          actions.append(locked);
+        }
+        tr.append(th, value, actions);
+        return tr;
+      }
+
+      function changeItem(path) {
+        const li = document.createElement("li");
+        li.append(document.createElement("span"));
+        if (path.length) li.append(" ", button("Undo", () => store.revert(uid, path)));
+        return li;
+      }
+
+      function conflictItem(path) {
+        const li = document.createElement("li");
+        li.append(
+          document.createElement("span"),
+          " ",
+          button("Use server value", () => store.revert(uid, path)),
+          " ",
+          button("Keep mine", () => keepLocal(store, uid, path)),
+        );
+        return li;
+      }
+
+      const key = (path) => JSON.stringify(path);
+      const label = (path) =>
+        path[0] === "data" ? `data ${path[1]}` : path[1] === "annotations" ? `annotation ${path[2]}` : path.join(".");
+
+      function describe({ path, kind, old: before, new: after }) {
+        if (kind === "add") return `add ${label(path)} = ${JSON.stringify(after)}`;
+        if (kind === "delete") return `remove ${label(path)} (was ${JSON.stringify(before)})`;
+        return `change ${label(path)}: ${JSON.stringify(before)} → ${JSON.stringify(after)}`;
+      }
+
+      function term(name, value) {
+        const dt = document.createElement("dt");
+        dt.textContent = name;
+        const dd = document.createElement("dd");
+        dd.textContent = value ?? "";
+        return [dt, dd];
+      }
+
+      function badge(text, className) {
+        const span = document.createElement("span");
+        span.className = `badge ${className}`;
+        span.textContent = text;
+        span.hidden = true;
+        return span;
+      }
+
+      function button(text, onClick) {
+        const b = document.createElement("button");
+        b.type = "button";
+        b.textContent = text;
+        b.addEventListener("click", onClick);
+        return b;
+      }
+
+      // ------------------------------------------------------------------------------ lifecycle --
+
+      const stopStore = store.subscribe(render);
+      const stopConnection = connection.subscribe((state) => {
+        if (state.status === "live") $("error").textContent = "";
+        render();
+      });
+      connection.closed.catch((error) => {
+        if (!closed) $("error").textContent = `stopped by a page error: ${error}`;
+      });
+
+      /** Close the watch and stop every listener and timer. A request still in flight is not
+       * cancelled, since a write may already have reached the server, but its answer changes nothing. */
+      function disconnect() {
+        if (closed) return;
+        closed = true;
+        if (editor?.saving) report("closed", "Disconnected with a request in flight; its answer is ignored.");
+        settle();
+        stopStore();
+        stopConnection();
+        connection.close();
+        recovery?.dispose();
+        render();
+      }
+      $("disconnect").addEventListener("click", disconnect);
+      addEventListener("pagehide", disconnect);
+      render();
+    </script>
+  </body>
+</html>

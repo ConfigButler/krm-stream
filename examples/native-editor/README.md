@@ -21,6 +21,8 @@ automatic write retry.
   `gateway.ValidateNativeMergePatch`. Against a real API server it checks a save and its echo, a
   competing write between capture and PATCH, the proxy refusing unconditional and machinery
   patches, and an object replaced under the same name.
+- [index.html](index.html) is a minimal page that edits one ConfigMap with this editor. Its
+  [browser tests](../vanilla-browser/tests/native-editor.spec.ts) are described [below](#run-the-page).
 
 ```ts
 const proxy = "/k8s";
@@ -45,6 +47,63 @@ Pass the editor the same `proxy` and `scope` that built the watch URL. It addres
 its own namespace and name, so a collection watched across namespaces works too. Keep one store per
 source, scope and login identity. Never point this editor at a projected store, and never give a
 projected editor a native response.
+
+## Run the page
+
+[index.html](index.html) watches one named ConfigMap and edits its `data` and ordinary annotations,
+showing identity, connection state, server state, the draft and pending edits. It has no framework.
+The page loads the built library and `editor.ts` compiled into `dist/`, together with the
+[keep-local and recovery-copy recipes](../editor-recipes/README.md).
+[build.mjs](build.mjs) only strips types and renames the library import to
+`@configbutler/krm-stream`. An import map in the page resolves that name to one built entry point.
+`dist/` is not committed.
+
+```bash
+task build-native-editor   # builds the library, then dist/
+kubectl create configmap settings --from-literal=value=hello   # or pick an existing one with name=
+kubectl proxy --port=8001 --api-prefix=/k8s/ --www=. --www-prefix=/files/
+# http://127.0.0.1:8001/files/examples/native-editor/?namespace=default&name=settings
+```
+
+The query parameters are `proxy` (default `/k8s`), `namespace` (default `default`), `name` (default
+`settings`) and `echoWaitMs` (default 5000, how long an accepted write waits for its watch echo).
+Add `entry=bundle` to load the single-file build.
+
+- Save is enabled only while the watch is `live`, no request is in flight and no conflict is open.
+  Typing continues during a save, and inputs keep focus and caret through watch events and reads.
+- `saved` waits for the watch. The next version it delivers includes the write; fields still dirty
+  then were typed after Save or not kept by the server. With no echo within `echoWaitMs`, the page
+  offers **Confirm current state**, which calls `editor.confirm()`. A network failure or a 5xx
+  offers Confirm at once. Until a read succeeds, Save also only reads, and nothing is resent.
+- `confirmed` says the form now builds on the server's state. Fields still dirty were not written.
+- Conflicts offer **Use server value** (`store.revert`) and **Keep mine** (the keep-local recipe).
+  Typing into a field whose save is in flight becomes a conflict when the echo arrives: the server
+  holds the saved value and the draft holds the later typing.
+- A refusal (401, 403, 422 or another 4xx) shows the Kubernetes `Status` and keeps the draft.
+- Values are edited in text areas, so line breaks survive. A browser text area normalizes `\r\n` to
+  `\n`, so editing a value that contains carriage returns writes it back without them.
+- A deleted or replaced object shows its unsaved edits from the recovery copy. A replacement opens
+  only on request, without the old edits.
+- **Disconnect**, or leaving the page, closes the watch, unsubscribes and clears the echo timer. A
+  request in flight is not cancelled, because the write may already have landed, and its answer
+  changes nothing.
+
+`kubectl proxy` stands in for the host here. It holds your kubeconfig credential server-side, serves
+the page and the API from one origin, accepts only `localhost` host names and refuses pod
+`exec`/`attach` by default. It provides none of the write protections listed
+[under the host proxy](#the-host-proxy). Every request runs as **your** kubeconfig identity, so RBAC
+checks you, not the person editing. It does not check the content type, bound the body or run
+`ValidateNativeMergePatch`, and it has no CSRF checks, per-user write policy or audit. The page and
+store still send only conditional patches without machinery, but nothing stops another client from
+sending something else. Keep it on localhost and stop it when you are done.
+
+`task e2e-browser` runs the page in Chromium on both entry points against a test server that serves
+the page and plays the host proxy and API server, with a watch that stays open while editing:
+[native-editor.spec.ts](../vanilla-browser/tests/native-editor.spec.ts). It covers a conditional
+save and its echo, typing while a save is in flight, 409 recovery and a later deliberate Save,
+explicit conflict resolution, a lost response and a 502 each settled by a GET before any further
+PATCH, an accepted write without an echo confirmed explicitly, refusals, multiline values, a deletion
+and a UID replacement each with copy-out, and disconnect.
 
 ## What it protects
 

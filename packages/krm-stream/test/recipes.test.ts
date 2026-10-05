@@ -47,6 +47,17 @@ test("recovery: the copy taken when the recipe starts survives an immediate dele
   assert.equal(copy?.removedAt, 1000);
 });
 
+test("recovery: a host listener subscribed before the recipe already sees the removal", () => {
+  const store = storeWith(widget("u", "1", { replicas: 1 }));
+  const seen: unknown[] = [];
+  // A page renders from its own listener, which it subscribed first, and reads the copy there.
+  store.subscribe(() => seen.push([recovery.removed, recovery.copy()?.draft.spec ?? null]));
+  const recovery = retainRecoveryCopy(store, "u");
+  store.setValue("u", ["spec", "replicas"], 3);
+  applyStreamEvent(store, { type: "deleted", identity: identity("u") });
+  assert.deepEqual(seen.at(-1), [true, { replicas: 3 }]);
+});
+
 test("recovery: typing just before snapshot pruning is kept", () => {
   const store = storeWith(widget("u", "1", { replicas: 1, image: "v1" }));
   const recovery = retainRecoveryCopy(store, "u");
