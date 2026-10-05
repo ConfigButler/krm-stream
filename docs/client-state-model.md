@@ -18,13 +18,16 @@ new resource with a new draft.
 
 ## Stream lifecycle
 
-Use `applyStreamEvent` or the transport helpers instead of translating protocol events in UI code.
+Pass each state event from `connectResourceStream` to `applyStreamEvent` instead of translating
+protocol events in UI code. The connector checks the sequence and handles `error` events itself, so
+the store only sees state events.
 
 - `reset` starts a snapshot and marks existing resources unseen.
 - `added` and `modified` both replace the server object and reconcile the draft.
 - `deleted` removes the resource and its draft.
 - `synced` prunes resources that were not seen during the completed snapshot.
-- `error` is terminal only when the event says it is terminal. `RESYNC_REQUIRED` starts a new
+- `error` goes to the connector's `onError`, not to the store. It is terminal only when the event
+  says it is terminal. `RESYNC_REQUIRED` starts a new
   snapshot on the same connection. After any other non-terminal error, such as
   `UPSTREAM_UNAVAILABLE`, the gateway closes the connection and the client reconnects, waiting at
   least `retryAfterMs`.

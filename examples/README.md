@@ -3,14 +3,14 @@
 The checked browser example in [`vanilla-browser/`](vanilla-browser/) runs against the replay gateway.
 For host integration patterns, use these small recipes:
 
-- [Same-origin cookie application](../docs/adopting.md#1-mount-the-stream-endpoint): managed
-  fetch stream, session cookie, dynamic client acting as the user.
-- [Bearer-token fetch client](../docs/adopting.md#bearer-token-clients): `connectManagedResourceStream` with an
+- [Same-origin cookie application](../docs/adopting.md#1-mount-the-stream-endpoint): fetch
+  connector, session cookie, dynamic client acting as the user.
+- [Bearer-token fetch client](../docs/adopting.md#bearer-token-clients): `connectResourceStream` with an
   explicit `Authorization` header for a deliberate token-bearing client.
 - [Shared backend with SubjectAccessReview](../docs/adopting.md#5-optional-share-watches-with-kubernetes-backed-authorization):
   one service-account watch plus Kubernetes SubjectAccessReviews for each subscriber.
 
-[Conditional save](conditional-save/README.md) composes a managed connection with atomic save capture,
+[Conditional save](conditional-save/README.md) composes a connection with atomic save capture,
 projected reconciliation, and a host-owned Kubernetes endpoint that preserves real 409 conflicts.
 
 [Vue adapter](vue/README.md) is a copyable, typechecked composable with reactivity and cleanup tests.

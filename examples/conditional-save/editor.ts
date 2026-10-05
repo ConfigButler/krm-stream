@@ -9,7 +9,7 @@ export type SaveOutcome =
   | "recovering"
   | "unavailable";
 
-/** Copy into the host. request owns session/CSRF/error policy; isLive reads managed connection state. */
+/** Copy into the host. request owns session/CSRF/error policy; isLive reads connection state. */
 export function conditionalEditor(
   store: LiveResourceStore,
   uid: string,

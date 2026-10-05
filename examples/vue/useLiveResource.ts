@@ -1,9 +1,9 @@
 import { shallowRef, onScopeDispose } from "vue";
-import type { LiveResourceStore, ManagedStreamHandle } from "../../packages/krm-stream/src/index.ts";
+import type { LiveResourceStore, ResourceStreamHandle } from "../../packages/krm-stream/src/index.ts";
 
 /** Call in setup() or an active effect scope. One fixed UID per instance.
  * The caller owns the connection; disposing one editor only removes its subscriptions. */
-export function useLiveResource(store: LiveResourceStore, uid: string, connection: ManagedStreamHandle) {
+export function useLiveResource(store: LiveResourceStore, uid: string, connection: ResourceStreamHandle) {
   const read = () =>
     store.ids().includes(uid)
       ? {

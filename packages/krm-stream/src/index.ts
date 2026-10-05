@@ -2,9 +2,10 @@
 //
 // The public surface is small on purpose:
 //
+//   connectResourceStream  a conforming SSE consumer: delivers each resource state event to a
+//                          callback, and recovers with bounded retries and a fresh snapshot.
 //   LiveResourceStore      holds server truth + your draft; three-way merges every watch event;
 //                          derives dirtiness; tracks conflicts; builds the merge patch.
-//   connectResourceStream  a conforming SSE consumer that feeds a store.
 //   resourceStreamURL      builds the stream URL from a scope — the encoding the gateway parses back.
 //
 // The store is built test-first against conformance/ — the same fixtures the Go gateway runs. See
@@ -14,18 +15,23 @@
 // No runtime dependencies, and none of this knows anything about GitOps, Flux, Dex, kcp or
 // ConfigButler. It knows KRM.
 
-export type { ConnectionState, ConnectionStatus, ManagedStreamHandle, ManagedStreamOptions } from "./connection.ts";
-export { connectManagedResourceStream } from "./connection.ts";
+export type {
+  ConnectionState,
+  ConnectionStatus,
+  ResourceEventConsumer,
+  ResourceStreamHandle,
+  ResourceStreamOptions,
+} from "./connection.ts";
+export { connectResourceStream } from "./connection.ts";
 // Useful to a host that renders paths, and to anyone writing a policy: identity is a segment ARRAY.
 export { clone, deepEqual } from "./deep.ts";
 export { get, has, isPrefix, parsePointer, pathKey } from "./path.ts";
 export { DEFAULT_EDITABLE_REGIONS, defaultPolicy, readOnlyPolicy, regionPolicy } from "./policy.ts";
 export type { KubernetesStructuralSchema } from "./schema.ts";
 export { withOpenAPIKeyedLists } from "./schema.ts";
-export type { StreamChange, StreamHandle, StreamOptions } from "./sse.ts";
-export { applyStreamEvent, connectResourceStream, connectWithEventSource, SSEDecoder, StreamSequence } from "./sse.ts";
-export type { ApplyOptions, ApplyResult, ReconciliationOptions, SaveRequest } from "./store.ts";
-export { LiveResourceStore } from "./store.ts";
+export { SSEDecoder, StreamSequence } from "./sse.ts";
+export type { ApplyOptions, ApplyResult, ReconciliationOptions, SaveRequest, StreamChange } from "./store.ts";
+export { applyStreamEvent, LiveResourceStore } from "./store.ts";
 export type {
   Change,
   Conflict,
@@ -37,6 +43,7 @@ export type {
   Path,
   Projection,
   Redaction,
+  ResourceStateEvent,
   Scope,
   StreamEvent,
 } from "./types.ts";

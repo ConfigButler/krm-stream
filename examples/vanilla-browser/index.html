@@ -5,7 +5,7 @@
   No framework. No bundler. No build step for THIS page. One <script type="module"> that imports the
   library's built ESM straight off the server:
 
-      import { LiveResourceStore, connectManagedResourceStream } from "/krm-stream/index.js";
+      import { LiveResourceStore, applyStreamEvent, connectResourceStream } from "/krm-stream/index.js";
 
   That import is the whole constraint the library is designed around, and this page is the only place
   it is really tested: the browser fetches index.js, which imports ./store.js, which imports
@@ -16,9 +16,10 @@
   rather than installing it. Playwright runs this page BOTH ways (see playwright.config.ts), because
   "the bundle exports the same things" is a claim about a real browser, not about a build log.
 
-  It uses NATIVE EventSource — not fetch — because that is the same-origin session-cookie path a v1
-  gateway must support (spec §7), and because EventSource's automatic reconnect is a behaviour no
-  in-process test can exercise.
+  It connects with the library's fetch connector, which sends the same-origin session cookie a v1
+  gateway must accept (spec §7) and recovers from a dropped connection with a fresh snapshot. The
+  gateway's native EventSource compatibility is checked separately, with a raw EventSource, in
+  tests/live-krm.spec.ts.
 -->
 <html lang="en">
   <head>
@@ -85,7 +86,7 @@
       // demo pages would mean the second one drifts.
       const params = new URLSearchParams(location.search);
       const entry = params.get("entry") === "bundle" ? "/krm-stream/krm-stream.js" : "/krm-stream/index.js";
-      const { LiveResourceStore, connectManagedResourceStream } = await import(entry);
+      const { LiveResourceStore, applyStreamEvent, connectResourceStream } = await import(entry);
 
       const fixture = params.get("fixture") ?? "status-follow-live";
       const pace = params.get("pace") ?? "600ms";
@@ -104,24 +105,32 @@
       // the host highlights them and forgets them.
       let pending = new Set();
 
-      const connection = connectManagedResourceStream(`/resource-stream/v1?fixture=${fixture}&pace=${pace}`, store, {
-        // `change` names the resource (change.uid) as well as the paths, which is what a UI showing
-        // more than one object per stream needs — this demo shows one, so it only reads flashed.
-        onChange: (change) => {
+      const connection = connectResourceStream(
+        `/resource-stream/v1?fixture=${fixture}&pace=${pace}`,
+        (event) => {
+          // `change` names the resource (change.uid) as well as the paths, which is what a UI showing
+          // more than one object per stream needs — this demo shows one, so it only reads flashed.
+          const change = applyStreamEvent(store, event);
           for (const p of change.flashed) pending.add(key(p));
           render();
         },
-        onStateChange: (state) => {
-          statusLine.dataset.state = state.status;
-          statusLine.textContent = state.status === "live" ? "synced — live" : state.status;
+        {
+          onError: (code, message, terminal) => {
+            statusLine.textContent = `${code}${terminal ? " (terminal)" : ""}: ${message}`;
+          },
         },
-        onError: (code, message, terminal) => {
-          statusLine.textContent = `${code}${terminal ? " (terminal)" : ""}: ${message}`;
-        },
-      });
+      );
+      // An exception from the callback above ends the stream and rejects `closed`: surface it.
+      connection.closed.catch(reportError);
 
+      const renderConnection = (state) => {
+        statusLine.dataset.state = state.status;
+        statusLine.textContent = state.status === "live" ? "synced — live" : state.status;
+      };
+      renderConnection(connection.state);
+      const stopConnection = connection.subscribe(renderConnection);
       const unsubscribe = store.subscribe(render);
-      addEventListener("pagehide", () => { unsubscribe(); connection.close(); }, { once: true });
+      addEventListener("pagehide", () => { unsubscribe(); stopConnection(); connection.close(); }, { once: true });
 
       function render() {
         const id = store.ids()[0];

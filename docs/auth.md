@@ -14,8 +14,8 @@ is in [adopting](adopting.md).
 ## Browser sessions
 
 Use a same-origin session cookie. The host handles OIDC with its identity provider, keeps the tokens
-server-side and issues a secure session cookie. The managed fetch connector sends that cookie; native
-`EventSource` can use the same route.
+server-side and issues a secure session cookie. `connectResourceStream` sends that cookie over fetch;
+native `EventSource` can use the same route.
 
 ```mermaid
 sequenceDiagram
@@ -38,7 +38,7 @@ sequenceDiagram
     S-->>B: Projected SSE stream or terminal error
 ```
 
-A token-bearing client uses `connectManagedResourceStream` with explicit headers, because native
+A token-bearing client uses `connectResourceStream` with explicit headers, because native
 `EventSource` cannot send an `Authorization` header. The host must then enforce trusted HTTPS
 endpoints and redirect handling; see [adoption](adopting.md#3-connect-the-browser).
 

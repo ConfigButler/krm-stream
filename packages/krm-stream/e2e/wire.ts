@@ -17,7 +17,7 @@
 // All five are invisible in-process, and every one of them breaks a browser.
 
 import assert from "node:assert/strict";
-import { connectResourceStream, LiveResourceStore } from "../src/index.ts";
+import { applyStreamEvent, connectResourceStream, LiveResourceStore } from "../src/index.ts";
 import type { Path } from "../src/types.ts";
 import { clientFixtures } from "../test/conformance.ts";
 import { applyEdit, check } from "../test/expect.ts";
@@ -73,7 +73,7 @@ for (const f of fixtures) {
     const flashed: Path[] = [];
 
     // The index a fixture's `after:` refers to: position in the fixture's `events:` list. Count it
-    // from the STREAM callbacks — one per delivered event, errors included — and not from the store's
+    // from the STREAM — one per consumed event, plus one per error — and not from the store's
     // `subscribe`, which also fires on our own edits and would drift by one the moment a fixture
     // edited anything. (It did. That is why this comment exists.)
     let i = -1;
@@ -86,17 +86,25 @@ for (const f of fixtures) {
       }
     };
 
+    // One handle for the whole script. A `disconnect` is the server closing the connection, and the
+    // connector's own retry comes back for the next segment; this fetch only says which one that is.
     const connections = (f.watch ?? []).filter((op) => (op as { op: string }).op === "disconnect").length + 1;
-    for (let conn = 0; conn < connections; conn++) {
-      const handle = connectResourceStream(url(f.id, conn), store, {
-        onChange: (change) => {
-          flashed.push(...change.flashed);
-          onEvent();
-        },
+    let conn = 0;
+    const handle = connectResourceStream(
+      url(f.id),
+      (event) => {
+        flashed.push(...applyStreamEvent(store, event).flashed);
+        onEvent();
+      },
+      {
+        maxRetries: connections - 1,
+        retryDelayMs: 0,
+        fetch: (_input, init) => fetch(url(f.id, conn++), init),
         onError: () => onEvent(), // an `error` event occupies an index too (see resync-midstream)
-      });
-      await handle.closed;
-    }
+      },
+    );
+    await handle.closed;
+    assert.equal(conn, connections, `${f.id}: every connection in the script was opened`);
 
     if (f.client?.expect) check(store, flashed, f.client.expect, `${f.id} (over HTTP)`);
   });

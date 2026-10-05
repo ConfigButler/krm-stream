@@ -97,7 +97,8 @@ Use the `Authorizer` to pin a user to a namespace or target before any watch ope
 ```ts
 import {
   LiveResourceStore,
-  connectManagedResourceStream,
+  applyStreamEvent,
+  connectResourceStream,
   resourceStreamURL,
 } from "@configbutler/krm-stream";
 
@@ -110,14 +111,15 @@ const url = resourceStreamURL("/resource-stream/v1", {
   projection: "krm-full/v1",
 });
 
-const connection = connectManagedResourceStream(url, store, {
-  onStateChange: state => renderConnection(state.status), // gaps recover with a fresh snapshot
-});
+const connection = connectResourceStream(url, event => applyStreamEvent(store, event));
+renderConnection(connection.state.status);
+connection.subscribe(state => renderConnection(state.status)); // gaps recover with a fresh snapshot
+connection.closed.catch(reportApplicationError); // the callback threw, and the stream stopped
 store.subscribe(() => render(store));
 ```
 
-Fetch sends the same-origin session cookie, and the managed connection recovers on its own after
-network failures and sequence gaps.
+Fetch sends the same-origin session cookie, and the connection recovers on its own after network
+failures and sequence gaps.
 
 Saving is the host's: see [saving](saving.md). A quiet stream can still hold an older write version;
 see [why a quiet stream can reject a save](saving.md#why-a-quiet-stream-can-still-reject-a-save).
@@ -207,9 +209,9 @@ refuses redirects so a user's token is not carried along.
 
 ### Bearer-token clients
 
-`connectManagedResourceStream(url, store, { headers: { Authorization: ... } })` suits a non-browser
+`connectResourceStream(url, consume, { headers: { Authorization: ... } })` suits a non-browser
 client or an intentionally token-bearing browser application; the same-origin cookie route is the
-safer browser default. The connectors delegate transport to fetch and enforce no credential policy,
+safer browser default. The connector delegates transport to fetch and enforces no credential policy,
 so the host must require HTTPS for the resolved destination, including redirects, before supplying
 credentials.
 

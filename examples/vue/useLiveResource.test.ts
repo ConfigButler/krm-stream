@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { effectScope } from "vue";
-import { LiveResourceStore, connectManagedResourceStream } from "../../packages/krm-stream/src/index.ts";
+import { LiveResourceStore, applyStreamEvent, connectResourceStream } from "../../packages/krm-stream/src/index.ts";
 import { useLiveResource } from "./useLiveResource.ts";
 
 test("Vue refs follow drafts, conflicts, redactions, deletion and connection state", async () => {
@@ -13,7 +13,7 @@ test("Vue refs follow drafts, conflicts, redactions, deletion and connection sta
     data: {},
   };
   store.applyServerEvent(object, { redacted: [{ path: "/data/token", rev: 3 }] });
-  const connection = connectManagedResourceStream("/stream", store, {
+  const connection = connectResourceStream("/stream", (event) => applyStreamEvent(store, event), {
     maxRetries: 0,
     fetch: async () => {
       throw new Error("offline");
@@ -39,7 +39,7 @@ test("Vue refs follow drafts, conflicts, redactions, deletion and connection sta
 
 test("disposing an editor stops both subscriptions and leaves shared connections owned by the host", async () => {
   const store = new LiveResourceStore();
-  const connection = connectManagedResourceStream("/stream", store, {
+  const connection = connectResourceStream("/stream", (event) => applyStreamEvent(store, event), {
     maxRetries: 0,
     fetch: async () => new Response(new ReadableStream()),
   });

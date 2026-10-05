@@ -1,15 +1,17 @@
 # Vanilla browser example
 
-The example renders the official `@configbutler/krm-stream` ESM client in a browser with native
-`EventSource`. It runs against the replay gateway and the shared conformance corpus; no Kubernetes
-cluster is required.
+The example renders the official `@configbutler/krm-stream` ESM client in a browser with its fetch
+connector, `connectResourceStream`. It runs against the replay gateway and the shared conformance
+corpus; no Kubernetes cluster is required.
 
 ```bash
 task demo
 # http://127.0.0.1:8100/?fixture=status-only-churn&pace=800ms
 ```
 
-Use `task e2e-browser` to run the Chromium check.
+Use `task e2e-browser` to run the Chromium check. It loads both published entry points, and also
+reads the gateway with a raw native `EventSource` to check its framing, reconnect snapshots and
+terminal shutdown.
 
 The page demonstrates live status updates, three-way conflict handling, draft edits, and redacted
 Secret values. Useful fixtures include:

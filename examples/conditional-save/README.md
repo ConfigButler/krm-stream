@@ -1,6 +1,6 @@
 # Conditional save with a live draft
 
-This example composes the existing store, managed stream and host-owned writes. It adds no merge
+This example composes the existing store, connector and host-owned writes. It adds no merge
 algorithm or shared watch implementation.
 
 - [editor.ts](editor.ts) captures a save intent synchronously, handles HTTP 409 by reconciling a
@@ -14,9 +14,10 @@ algorithm or shared watch implementation.
 
 ```ts
 const store = new LiveResourceStore();
-const connection = connectManagedResourceStream(streamURL, store, {
-  onStateChange: state => renderConnection(state),
-});
+const connection = connectResourceStream(streamURL, event => applyStreamEvent(store, event));
+renderConnection(connection.state);
+const stopConnection = connection.subscribe(state => renderConnection(state));
+connection.closed.catch(reportApplicationError);
 const editor = conditionalEditor(
   store, uid, "/editor/configmap", hostFetch,
   () => connection.state.status === "live",
@@ -26,6 +27,7 @@ const unsubscribe = store.subscribe(renderEditor);
 // On Save: await editor.save(), then render errors/conflicts and the current draft.
 // On unmount:
 unsubscribe();
+stopConnection();
 connection.close();
 ```
 

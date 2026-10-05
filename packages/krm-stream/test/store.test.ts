@@ -16,7 +16,7 @@ import { test } from "node:test";
 import { applyStreamEvent, LiveResourceStore } from "../src/index.ts";
 import type { Path } from "../src/types.ts";
 import { clientFixtures, resolve } from "./conformance.ts";
-import { applyEdit, check } from "./expect.ts";
+import { applyEdit, check, deliver } from "./expect.ts";
 
 for (const f of clientFixtures()) {
   test(`${f.id}: ${f.title}`, () => {
@@ -26,8 +26,9 @@ for (const f of clientFixtures()) {
     for (const [i, fe] of f.events.entries()) {
       // applyStreamEvent is library code, not test code: the switch from event to store call IS the
       // protocol (spec §4), and a host feeding a store from its own transport must not have to
-      // reimplement it and get `synced` subtly wrong.
-      flashed.push(...applyStreamEvent(store, resolve(f, fe)).flashed);
+      // reimplement it and get `synced` subtly wrong. An error event carries no state: it is still
+      // an index here, and goes nowhere.
+      flashed.push(...(deliver(store, resolve(f, fe))?.flashed ?? []));
 
       for (const edit of f.client?.edits ?? []) {
         if (edit.after === i) applyEdit(store, edit);
@@ -50,7 +51,7 @@ test("the client suite actually ran the corpus", () => {
 //
 // applyStreamEvent used to return Path[] — the flashed paths and nothing else — which is unusable the
 // moment a stream carries more than one resource: a UI learns that something moved, and not what. So
-// a host that wanted to highlight per-resource had to abandon connectWithEventSource, drive its own
+// a host that wanted to highlight per-resource had to abandon the library's connector, drive its own
 // EventSource, and reimplement the event switch. That is precisely the work this library exists to do
 // once, correctly, on everyone's behalf.
 //
@@ -66,13 +67,12 @@ test("a change says WHICH resource changed, and what kind of change it was", () 
   };
 
   store.beginSnapshot();
-  const arrival = applyStreamEvent(store, { seq: 1, type: "added", object });
+  const arrival = applyStreamEvent(store, { type: "added", object });
   assert.equal(arrival.uid, "u-1", "an added event must name the resource it added");
   assert.equal(arrival.added, true, "an arrival is not a change to an existing object");
 
   // A value moving is NOT structural: the keys are the same, so a UI re-reads rather than rebuilds.
   const moved = applyStreamEvent(store, {
-    seq: 2,
     type: "modified",
     object: { ...object, metadata: { ...object.metadata, resourceVersion: "2" }, data: { greeting: "hi" } },
   });
@@ -89,7 +89,6 @@ test("a change says WHICH resource changed, and what kind of change it was", () 
 
   // A key APPEARING is structural: a renderer that only re-reads known values never shows it.
   const grew = applyStreamEvent(store, {
-    seq: 3,
     type: "modified",
     object: {
       ...object,
@@ -101,7 +100,6 @@ test("a change says WHICH resource changed, and what kind of change it was", () 
 
   // And a delete names the uid too — a host cannot remove a row it cannot identify.
   const gone = applyStreamEvent(store, {
-    seq: 4,
     type: "deleted",
     identity: { uid: "u-1", apiVersion: "v1", kind: "ConfigMap", name: "app", namespace: "default" },
   });

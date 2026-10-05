@@ -24,5 +24,6 @@
 /** The npm package version of this build. Assert it against the copy you vendored. */
 export const VERSION = "0.7.0"; // x-release-please-version
 
-/** The wire protocol this build speaks (spec/v1.md). The gateway sends it as `X-KRM-Stream-Protocol`. */
+/** The wire protocol this build speaks (spec/v1.md). The gateway sends it as `X-KRM-Stream-Protocol`;
+ * connectResourceStream refuses a stream whose header names another version. */
 export const PROTOCOL_VERSION = 1;

@@ -1,50 +1,404 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type ConnectionStatus, connectManagedResourceStream, LiveResourceStore } from "../src/index.ts";
+import {
+  applyStreamEvent,
+  type ConnectionState,
+  type ConnectionStatus,
+  connectResourceStream,
+  LiveResourceStore,
+  type ResourceStateEvent,
+  type ResourceStreamHandle,
+} from "../src/index.ts";
 
-const response = (events: unknown[]) => new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(""));
+const encoder = new TextEncoder();
+const sse = (events: unknown[]) => events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join("");
+const response = (events: unknown[], init?: ResponseInit) => new Response(sse(events), init);
+/** A body that arrives `size` characters at a time, so frames split wherever the slices fall. */
+const chunked = (text: string, size: number) =>
+  new Response(
+    new ReadableStream({
+      start(controller) {
+        for (let i = 0; i < text.length; i += size) controller.enqueue(encoder.encode(text.slice(i, i + size)));
+        controller.close();
+      },
+    }),
+  );
+/** A body that stays open after `text`, and records whether it was cancelled. */
+function openBody(text: string, init?: ResponseInit) {
+  const body = { cancelled: false };
+  const res = new Response(
+    new ReadableStream({
+      start(controller) {
+        controller.enqueue(encoder.encode(text));
+      },
+      cancel() {
+        body.cancelled = true;
+      },
+    }),
+    init,
+  );
+  return { response: res, body };
+}
+/** Every status the handle publishes from now on. Subscribe before the first microtask to see them all. */
+function statuses(handle: ResourceStreamHandle): ConnectionStatus[] {
+  const out: ConnectionStatus[] = [];
+  handle.subscribe((state) => out.push(state.status));
+  return out;
+}
+const ignore = () => {};
+
 const object = (rv: string, value: string) => ({
   apiVersion: "v1",
   kind: "ConfigMap",
   metadata: { uid: "u", name: "cm", resourceVersion: rv },
   data: { value },
 });
+const identity = { uid: "u", apiVersion: "v1", kind: "ConfigMap", name: "cm" };
 
-test("managed recovery rejects a gap, resnapshots, and preserves a draft", async () => {
+test("a gap discards the event beyond it, retries with gap context, and the next snapshot keeps the draft", async () => {
   const store = new LiveResourceStore();
   store.applyServerEvent(object("1", "base"));
   store.setValue("u", ["data", "value"], "draft");
   let calls = 0;
-  const states: ConnectionStatus[] = [];
-  const handle = connectManagedResourceStream("/stream", store, {
+  const handle = connectResourceStream("/stream", (event) => applyStreamEvent(store, event), {
     retryDelayMs: 0,
-    maxRetries: 1,
-    onStateChange: (s) => states.push(s.status),
+    maxRetries: 2,
     fetch: async () =>
       ++calls === 1
         ? response([
             { seq: 1, type: "reset" },
             { seq: 3, type: "added", object: object("99", "must not apply") },
           ])
-        : response([
-            { seq: 1, type: "reset" },
-            { seq: 2, type: "added", object: object("2", "base") },
-            { seq: 3, type: "synced" },
-          ]),
+        : calls === 2
+          ? response([
+              { seq: 1, type: "reset" },
+              { seq: 2, type: "added", object: object("2", "base") },
+              { seq: 3, type: "synced" },
+            ])
+          : response([]),
   });
+  const states: Readonly<ConnectionState>[] = [];
+  handle.subscribe((state) => states.push(state));
   await handle.closed;
-  assert.equal(calls, 2);
+  assert.equal(calls, 3);
   assert.equal(store.server("u").metadata.resourceVersion, "2");
   assert.deepEqual(store.draft("u").data, { value: "draft" });
-  assert.ok(states.includes("retrying"));
-  assert.ok(states.includes("live"));
+
+  const retries = states.filter((s) => s.status === "retrying");
+  assert.equal(retries.length, 2);
+  assert.deepEqual(retries[0]!.gap, { expected: 2, received: 3 }, "the gap is diagnosable from state");
+  assert.equal(retries[1]!.gap, undefined, "an ordinary end carries no gap");
+  const next = states[states.indexOf(retries[0]!) + 1]!;
+  assert.deepEqual([next.status, next.gap], ["connecting", undefined], "the next attempt clears it");
+  assert.ok(states.some((s) => s.status === "live"));
   assert.equal(handle.state.status, "exhausted");
+});
+
+test("a plain callback receives each state event once, in order, without seq or transport errors", async () => {
+  const scope = { target: "demo", version: "v1", resource: "configmaps", namespace: "app" };
+  const wire = sse([
+    { seq: 1, type: "reset", target: "demo", scope, projection: "krm-full/v1", somethingNew: true },
+    { seq: 2, type: "added", object: object("1", "a"), redacted: [] },
+    // Unknown types still count in the sequence: seq 4 after this is not a gap.
+    { seq: 3, type: "future-event", payload: 42 },
+    // Nothing to apply without an object or a uid, so nothing is delivered.
+    { seq: 4, type: "modified" },
+    { seq: 5, type: "deleted", identity: { apiVersion: "v1", kind: "ConfigMap", name: "cm" } },
+    { seq: 6, type: "synced" },
+    { seq: 7, type: "error", code: "RESYNC_REQUIRED", message: "lost", terminal: false },
+    { seq: 8, type: "deleted", identity },
+  ]);
+  const events: ResourceStateEvent[] = [];
+  const errors: unknown[][] = [];
+  const handle = connectResourceStream("/stream", (event) => events.push(event), {
+    maxRetries: 0,
+    fetch: async () => chunked(wire, 1),
+    onError: (...args) => errors.push(args),
+  });
+  await handle.closed;
+  assert.deepEqual(events, [
+    { type: "reset", target: "demo", scope, projection: "krm-full/v1" },
+    { type: "added", object: object("1", "a"), redacted: [] },
+    { type: "synced" },
+    { type: "deleted", identity },
+  ]);
+  assert.deepEqual(errors, [["RESYNC_REQUIRED", "lost", false, undefined]], "errors go only to onError");
+  assert.equal(handle.state.status, "exhausted");
+});
+
+test("a wrapped store consumer can render each change, and a bound method keeps its receiver", async () => {
+  const fetch = async () =>
+    response([
+      { seq: 1, type: "reset" },
+      { seq: 2, type: "added", object: object("1", "a"), redacted: [] },
+      { seq: 3, type: "synced" },
+      { seq: 4, type: "modified", object: object("2", "b"), redacted: [] },
+    ]);
+  const store = new LiveResourceStore();
+  const rendered: string[] = [];
+  const wrapped = connectResourceStream(
+    "/stream",
+    (event) => {
+      const change = applyStreamEvent(store, event);
+      rendered.push(`${change.type} ${change.uid ?? "-"} ${change.flashed.map((p) => p.join(".")).join(",")}`);
+    },
+    { maxRetries: 0, fetch },
+  );
+  class Recorder {
+    readonly types: string[] = [];
+    consume = (event: ResourceStateEvent) => {
+      this.types.push(event.type);
+    };
+  }
+  const recorder = new Recorder();
+  const direct = connectResourceStream("/stream", recorder.consume, { maxRetries: 0, fetch });
+  await Promise.all([wrapped.closed, direct.closed]);
+  assert.deepEqual(rendered, ["reset - ", "added u ", "synced - ", "modified u metadata.resourceVersion,data.value"]);
+  assert.deepEqual(store.draft("u").data, { value: "b" });
+  assert.deepEqual(recorder.types, ["reset", "added", "synced", "modified"]);
+});
+
+test("transport sees reset before the consumer applies it, and publishes live only after synced is applied", async () => {
+  const log: string[] = [];
+  const handle = connectResourceStream("/stream", (event) => log.push(`apply ${event.type}`), {
+    maxRetries: 0,
+    onError: (code) => log.push(`error ${code}`),
+    fetch: async () =>
+      response([
+        { seq: 1, type: "reset" },
+        { seq: 2, type: "added", object: object("1", "a") },
+        { seq: 3, type: "synced" },
+        { seq: 4, type: "error", code: "RESYNC_REQUIRED", terminal: false },
+        { seq: 5, type: "reset" },
+        { seq: 6, type: "synced" },
+        // A completed snapshot publishes live even when the stream already was.
+        { seq: 7, type: "synced" },
+      ]),
+  });
+  handle.subscribe((state) => log.push(`state ${state.status}`));
+  await handle.closed;
+  assert.deepEqual(log, [
+    "state connecting",
+    "state syncing",
+    "state syncing",
+    "apply reset",
+    "apply added",
+    "apply synced",
+    "state live",
+    "error RESYNC_REQUIRED",
+    "state syncing",
+    "apply reset",
+    "apply synced",
+    "state live",
+    "apply synced",
+    "state live",
+    "state exhausted",
+  ]);
+});
+
+test("a consumer that closes while applying synced gets no live and no later event", async () => {
+  const seen: string[] = [];
+  const handle = connectResourceStream(
+    "/stream",
+    (event) => {
+      seen.push(event.type);
+      if (event.type === "synced") handle.close();
+    },
+    {
+      fetch: async () =>
+        response([
+          { seq: 1, type: "reset" },
+          { seq: 2, type: "synced" },
+          { seq: 3, type: "added", object: object("1", "a") },
+        ]),
+    },
+  );
+  const states = statuses(handle);
+  await handle.closed;
+  assert.deepEqual(seen, ["reset", "synced"]);
+  assert.deepEqual(states, ["connecting", "syncing", "syncing", "closed"]);
+});
+
+/** Live timers in this process — node:test runs one file's tests one at a time. */
+const pendingTimeouts = () => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length;
+
+/** An AbortSignal that knows which listeners are still attached to it. */
+function trackedSignal() {
+  const { signal } = new AbortController();
+  const attached = new Set<unknown>();
+  const add = signal.addEventListener.bind(signal);
+  const remove = signal.removeEventListener.bind(signal);
+  signal.addEventListener = (type: string, listener: EventListenerOrEventListenerObject, options?: unknown) => {
+    attached.add(listener);
+    add(type, listener, options as AddEventListenerOptions);
+  };
+  signal.removeEventListener = (type: string, listener: EventListenerOrEventListenerObject, options?: unknown) => {
+    attached.delete(listener);
+    remove(type, listener, options as EventListenerOptions);
+  };
+  return { signal, attached };
+}
+
+test("a consumer exception releases reader, timer and listener, never retries, and rejects closed with it", async () => {
+  const boom = new Error("render failed");
+  const { signal, attached } = trackedSignal();
+  const errors: unknown[][] = [];
+  const before = pendingTimeouts();
+  let calls = 0;
+  let body!: { cancelled: boolean };
+  const seen: string[] = [];
+  const handle = connectResourceStream(
+    "/stream",
+    (event) => {
+      seen.push(event.type);
+      if (event.type === "modified") throw boom;
+    },
+    {
+      signal,
+      retryDelayMs: 0,
+      // Long enough that the health timer started by `live` would still be pending if it leaked.
+      healthyResetMs: 60_000,
+      onError: (...args) => errors.push(args),
+      fetch: async () => {
+        calls++;
+        const opened = openBody(
+          sse([
+            { seq: 1, type: "reset" },
+            { seq: 2, type: "added", object: object("1", "a") },
+            { seq: 3, type: "synced" },
+            { seq: 4, type: "modified", object: object("2", "b") },
+            { seq: 5, type: "modified", object: object("3", "c") },
+          ]),
+        );
+        body = opened.body;
+        return opened.response;
+      },
+    },
+  );
+  const states = statuses(handle);
+  await assert.rejects(handle.closed, (error) => error === boom);
+  assert.equal(calls, 1, "a consumer exception is not retried");
+  assert.deepEqual(seen, ["reset", "added", "synced", "modified"], "nothing after the exception is delivered");
+  assert.deepEqual(errors, [], "it is not reported as a stream error");
+  assert.deepEqual(states, ["connecting", "syncing", "syncing", "live", "closed"]);
+  assert.equal(handle.state.status, "closed");
+  assert.equal(body.cancelled, true, "the reader was cancelled");
+  assert.equal(pendingTimeouts(), before, "the health timer was cleared");
+  assert.equal(attached.size, 0, "no listener is left on the caller's signal");
+});
+
+test("close() and then throw still rejects closed with the original exception", async () => {
+  const boom = new Error("thrown after close");
+  let calls = 0;
+  const handle = connectResourceStream(
+    "/stream",
+    () => {
+      handle.close();
+      throw boom;
+    },
+    {
+      retryDelayMs: 0,
+      fetch: async () => {
+        calls++;
+        return response([
+          { seq: 1, type: "reset" },
+          { seq: 2, type: "synced" },
+        ]);
+      },
+    },
+  );
+  const states = statuses(handle);
+  await assert.rejects(handle.closed, (error) => error === boom);
+  assert.equal(calls, 1);
+  assert.deepEqual(states, ["connecting", "syncing", "syncing", "closed"]);
+});
+
+test("even a thrown undefined is kept, not mistaken for a clean end", async () => {
+  const handle = connectResourceStream(
+    "/stream",
+    () => {
+      throw undefined;
+    },
+    { fetch: async () => response([{ seq: 1, type: "reset" }]) },
+  );
+  const outcome = await handle.closed.then(
+    () => "resolved",
+    (error: unknown) => ({ error }),
+  );
+  assert.deepEqual(outcome, { error: undefined });
+  assert.equal(handle.state.status, "closed");
+});
+
+test("a matching or absent protocol header is accepted", async () => {
+  for (const headers of [{ "X-KRM-Stream-Protocol": "1" }, {}] as Record<string, string>[]) {
+    const seen: string[] = [];
+    const handle = connectResourceStream("/stream", (event) => seen.push(event.type), {
+      maxRetries: 0,
+      fetch: async () =>
+        response(
+          [
+            { seq: 1, type: "reset" },
+            { seq: 2, type: "synced" },
+          ],
+          { headers },
+        ),
+    });
+    await handle.closed;
+    assert.deepEqual(seen, ["reset", "synced"], JSON.stringify(headers));
+    assert.equal(handle.state.status, "exhausted");
+  }
+});
+
+test("a different protocol version applies nothing, is terminal, and is never retried", async () => {
+  let calls = 0;
+  let body!: { cancelled: boolean };
+  const seen: string[] = [];
+  const errors: unknown[][] = [];
+  const handle = connectResourceStream(
+    "/stream",
+    (event) => {
+      seen.push(event.type);
+      handle.close(); // fail fast rather than hang on the open body if an event ever gets through
+    },
+    {
+      retryDelayMs: 0,
+      onError: (...args) => errors.push(args),
+      fetch: async () => {
+        calls++;
+        const opened = openBody(sse([{ seq: 1, type: "reset" }]), { headers: { "X-KRM-Stream-Protocol": "2" } });
+        body = opened.body;
+        return opened.response;
+      },
+    },
+  );
+  const states = statuses(handle);
+  await handle.closed;
+  assert.equal(calls, 1);
+  assert.deepEqual(seen, []);
+  assert.equal(body.cancelled, true);
+  assert.deepEqual(states, ["connecting", "terminal"]);
+  assert.equal(errors.length, 1);
+  const [code, message, terminal] = errors[0]!;
+  assert.equal(code, "INTERNAL");
+  assert.equal(terminal, true);
+  assert.match(String(message), /protocol mismatch.*"2".*1/);
+});
+
+test("an HTTP refusal keeps its own classification whatever protocol it names", async () => {
+  const errors: unknown[][] = [];
+  const handle = connectResourceStream("/stream", ignore, {
+    onError: (...args) => errors.push(args),
+    fetch: async () => new Response(null, { status: 403, headers: { "X-KRM-Stream-Protocol": "2" } }),
+  });
+  await handle.closed;
+  assert.deepEqual(errors, [["FORBIDDEN", "stream: HTTP 403", true, undefined]]);
+  assert.equal(handle.state.status, "terminal");
 });
 
 for (const status of [401, 403])
   test(`HTTP ${status} is terminal`, async () => {
     let calls = 0;
-    const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    const handle = connectResourceStream("/stream", ignore, {
       fetch: async () => {
         calls++;
         return new Response(null, { status });
@@ -57,7 +411,7 @@ for (const status of [401, 403])
   });
 
 test("terminal protocol errors never reconnect", async () => {
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+  const handle = connectResourceStream("/stream", ignore, {
     fetch: async () => response([{ seq: 1, type: "error", code: "FORBIDDEN", terminal: true }]),
   });
   await handle.closed;
@@ -68,7 +422,7 @@ test("terminal protocol errors never reconnect", async () => {
 for (const failure of ["network", "http", "eof"])
   test(`${failure} consumes exactly the retry budget`, async () => {
     let calls = 0;
-    const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    const handle = connectResourceStream("/stream", ignore, {
       maxRetries: 2,
       retryDelayMs: 0,
       fetch: async () => {
@@ -85,23 +439,23 @@ for (const failure of ["network", "http", "eof"])
 test("abort during backoff cancels the timer and never opens another connection", async () => {
   const controller = new AbortController();
   let calls = 0;
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+  const handle = connectResourceStream("/stream", ignore, {
     signal: controller.signal,
     fetch: async () => {
       calls++;
       throw new Error("offline");
     },
-    onStateChange: (state) => {
-      if (state.status === "retrying") controller.abort();
-    },
+  });
+  handle.subscribe((state) => {
+    if (state.status === "retrying") controller.abort();
   });
   await handle.closed;
   assert.equal(calls, 1);
   assert.equal(handle.state.status, "closed");
 });
 
-test("already aborted managed stream never fetches", async () => {
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+test("an already aborted stream never fetches", async () => {
+  const handle = connectResourceStream("/stream", ignore, {
     signal: AbortSignal.abort(),
     fetch: async () => {
       assert.fail("opened");
@@ -111,56 +465,39 @@ test("already aborted managed stream never fetches", async () => {
   assert.equal(handle.state.status, "closed");
 });
 
-test("closing an active stream cancels the reader and prevents buffered events after close", async () => {
-  const store = new LiveResourceStore();
-  let canceled = false;
-  let changes = 0;
-  const handle = connectManagedResourceStream("/stream", store, {
-    fetch: async () =>
-      new Response(
-        new ReadableStream({
-          start(controller) {
-            controller.enqueue(
-              new TextEncoder().encode('data: {"seq":1,"type":"reset"}\n\ndata: {"seq":2,"type":"synced"}\n\n'),
-            );
-          },
-          cancel() {
-            canceled = true;
-          },
-        }),
-      ),
-    onChange: () => {
-      changes++;
+test("closing an active stream cancels the reader and delivers nothing more from the same chunk", async () => {
+  const { response: res, body } = openBody(
+    sse([
+      { seq: 1, type: "reset" },
+      { seq: 2, type: "synced" },
+    ]),
+  );
+  let consumed = 0;
+  const handle = connectResourceStream(
+    "/stream",
+    () => {
+      consumed++;
       handle.close();
     },
-  });
+    { fetch: async () => res },
+  );
   await handle.closed;
-  assert.equal(changes, 1);
-  assert.equal(canceled, true);
+  assert.equal(consumed, 1);
+  assert.equal(body.cancelled, true);
   assert.equal(handle.state.status, "closed");
 });
 
 test("abort cancels a quiet response reader", async () => {
-  let markOpen!: () => void;
-  const opened = new Promise<void>((resolve) => {
-    markOpen = resolve;
+  const { response: res, body } = openBody("");
+  const handle = connectResourceStream("/stream", ignore, { fetch: async () => res });
+  await new Promise<void>((resolve) => {
+    handle.subscribe((state) => {
+      if (state.status === "syncing") resolve();
+    });
   });
-  let canceled = false;
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
-    onOpen: markOpen,
-    fetch: async () =>
-      new Response(
-        new ReadableStream({
-          cancel() {
-            canceled = true;
-          },
-        }),
-      ),
-  });
-  await opened;
   handle.close();
   await handle.closed;
-  assert.equal(canceled, true);
+  assert.equal(body.cancelled, true);
   assert.equal(handle.state.status, "closed");
 });
 
@@ -168,7 +505,7 @@ test("sustained live periods replenish retries and backoff across an all-day con
   let attempts = 0;
   let body: ReadableStreamDefaultController<Uint8Array>;
   const waits: number[] = [];
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+  const handle = connectResourceStream("/stream", ignore, {
     maxRetries: 1,
     healthyResetMs: 10,
     retryDelayMs: 2,
@@ -178,21 +515,19 @@ test("sustained live periods replenish retries and backoff across an all-day con
         new ReadableStream({
           start(controller) {
             body = controller;
-            controller.enqueue(
-              new TextEncoder().encode('data: {"seq":1,"type":"reset"}\n\ndata: {"seq":2,"type":"synced"}\n\n'),
-            );
+            controller.enqueue(encoder.encode('data: {"seq":1,"type":"reset"}\n\ndata: {"seq":2,"type":"synced"}\n\n'));
           },
         }),
       );
     },
-    onStateChange: (state) => {
-      if (state.status === "retrying") waits.push(state.retryInMs!);
-      // Health reset republishes live with zero retries. End each healthy attempt there.
-      if (state.status === "live" && state.retries === 0 && attempts > 1) {
-        if (attempts === 4) handle.close();
-        else body.close();
-      }
-    },
+  });
+  handle.subscribe((state) => {
+    if (state.status === "retrying") waits.push(state.retryInMs!);
+    // Health reset republishes live with zero retries. End each healthy attempt there.
+    if (state.status === "live" && state.retries === 0 && attempts > 1) {
+      if (attempts === 4) handle.close();
+      else body.close();
+    }
   });
   // First attempt starts at zero retries; wait until its initial health period has elapsed.
   await new Promise<void>((resolve) => {
@@ -214,7 +549,7 @@ test("sustained live periods replenish retries and backoff across an all-day con
 
 test("brief synced connections still exhaust their retry budget", async () => {
   let attempts = 0;
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+  const handle = connectResourceStream("/stream", ignore, {
     maxRetries: 2,
     retryDelayMs: 0,
     healthyResetMs: 1000,
@@ -235,8 +570,8 @@ test("snapshot resets restart the health interval and close removes the timer", 
   t.mock.timers.enable({ apis: ["setTimeout"] });
   let attempts = 0;
   let body!: ReadableStreamDefaultController<Uint8Array>;
-  const frame = (seq: number, type: string) => new TextEncoder().encode(`data: ${JSON.stringify({ seq, type })}\n\n`);
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+  const frame = (seq: number, type: string) => encoder.encode(`data: ${JSON.stringify({ seq, type })}\n\n`);
+  const handle = connectResourceStream("/stream", ignore, {
     retryDelayMs: 0,
     healthyResetMs: 30,
     fetch: async () => {
@@ -272,19 +607,15 @@ test("snapshot resets restart the health interval and close removes the timer", 
   assert.equal(handle.state.status, "closed");
 });
 
-/** Runs a managed stream until its first retry is scheduled, and returns how long it would wait. */
+/** Runs a stream until its first retry is scheduled, and returns how long it would wait. */
 async function firstRetryDelay(fetch: typeof globalThis.fetch, opts: { maxRetryDelayMs?: number } = {}) {
   let delay: number | undefined;
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
-    retryDelayMs: 0,
-    ...opts,
-    fetch,
-    onStateChange: (s) => {
-      if (s.status === "retrying" && delay === undefined) {
-        delay = s.retryInMs;
-        handle.close();
-      }
-    },
+  const handle = connectResourceStream("/stream", ignore, { retryDelayMs: 0, ...opts, fetch });
+  handle.subscribe((s) => {
+    if (s.status === "retrying" && delay === undefined) {
+      delay = s.retryInMs;
+      handle.close();
+    }
   });
   await handle.closed;
   return delay;
@@ -297,7 +628,7 @@ test("a retryable error's retryAfterMs sets the least the reconnect waits", asyn
   );
   assert.equal(delay, 1500);
 
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+  const handle = connectResourceStream("/stream", ignore, {
     maxRetries: 0,
     fetch: async () =>
       response([{ seq: 1, type: "error", code: "UPSTREAM_UNAVAILABLE", terminal: false, retryAfterMs: 1500 }]),
@@ -336,7 +667,7 @@ test("a refusal's Kubernetes Status message is shown instead of the bare status"
     refuse(JSON.stringify({ kind: "Status", message: "x".repeat(20_000) })),
     refuse("{not json"),
   ]) {
-    const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+    const handle = connectResourceStream("/stream", ignore, {
       fetch,
       onError: (_code, message) => messages.push(message),
     });
@@ -356,7 +687,7 @@ function stalledRefusal(prefix = "") {
   const response = new Response(
     new ReadableStream<Uint8Array>({
       start(controller) {
-        if (prefix) controller.enqueue(new TextEncoder().encode(prefix));
+        if (prefix) controller.enqueue(encoder.encode(prefix));
       },
       cancel() {
         body.cancelled = true;
@@ -374,7 +705,7 @@ test("close() while a refusal body is quiet ends the stream and cancels the body
   const wasFetched = new Promise<void>((resolve) => {
     fetched = resolve;
   });
-  const handle = connectManagedResourceStream("/stream", new LiveResourceStore(), {
+  const handle = connectResourceStream("/stream", ignore, {
     fetch: async () => {
       fetched();
       return response;
