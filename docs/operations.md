@@ -1,5 +1,10 @@
 # Operating krm-stream
 
+Measure the watch path before enabling broader scopes or sharing: upstream watch count, downstream
+bytes/events, snapshot size/time, subscriber authorization and browser notifications/renders.
+Suppression reduces downstream work; sharing reduces duplicate upstream watches but retains
+per-subscriber costs. See [watching resources](why-a-gateway.md) for those boundaries.
+
 The gateway reports low-cardinality lifecycle signals through `Observer`, so hosts can count them
 without inspecting resources:
 
@@ -24,7 +29,7 @@ browser receives only the protocol code and a message chosen for it. Redact befo
 | `shared_overflow` | one subscriber exceeded `SharedOptions.QueueDepth` | increase only after checking browser stalls and event rate; resnapshot is intentional |
 | `terminal_error` | logical-stream failure, observed before attempting its terminal frame; delivery can fail | alert by low-cardinality error code; browsers must not retry terminal errors |
 | `retryable_error` rising | streams ending with a non-terminal error, usually `UPSTREAM_UNAVAILABLE` | check API-server health and priority-and-fairness rejections; browsers reconnect on their own backoff |
-| `event_suppressed` ratio | `krm-spec/v1` is removing expected churn | a sharp drop may mean callers selected `krm-full/v1` or a projection changed |
+| `event_suppressed` ratio | the selected projection is removing unchanged-view churn | a sharp drop may mean callers selected `krm-full/v1` or a projection changed |
 | stream count / snapshot duration | connection pressure or oversized scopes | narrow namespaces/selectors; avoid accidental all-namespaces watches |
 | unorderable `resourceVersion` terminal errors | an unsupported or aggregated API does not meet strict ordering | use `OrderingLenient` only after accepting the reduced monotonicity guarantee |
 
@@ -105,3 +110,8 @@ are tested; other middleware and proxy combinations need host tests.
 
 For authorization bursts and the limits of the 200-subscriber profile, see the
 [shared-host capacity guide](../gateway/kube/examples/sharedstream/README.md#verification-and-capacity).
+
+Upstream continuation, native browser watch recovery and save-progress evaluation are
+[planned work](proposals/0006-stream-and-save-implementation-plan.md), not current runtime controls.
+When measuring editing, distinguish stale-version 409s from field conflicts and include save latency
+and successful saves during sustained controller churn, rather than only after it stops.

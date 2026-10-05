@@ -1,9 +1,13 @@
 # Go gateway
 
-The `gateway` module converts a Kubernetes-style `Backend` watch into the KRM resource-stream
-protocol. It is transport-neutral until `Handler` or `ServeStream` adds SSE framing. It has no
-Kubernetes client dependency; [`gateway/kube`](kube/) provides the `client-go` backend and the
-SubjectAccessReview authorizer.
+The `gateway` module adds authorized scopes, named views, redaction, suppression and optional sharing
+to Kubernetes-style `Backend` watches. It delivers live state for viewers and optional browser editors.
+It is transport-neutral until `Handler` or `ServeStream` adds the current SSE framing. Core has no
+Kubernetes client dependency; [`gateway/kube`](kube/) provides the client-go backend and authorizer.
+
+A fetch-based native browser connector is [requested work](../docs/field-reports/third-our-identity.md#native-watch-connector).
+The direction retains this gateway and SSE compatibility; native access alone does not provide these
+projected-view guarantees. See [watching resources](../docs/why-a-gateway.md) for the overall contract.
 
 ```go
 handler := gateway.Handler(gateway.Options{
@@ -51,9 +55,14 @@ upstream whose versions cannot be ordered. The normative details are in [`spec/v
 
 | Projection | Purpose |
 |---|---|
-| `krm-raw/v1` | Full upstream object for a host that has already made its own disclosure decision. |
+| `krm-raw/v1` | Includes Secret values with host permission, but still strips managed fields and last-applied configuration; not native passthrough. |
 | `krm-full/v1` | Removes metadata noise and redacts Secret values. |
 | `krm-spec/v1` | The full view without status-driven browser churn. |
+
+All views strip managed fields and last-applied configuration. Full/spec withhold core Secret values;
+key paths and change revisions remain visible. Sensitive fields in other resource kinds are not
+automatically redacted. Suppression compares projected content excluding RV plus redaction records;
+a hidden Secret rotation still emits an update. It reduces downstream work, not incoming watch changes.
 
 The gateway never writes. `ValidateMergePatch` checks a browser's patch against the projection before
 the host sends it; see [saving](../docs/saving.md).
@@ -70,7 +79,8 @@ resnapshotted after `SharedOptions.QueueDepth` live events rather than buffered 
 
 | Guide | For |
 |---|---|
-| [Adopting](../docs/adopting.md) | The recommended host and browser wiring, start to finish. |
+| [Watching](../docs/why-a-gateway.md) | Scope, views, suppression, sharing and transport direction. |
+| [Adopting](../docs/adopting.md) | Supported host and browser wiring, start to finish. |
 | [Authorization](../docs/auth.md) | Backend choice, session validity, timed checks and the revocation budget. |
 | [Saving](../docs/saving.md) | The host-owned conditional write path. |
 | [Operations](../docs/operations.md) | Runtime controls, observations, alerts and bounded HTTP delivery. |

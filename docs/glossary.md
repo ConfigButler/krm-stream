@@ -1,133 +1,98 @@
 # Glossary for frontend developers
 
-You do not need to know Kubernetes to use krm-stream. You do need about a dozen words. This page
-defines them, then shows where each one appears in the library.
+Start with [watching resources](why-a-gateway.md); add the [editor](client-state-model.md) when a page
+needs drafts. These are the Kubernetes and editing terms used by those guides.
 
-## The data
+## Resource identity and content
 
-**KRM (Kubernetes Resource Model)** is the shape every object here has. It is JSON with four
-conventions: `apiVersion`, `kind`, `metadata`, and a body. Read it as a schema for a declarative
-object with an identity and a desired state. Nothing about it is specific to containers. A
-`Database`, a `FeatureFlag` or a `Tenant` can be a KRM resource.
+**KRM (Kubernetes Resource Model)** is the JSON shape of a resource: `apiVersion`, `kind`, `metadata`
+and kind-specific fields. A ConfigMap uses `data`; many resources have `spec` and `status`; a custom
+resource can represent a product's own Database, FeatureFlag or Tenant.
 
-**Resource** is one such object. Identified by `apiVersion`, `kind`, `namespace` and `name`, and by
-`metadata.uid`.
+**CRD (Custom Resource Definition)** registers a custom resource kind and its API/schema.
 
-**`uid`** is what the store keys on. Kubernetes gives every object created over a cluster's lifetime a
-distinct `uid`, so a resource deleted and recreated under the same name is a different object and does
-not inherit the old draft. Key on `name` instead and a user's unsaved edits reattach to whatever takes
-the name next.
+**UID** is the resource's server-assigned identity, used as the store key. A same-name replacement
+gets a new UID and never inherits the old draft. Identity is scoped to an upstream **target**: use
+one store per stream, or key multiple targets by `(target, uid)`. Names are useful for display/routing,
+not for transferring an edit to a replacement.
 
-A `uid` is a UUID, but the guarantee is per cluster, so the protocol scopes it to one upstream target:
-hold objects from more than one stream and you key on `(target, uid)`, or keep one store per stream.
-See [spec §1](../spec/v1.md).
+**Namespace** scopes namespaced resources. Other resource kinds are cluster-scoped. An omitted
+namespace on a namespaced collection can mean all namespaces, so the host declares that access.
 
-**CRD (Custom Resource Definition)** is how a team adds their own `kind`. It is why KRM works as an
-application configuration API and not only as cluster plumbing: your product's domain objects can be
-resources.
+**Spec and status** commonly distinguish desired configuration from observed progress. The default
+editor policy makes status read-only. A read-only field can still follow the server live; it is
+omitted only if the selected projection says so.
 
-**`spec` and `status`** are the split to remember. `spec` is what a human or agent wants. `status`
-is what the system observed. Users edit `spec`. Nobody edits `status`, and the store enforces that:
-`status` is read-only and never part of a save.
+**Resource version** is a server-assigned token. An object's version is a conditional-write
+precondition; a collection/watch version is a recovery checkpoint. They serve different purposes.
+Suppression can keep an object's visible content correct while leaving its held write version stale.
+See [quiet streams and saving](saving.md#why-a-quiet-stream-can-still-reject-a-save).
 
-**`resourceVersion`** is an opaque server-assigned token that changes on every write. It works like
-an ETag, and it is how the server detects that you edited a stale copy.
+## Watching and views
 
-**Namespace** is a folder. Resources live in one, and some kinds are cluster-wide instead.
+**Watch** is Kubernetes' change feed: added, modified and deleted objects, plus control events such
+as bookmarks and errors. History can expire and initialization/recovery must establish a complete
+collection boundary. The current gateway handles these mechanics for its browser clients.
 
-## The stream
+**Scope** selects a target, resource kind, namespace, optional name and allowed labels. The host
+still authorizes the request; a selector does not grant permission.
 
-**Watch** is the Kubernetes primitive for "tell me when this changes". It yields a stream of `ADDED`,
-`MODIFIED` and `DELETED` events. It is server-side and stateful, and it has edge cases: history
-expiry, relist, bookmarks. The gateway handles those. You do not see them.
+**Projection** is the named resource view delivered by the gateway. Full view includes status and
+withholds core Secret values; spec view also omits status. Raw includes Secret values with host
+permission but still strips managed fields and last-applied configuration. It is not native passthrough.
 
-**Snapshot** is the initial run of events describing the world as it currently is, before live
-changes arrive. It has a completion point, the `synced` event. Until a snapshot completes, the client
-cannot tell whether a resource it remembers is gone or simply not re-sent yet, so an incomplete
-snapshot never prunes state.
+**Redaction** withholds a value while disclosing its path and change revision. There is no placeholder
+in the object to save back accidentally. The UI renders withheld state from redaction metadata and
+must not edit it. Built-in Secret redaction does not classify every sensitive CRD field.
 
-**SSE (Server-Sent Events)** is the browser transport: an HTTP response that stays open and streams
-text events. `EventSource` is built into every browser. It is one-directional, which is all a read
-stream needs.
+**Suppression** skips an object event when projected content excluding resourceVersion plus redaction
+records are unchanged. It saves downstream work. A hidden Secret rotation still produces an update.
 
-**Gateway** is the server-side piece you mount in your own Go application. It uses host-owned Kubernetes
-clients, enforces host authorization and turns a watch into a scoped SSE stream. The browser never
-receives a cluster credential or an API-server URL.
+**Shared watch** uses one upstream watch for matching scopes in a shared backend. It saves duplicate
+upstream work; each subscriber still needs authorization, a snapshot and its own delivery.
 
-**Projection** is the subset of a resource the gateway sends. What the browser receives may be less
-than what exists upstream.
+**Snapshot** establishes complete scope membership. The current gateway emits `reset`, member upserts
+and `synced`; only completion prunes unseen UIDs. A partial snapshot cannot establish absence.
 
-**Redaction** is a path the gateway knows exists but withholds, such as a Secret value. It is not
-sent as a placeholder; it is absent from the object, and listed in `redactions(id)` so the UI can
-render it as withheld and offer no editor. It follows that a redacted field must never be written
-back, or the browser would erase it.
+**SSE (Server-Sent Events)** is the current gateway's text-event framing, consumed by the official
+connector through **fetch**. Browser `EventSource` is another SSE client with different header/retry
+limitations. Fetch can read SSE or native Kubernetes watch JSON and inspect HTTP responses; both
+formats can carry errors. A native fetch/watch connector is requested, while SSE remains supported.
 
-## The editing
+**Gateway** is the embeddable Go read layer. It enforces host scope/view policy, projects resources
+and delivers the current SSE protocol. A host can separately proxy native Kubernetes access with a
+session cookie while keeping cluster credentials server-side.
 
-**Draft** is the object your form is bound to. It is separate from the server object, and the stream
-cannot overwrite it without telling you.
+## Optional editing and saving
 
-**Three-way merge**: while you are editing a resource, new server updates can arrive. A three-way
-merge uses the version you started editing, your draft, and the new server version to combine
-non-conflicting changes without overwriting your work.
+**Server and draft** are separate objects in the editor: the latest delivered authoritative view and
+that view with local edits. Store reads are detached copies; render them and edit through store APIs.
 
-At each editable path the store asks two questions: did the server change this field, and did you
-change this field?
+**Three-way reconciliation** compares the previous server value (**base**), local draft (**ours**)
+and incoming server value (**theirs**) at editable paths:
 
-| Server changed it | You changed it | Result |
+| Server changed | Local changed | Result |
 |---|---|---|
-| yes | no | the server value flows into your draft |
-| no | yes | your edit stands |
-| yes | yes, to the same value | converge, no conflict |
-| yes | yes, to a different value | your draft stands, and a conflict is recorded |
+| yes | no | Follow server |
+| no | yes | Keep local edit |
+| yes | yes, same value | Converge |
+| yes | yes, different values | Keep local edit and expose conflict |
 
-Only the last row needs a human. Without this, a controller updating one annotation would discard
-the text you were typing in an unrelated field.
+The incoming server object becomes the next base. Untouched fields stay live while local work stays
+in the draft. A **field conflict** needs explicit review; `revert` takes the current server value.
 
-**Conflict** is the fourth row above. The draft is retained, and `conflicts(id)` exposes the server
-value for review. `takeTheirs` and `revert` restore server values. The store leaves save policy to the
-host; the conditional editor requires conflicts to be resolved before saving.
+**Associative list** is a Kubernetes array with schema-declared item keys. With the exact host-supplied
+OpenAPI schema, the editor can merge these by key. Other arrays are atomic. The resulting merge patch
+still replaces an array as one value.
 
-**Associative list** is a Kubernetes array that behaves as a map. `spec.containers` is keyed by
-`name`, not by index. The store merges these by key only when configured with
-`withOpenAPIKeyedLists` and the host-supplied structural schema. Arrays are atomic by default.
+**Save intent** captures a detached merge patch, UID and resourceVersion together before awaiting a
+request. The host authorizes, validates and conditionally writes it. A **merge patch** contains only
+editable changes; `null` means deletion. Never write a whole projected object back with PUT.
 
-**RFC 7386 merge patch** is the save format: a JSON document containing only what changed, where
-`null` means delete. The store builds it by diffing draft against server over editable paths only.
-It never diffs the whole projected object, which would turn a field that is absent because of a
-projection into a deletion.
+**Version rejection** means a precondition failed, not necessarily a field disagreement. Current
+recovery is a guarded projected read, review and another deliberate Save. A **reconciliation guard**
+prevents a delayed read/response from overwriting newer watch state or crossing UID/snapshot recovery.
 
-## How this hooks into krm-stream
-
-The read path, in the order the words appear:
-
-1. Your Go application mounts the **gateway**. It authenticates the user, decides the **scope**, and
-   opens a **watch**.
-2. The gateway applies a **projection** and its **redactions**, then streams a **snapshot** over
-   **SSE**, followed by live updates.
-3. `LiveResourceStore` consumes those events and keeps, per **`uid`**: `server(id)` for the server
-   object, `draft(id)` for yours, plus `conflicts(id)` and `redactions(id)`. One store per stream.
-4. Every incoming update runs the **three-way merge** over `server` as the base you started from,
-   `draft` as what you typed, and the new server object. Server changes you did not touch appear in
-   the form. Your edits survive. Collisions land in `conflicts(id)`.
-
-The write path is not the library's:
-
-5. On save, `captureSave(id)` captures an **RFC 7386 merge patch**, UID and base resourceVersion
-   together, or returns `null` when nothing changed.
-6. You send that intent to your own save endpoint. The store never writes to Kubernetes.
-7. Your handler calls [`gateway.ValidateMergePatch`](../gateway/patch.go), which rejects a patch
-   touching anything the effective projection withheld or stripped: a redacted path,
-   `metadata.managedFields`, the last-applied annotation, and `status` under `ProjectionSpec`. It is
-   what stops a buggy or hostile browser from destroying what it was never shown. Do not skip it on
-   the grounds that the store is careful, because the store runs on the caller's machine.
-8. The host writes with the captured UID and resourceVersion preconditions. The watch sees it, it
-   returns down the stream as an ordinary update,
-   and the merge converges your draft with it. Your own write needs no special handling.
-
-If you know TanStack Query or SWR, this is the same server cache with local edits, with two
-differences: the cache is pushed rather than refetched, and the local edit is not discarded when new
-server data arrives.
-
-Next: [Client state model](client-state-model.md) for the API surface, and
-[Saving edits safely](saving.md) for the host's responsibilities on the write path.
+**Dirty draft, accepted write and domain progress** are separate facts. Later typing survives Save;
+204 or a receipt confirms acceptance, while stream observation and rollout/Git completion have their
+own meaning. See [saving edits safely](saving.md) for the complete contract and UI outcomes.

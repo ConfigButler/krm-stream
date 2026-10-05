@@ -15,6 +15,11 @@ Run `task fixtures-check`, `task test`, and `task lint` before opening a pull re
 
 ## Design rules
 
+Start with watch streams and authoritative resource views; add editing as an optional layer.
+The [README](README.md) explains current capabilities and the native-fetch direction. Current API
+examples must match this branch; native transport, editor cleanup and save-progress evaluation
+remain proposals until implemented.
+
 - Keep the core gateway free of `client-go`; Kubernetes integration belongs in `gateway/kube`.
 - Keep the browser client framework-free and free of runtime dependencies.
 - Keep credentials, application identity, authorization policy, and writes in the host application.
@@ -33,6 +38,16 @@ Run `task fixtures-check`, `task test`, and `task lint` before opening a pull re
 
 Protocol compatibility is explicit. Additive optional fields are allowed when consumers can ignore them;
 incompatible event semantics require a new protocol version rather than a silent reinterpretation.
+
+## Documentation changes
+
+Keep viewing and transport guidance in [watching resources](docs/why-a-gateway.md), editor behavior in
+[the editor model](docs/client-state-model.md) and writes in [saving](docs/saving.md). Examples own
+their framework-specific guidance. Link to these contracts rather than repeating them in proposals.
+Retain decisions and useful evidence when shortening completed plans; remove superseded request
+inventories and duplicate guides. Preserve dated observations and generated release history.
+Documentation-only changes need local link/anchor checks, snippet/API review and diagram review;
+cluster and runtime suites are required when behavior changes, not for prose alone.
 
 ## Fixtures
 

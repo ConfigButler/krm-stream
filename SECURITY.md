@@ -27,7 +27,8 @@ almost all *disclosure* failures. The things we would treat as security bugs:
 - **A projected or redacted value reaching the browser.** A `Secret` value, `managedFields`, or any
   path the effective projection withheld appearing in a stream event, an error message, or a save
   response. The projection is the boundary; a leak through it is the highest-severity bug this
-  codebase can have.
+  codebase can have. This applies to the effective projection: explicitly authorized raw/native
+  access can disclose Secret values, and built-in redaction does not classify arbitrary CRD fields.
 - **A caller receiving an object outside their authorized scope.** Particularly through
   [`SharedBackend`](gateway/shared.go), where one upstream watch is fanned out to many subscribers and
   the host's `Authorizer` is the only thing standing between a caller and the cache. A bug there is
@@ -52,4 +53,5 @@ The boundaries this library claims to hold, and where they are enforced:
 
 - [docs/auth.md](docs/auth.md): identity, RBAC, and the `SharedBackend` trade.
 - [docs/saving.md](docs/saving.md): the write path, and why a save answers 204.
-- [docs/why-a-gateway.md](docs/why-a-gateway.md): why the browser never holds a cluster credential.
+- [docs/why-a-gateway.md](docs/why-a-gateway.md): watch views, Secret disclosure, host-owned credentials
+  and explicit native/SSE source selection.

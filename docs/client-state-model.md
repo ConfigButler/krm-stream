@@ -1,8 +1,27 @@
-# Client state model
+# Editor state model
 
-`LiveResourceStore` is a headless TypeScript store for a KRM resource stream. It separates the
-authoritative object received from Kubernetes from the user's local draft, so a live update never
-silently overwrites an edit.
+Editing is an optional layer on a live resource view. `LiveResourceStore` keeps the last delivered
+server object separate from the person's local draft, incorporates incoming changes and exposes
+conflicts for review. The host owns the form and every write; see [saving edits safely](saving.md).
+For a list or viewer today, use `LiveResourceStore(readOnlyPolicy)` and render `server(uid)`.
+The connector consumes and delivers state events independently of the editor.
+
+## Intended use
+
+1. Choose one authorized source, scope and view for the store. Choose the form's editable fields.
+2. Apply authoritative state events synchronously with `applyStreamEvent(store, event)`.
+3. Render detached store reads and make edits through `setValue`, `removeKey` and related methods.
+4. Present incoming changes and resolve conflicts explicitly while preserving the draft.
+5. On a deliberate Save, capture the patch, UID and resource version together. Let the host authorize,
+   validate and conditionally write that intent; preserve later typing during the request.
+6. Observe the result through the watch or a guarded read under the same view. Track write acceptance
+   and workload progress separately from draft dirtiness.
+
+Do not mutate a `draft()` return value directly: reads are detached copies, and that bypasses edit
+policy and notifications. Independent sources/scopes need separate stores. Switching identity or view
+must not silently reuse drafts, redactions or snapshot state. Native watch integration is
+[requested](field-reports/third-our-identity.md#native-watch-connector); the current guidance assumes
+complete projected objects from the gateway.
 
 ## State per resource
 
@@ -40,7 +59,14 @@ objects it has not yet reloaded.
 The default editable regions are `spec`, `metadata.labels`, `metadata.annotations`, `data`, and
 `stringData`. `status`, immutable metadata, and redacted paths are read-only.
 
-When a new server object arrives, the store compares three values at each editable path:
+Suppose a Deployment starts with image `v1` and replicas `3`. The person types image `v2`, then an
+autoscaler changes replicas to `5`. The draft becomes image `v2`, replicas `5`: untouched fields follow
+the server while local work stays. If another person changes the image to `v3`, the local image `v2`
+stays and a conflict records `v3` for review.
+
+When a new server object arrives, the store compares three values at each editable path: **base** is
+the previous server value, **ours** is the draft, and **theirs** is the incoming server value. The
+incoming object then becomes the new server base.
 
 | Draft differs from base | Incoming server differs from base | Result |
 |---|---|---|
@@ -50,7 +76,9 @@ When a new server object arrives, the store compares three values at each editab
 | yes | yes, differing from the draft | keep the draft and record a conflict |
 
 `isDirty` and `changes` are derived from `draft` versus `server`; neither is a cache that can drift
-after a stream update. `revert` or `takeTheirs` restores the current server value.
+after a stream update. `revert` restores the current server value. To keep a local value explicitly,
+use the [tested keep-local recipe](../examples/editor-recipes/README.md#keep-the-local-value-in-a-conflict).
+The UI owns the choice; the store does not silently choose a winner for differing concurrent edits.
 
 ## Patches and redactions
 
@@ -88,27 +116,22 @@ const pendingDeletes = new Set(); // uids marked for removal
 
 ### Reflecting the result
 
-The recommended shape is still 204 and let the watch echo it (see [saving edits safely](saving.md)): a
-create arrives as an `added` event, a delete as a `deleted` event, and the store converges on its own.
-Two primitives exist for a host that cannot wait for the echo, and both are idempotent with it
-(`I-IDEMPOTENT`):
+Prefer 204 or a receipt and let the stream reflect creates and deletes. Keep accepted writes separate
+from pending confirmation, so a delayed watch echo cannot cause a duplicate submission. A create
+arrives with its server-assigned UID; a delete removes only the original UID. A completed snapshot
+can confirm missed observations. Account for an echo arriving before the HTTP response as well as
+for an echo arriving afterwards.
 
-- `adoptSaved(object)` — insert the created object once the save returns it. The echo that follows is
-  a no-op, not a second card.
-- `removeResource(uid)` — drop a deleted object before its `deleted` event arrives.
+Current `adoptSaved` and `removeResource` APIs remain available, but the recommended flow uses the
+stream. `adoptSaved` is unguarded and must not receive an asynchronous response that can race newer
+watch state; a reconciliation guard for an existing UID does not insert a newly created resource.
+Optimistic removal after a failed delete cannot recover until an authoritative event or snapshot
+restores the object. Do not invent UIDs or fabricate authoritative stream events to represent intent.
 
-Either way, clear the page-local entry — the `pendingCreates` draft or the `pendingDeletes` uid — when
-its write succeeds. Those primitives update the store, not your pending lists; a completed mutation
-left staged reappears in the review list and can be submitted twice.
-
-Two caveats keep this honest:
-
-- **A create reflects only _after_ the server responds.** `adoptSaved` needs the server-assigned uid
-  and a **projected** object (never a raw Kubernetes object — see [saving edits safely](saving.md)). Do
-  not fabricate a uid for a pending draft; keep it page-local until the create returns the object.
-- **An optimistic delete is not self-healing.** A delete that _fails_ server-side produces no watch
-  event, so a `removeResource`d object does not reappear until the next snapshot. Re-add it on failure,
-  or skip the optimism and let the `deleted` echo do it.
+Deletion and snapshot pruning discard the resource's draft. If recovery matters, capture a detached
+copy as edits change, before removal, using the [recovery-copy recipe](../examples/editor-recipes/README.md#recover-work-after-a-deletion).
+Retain it under the original identity and UID for explicit copy-out; never transfer it automatically
+to a same-name replacement.
 
 ## Arrays and associative lists
 
@@ -131,8 +154,8 @@ retain the atomic behavior. Merge patches still send the final array as one RFC 
 
 ## UI integration
 
-The store has no rendering dependency. Subscribe once, then query `draft`, `status`, `changes`,
-`conflicts`, and `redactions` during rendering:
+The store has no rendering dependency. Subscribe once, then query `draft`, `server`, `changes`,
+`conflicts` and `redactions` during rendering. Connection state belongs to the connector:
 
 ```ts
 const unsubscribe = store.subscribe(() => render(store));
@@ -146,3 +169,8 @@ if (intent) await hostSave(intent);
 Use the [conditional editor](../examples/conditional-save/README.md) for conflict checks, serialized
 saves and guarded asynchronous responses. `adoptSaved` is for synchronous adoption or newly created
 objects; a delayed response must use a reconciliation guard. See [saving](saving.md).
+
+A clean draft means it matches the delivered editable values. It does not prove that a captured write
+was accepted or that a controller completed its work. A suppressed update can leave the displayed
+view unchanged but its save version stale; see [the save-version explanation](saving.md#why-a-quiet-stream-can-still-reject-a-save).
+For reactive integration and subscription ownership, see the [Vue example](../examples/vue/README.md).

@@ -1,7 +1,10 @@
 # Examples
 
-The checked browser example in [`vanilla-browser/`](vanilla-browser/) runs against the replay gateway.
-For host integration patterns, use these small recipes:
+Start with [watching resources](../docs/why-a-gateway.md) and supported host wiring, then add the
+optional editor. The checked browser example in [`vanilla-browser/`](vanilla-browser/) runs against
+the current SSE replay gateway. Native fetch/watch support and the comparative view/sharing demo
+are [requested work](../docs/field-reports/third-our-identity.md#show-the-value-of-each-path).
+For current host integration patterns, use these small recipes:
 
 - [Same-origin cookie application](../docs/adopting.md#1-mount-the-stream-endpoint): fetch
   connector, session cookie, dynamic client acting as the user.
