@@ -96,7 +96,7 @@ tasks:
   # -------------------------------------------------------------------- test --
   test:
     desc: "Run both suites against the shared conformance fixtures."
-    deps: [test-gateway, test-kube, test-client, test-vue]
+    deps: [test-gateway, test-kube, test-client, test-vue, test-compare]
 
   test-gateway:
     desc: "Go: the gateway + its half of the conformance suite."
@@ -135,6 +135,15 @@ tasks:
     dir: examples/vue
     cmds:
       - npm test
+
+  test-compare:
+    desc: "Typecheck the comparison page and driver, and test their field sync and measurement gates (no cluster)."
+    deps: [_client-deps]
+    cmds:
+      # The page and the driver are the only TypeScript outside the client package that nothing else
+      # typechecks: build.mjs and node both strip types without checking them.
+      - packages/krm-stream/node_modules/.bin/tsc -p examples/comparison
+      - node --test examples/comparison/fields.test.ts examples/comparison/gates.test.ts
 
   _vue-deps:
     internal: true
@@ -490,6 +499,7 @@ tasks:
     sources:
       - examples/comparison/build.mjs
       - examples/comparison/page.ts
+      - examples/comparison/fields.ts
       - examples/native-editor/editor.ts
       - examples/conditional-save/editor.ts
       - examples/editor-recipes/keepLocal.ts
@@ -513,6 +523,23 @@ tasks:
       - echo "→ https://127.0.0.1:8111/   (also ?entry=bundle, ?variant=shared; plain http://127.0.0.1:8110/ is for drivers)"
       # Foreground, so Ctrl-C reaches the host, which deletes its scratch namespace on the way out.
       - go run ./examples/comparison/cmd/compare --addr 127.0.0.1:8110 {{.CLI_ARGS}}
+
+  compare-browser:
+    desc: "The comparison page in Chromium against the real comparison host, on both entry points (needs the spike cluster)."
+    deps: [cluster-up, build-compare-page, _example-deps]
+    env:
+      KUBECONFIG: '{{.KUBECONFIG_PATH}}'
+    cmds:
+      # BUILD the host and hand Playwright the binary: `go run` would leave its child holding the port
+      # and keep the scratch namespace alive when Playwright stops the parent.
+      - |
+        set -e
+        bin="$(mktemp -t krm-compare-XXXX)"
+        trap 'rm -f "$bin"' EXIT
+        (cd gateway/kube && go build -o "$bin" ./examples/comparison/cmd/compare)
+        cd examples/vanilla-browser
+        npx --no-install playwright install chromium --with-deps >/dev/null
+        COMPARE_BIN="$bin" npx --no-install playwright test -c compare.config.ts {{.CLI_ARGS}}
 
   compare-measure:
     desc: "Measure every source under every workload against the spike cluster (CLI_ARGS go to measure.ts)."

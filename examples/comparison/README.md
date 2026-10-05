@@ -28,14 +28,15 @@ and a real `status` subresource — the definition the real-API suite installs) 
   endpoints ([save.go](../../gateway/kube/examples/comparison/save.go)), deterministic workloads
   ([workload.go](../../gateway/kube/examples/comparison/workload.go)), counters
   ([metrics.go](../../gateway/kube/examples/comparison/metrics.go)) and
-  [cmd/compare](../../gateway/kube/examples/comparison/cmd/compare/main.go). Its unit test needs no
-  cluster: schedules, the proxy's policy and counters, and the gateway route's refusal.
-- [index.html](index.html) and [page.ts](page.ts) — the page. [build.mjs](build.mjs) compiles
+  [cmd/compare](../../gateway/kube/examples/comparison/cmd/compare/main.go). Its unit tests need no
+  cluster; see [Tests](#tests).
+- [index.html](index.html) and [page.ts](page.ts) — the page; [fields.ts](fields.ts) keeps its inputs
+  on the store's draft. [build.mjs](build.mjs) compiles
   `page.ts`, with the native editor, the conditional editor and the keep-local recipe it reuses, into
   `dist/page.js`, importing the library as `@configbutler/krm-stream` through the page's import map.
-- [measure.ts](measure.ts) — the measurement driver, run by node with types stripped.
-  [measure.sh](measure.sh) starts the host, runs it and stops the host.
-- [tsconfig.json](tsconfig.json) — typechecks both TypeScript files with the client package's
+- [measure.ts](measure.ts) — the measurement driver, with its gates in [gates.ts](gates.ts), run by
+  node with types stripped. [measure.sh](measure.sh) starts the host, runs it and stops the host.
+- [tsconfig.json](tsconfig.json) — typechecks the page, the driver and their tests with the client package's
   compiler: `packages/krm-stream/node_modules/.bin/tsc -p examples/comparison`.
 
 ## Run the page
@@ -74,12 +75,16 @@ task compare-native-baseline BASELINE_REF=<commit>     # native before/after
 [measure.ts](measure.ts) against this tree's built library, and writes JSON and a markdown table to
 `examples/comparison/results/`. For every workload, subscriber count N and repetition it opens N
 subscribers per source — each watches the Widgets and the Secrets, one connection and one store per
-collection — waits until all are live, runs the workload through the host, and then requires every
-store to converge on the cluster's state. That is the correctness gate: a native store must hold
-each object's exact resourceVersion, spec, status and Secret data; a projected store must hold the
-same membership, spec (and status, for full), no Secret values, and exactly the cluster's Secret keys
-as redacted paths. A run that does not converge within `--settle-ms` is reported as failed and left
-out of the tables. All five sources run concurrently in each run, so every source sees the same
+collection — waits until all are live, runs the workload through the host, and then applies two
+gates ([gates.ts](gates.ts)). The **workload gate** rejects a run whose workload reported an error or
+did fewer steps of any kind than it planned: a failed write leaves the cluster unchanged and the
+stores would still match it. The **correctness gate** requires every store to converge on the
+cluster's state: a native store must hold each object's exact resourceVersion, spec, status and
+Secret data; a projected store must hold the same membership, spec (and status, for full), no Secret
+values, exactly the cluster's Secret keys as redacted paths, and — for every Secret the workload
+rotated — the resourceVersion of its final successful rotation, which the host reports. The redacted
+paths cannot show a missed rotation; the version can. Intermediate rotations may coalesce. A run that
+fails either gate is reported as failed, left out of the tables, and makes the command exit non-zero. All five sources run concurrently in each run, so every source sees the same
 writes; pass `--sources` to isolate one.
 
 `compare-native-baseline` builds the library as it is at `BASELINE_REF` (default `main`) into a
@@ -152,6 +157,21 @@ driver or the API server, and API-server-side watch-cache work.
   store from one source must never be given another source's responses or editor.
 - The host holds the only Kubernetes credential. Its admin and metrics routes are harness controls
   guarded only by the viewer session: keep it on loopback.
+
+## Tests
+
+- `task test-compare` (part of `task test`, no cluster): typechecks the page and the driver, and runs
+  [fields.test.ts](fields.test.ts) — a focused field follows another writer's change so the next
+  keystroke extends it, an edited field keeps its text and conflicts, half-typed numbers are not
+  replaced — and [gates.test.ts](gates.test.ts) — failed or missing workload steps reject a run, and a
+  projected Secret store that missed the final rotation fails convergence.
+- `task compare-browser` (needs the spike cluster): Chromium against the real host on both entry
+  points. Another writer changes the focused, unedited `spec.note` of each source; the input must
+  show the new value while focused, and the next keystroke and Save must write the new value plus the
+  keystroke. With the previous render rule it saved the stale text over the other writer, silently.
+- `go test ./examples/comparison/` (part of `task test-kube`): schedules, the proxy's policy and
+  counters, the gateway route's refusal, and a workload that reports failed steps and the last
+  successful rotation.
 
 ## Smoke checks
 

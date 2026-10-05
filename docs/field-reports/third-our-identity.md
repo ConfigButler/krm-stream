@@ -213,8 +213,9 @@ unshared and shared, behind one session check; a refused session ends with a ter
 never falls back to native. The page edits every source with the existing editors and keep-local
 recipe (later typing during a save, conflicts, recovery) and shows Secret disclosure, status-only
 suppression and hidden rotations. `measure.ts` runs identical quiet, burst, churn and
-forced-disconnect schedules with the real connectors and stores, gates every run on convergence with
-the cluster, and reports LIST/WATCH requests, snapshots, upstream watches, downstream bytes/events,
+forced-disconnect schedules with the real connectors and stores, rejects any run whose workload did
+not do everything it planned or whose stores did not converge with the cluster (projected Secret
+stores must hold each final rotation's version), and reports LIST/WATCH requests, snapshots, upstream watches, downstream bytes/events,
 store notifications, coalesced renders and authorizer/session checks. Every number in the report is
 real-API evidence from one disposable cluster; API-server-side RBAC on native requests, browser
 paint, memory/CPU and save progress under churn are not measured. A general dashboard or benchmark

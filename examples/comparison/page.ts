@@ -21,6 +21,7 @@ import {
 import { conditionalEditor } from "../conditional-save/editor.ts";
 import { keepLocal } from "../editor-recipes/keepLocal.ts";
 import { nativeEditor } from "../native-editor/editor.ts";
+import { draftText, editField, showDraft } from "./fields.ts";
 
 interface PageConfig {
   namespace: string;
@@ -254,14 +255,13 @@ class Column {
     fields.disabled = uid === undefined;
     if (!uid) return;
     const editor = this.editorFor(uid);
-    const draft = store.draft(uid).spec as Record<string, unknown>;
     for (const [field, input] of [
       ["note", $<HTMLInputElement>("[data-role=note]", r)],
       ["replicas", $<HTMLInputElement>("[data-role=replicas]", r)],
     ] as const) {
-      // Never overwrite what the person is typing.
-      if (document.activeElement !== input) input.value = String(draft[field] ?? "");
       const path: Path = ["spec", field];
+      // Follow the draft even while focused: a stale input would save its stale text. See fields.ts.
+      showDraft(input, uid, draftText(store, uid, path), document.activeElement === input);
       input.classList.toggle("dirty", store.isDirty(uid, path));
       input.classList.toggle(
         "conflicted",
@@ -341,8 +341,8 @@ const columns = (["native", "full", "spec"] as const).map((kind) => {
     $<HTMLInputElement>(`[data-role=${field}]`, root).addEventListener("input", (e) => {
       const uid = column.selected();
       if (!uid || !column.widgets) return;
-      const value = (e.target as HTMLInputElement).value;
-      column.widgets.store.setValue(uid, ["spec", field], field === "replicas" ? Number(value) : value);
+      const input = e.target as HTMLInputElement;
+      editField(column.widgets.store, uid, ["spec", field], input, field === "replicas" ? Number : undefined);
     });
   }
   return column;

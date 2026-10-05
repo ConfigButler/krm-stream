@@ -4,8 +4,9 @@
 //
 // For every workload, subscriber count and repetition it opens N subscribers per source — each one a
 // page watching the Widgets and the Secrets, one store per collection — waits until every one is
-// live, triggers the workload through the host, waits for every store to converge on the cluster's
-// state (the correctness gate: a run whose stores diverge is reported as failed, not measured),
+// live, triggers the workload through the host, rejects the run unless the workload did everything it
+// planned, waits for every store to converge on the cluster's state (the correctness gate in
+// gates.ts: a run whose stores diverge is reported as failed, not measured),
 // collects the host's counters and closes everything. It writes JSON and a markdown table.
 //
 //   node examples/comparison/measure.ts [options]
@@ -32,6 +33,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { divergence, type Source, type StateObject, type WorkloadOutcome, workloadFailure } from "./gates.ts";
 
 type Lib = typeof import("../../packages/krm-stream/src/index.ts");
 type Store = InstanceType<Lib["LiveResourceStore"]>;
@@ -39,8 +41,7 @@ type Handle = ReturnType<Lib["connectNativeWatch"]>;
 type StateEvent = Parameters<Parameters<Lib["connectNativeWatch"]>[1]>[0];
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
-const SOURCES = ["native", "full", "spec", "full-shared", "spec-shared"] as const;
-type Source = (typeof SOURCES)[number];
+const SOURCES: readonly Source[] = ["native", "full", "spec", "full-shared", "spec-shared"];
 
 // ------------------------------------------------------------------------------- arguments --
 
@@ -88,16 +89,6 @@ interface Metrics {
   counters: Record<string, number>;
   gauges: Record<string, number>;
 }
-interface StateObject {
-  kind: string;
-  uid: string;
-  name: string;
-  resourceVersion: string;
-  spec?: unknown;
-  status?: unknown;
-  data?: Record<string, string>;
-}
-
 async function host<T>(path: string, init: RequestInit = {}, session = opts.session): Promise<T> {
   const res = await fetch(`${opts.host}${path}`, {
     ...init,
@@ -259,46 +250,6 @@ class Feed {
   }
 }
 
-// ------------------------------------------------------------------------- correctness gate --
-
-/** Why a source's store does not hold what the cluster holds, or undefined when it does. */
-function divergence(feed: Feed, state: StateObject[]): string | undefined {
-  const kind = feed.resource === "widgets" ? "Widget" : "Secret";
-  const want = state.filter((o) => o.kind === kind);
-  const ids = feed.store.ids();
-  if (ids.length !== want.length || !want.every((o) => ids.includes(o.uid))) {
-    return `${kind} membership: store ${ids.length}, cluster ${want.length}`;
-  }
-  const projected = feed.source !== "native";
-  const specOnly = feed.source.startsWith("spec");
-  for (const o of want) {
-    const got = feed.store.server(o.uid);
-    if (kind === "Widget") {
-      if (!lib.deepEqual(got.spec, o.spec)) return `${o.name}: spec differs`;
-      if (specOnly ? got.status !== undefined : !lib.deepEqual(got.status, o.status)) {
-        return `${o.name}: status ${specOnly ? "present in a spec projection" : "differs"}`;
-      }
-    } else if (projected) {
-      // Never a value; exactly the cluster's keys, named as redacted paths.
-      if (got.data !== undefined) return `${o.name}: a projected Secret carries values`;
-      const paths = feed.store
-        .redactions(o.uid)
-        .map((r) => r.path.join("/"))
-        .sort();
-      const keys = Object.keys(o.data ?? {})
-        .map((k) => `data/${k}`)
-        .sort();
-      if (!lib.deepEqual(paths, keys)) return `${o.name}: redacted paths ${paths} != ${keys}`;
-    } else if (!lib.deepEqual(got.data, o.data)) {
-      return `${o.name}: data differs`;
-    }
-    // A native store holds the cluster's exact version. A projection may legitimately hold an older
-    // one: a suppressed update advances the cluster without an event.
-    if (!projected && got.metadata.resourceVersion !== o.resourceVersion) return `${o.name}: resourceVersion differs`;
-  }
-  return undefined;
-}
-
 // -------------------------------------------------------------------------------- one run --
 
 interface SourceResult {
@@ -322,7 +273,7 @@ interface RunResult {
   ok: boolean;
   failure?: string;
   settleMs: number;
-  workloadResult: unknown;
+  workloadResult: WorkloadOutcome | undefined;
   sessions: Record<string, number>;
   sources: Partial<Record<Source, SourceResult>>;
 }
@@ -414,7 +365,7 @@ async function runOnce(workload: string, n: number, rep: number): Promise<RunRes
     const m0 = await host<Metrics>("/metrics");
     const before = new Map(all.map((f) => [f, f.snapshot()]));
 
-    result.workloadResult = await host("/admin/workload", {
+    result.workloadResult = await host<WorkloadOutcome>("/admin/workload", {
       method: "POST",
       body: JSON.stringify({
         name: workload,
@@ -423,6 +374,15 @@ async function runOnce(workload: string, n: number, rep: number): Promise<RunRes
         reconnects: opts.reconnects,
       }),
     });
+
+    // A workload that did not do what it planned measured something else: reject it before anything
+    // is counted. Its stores may well match the cluster — the cluster just did not change.
+    const incomplete = workloadFailure(result.workloadResult);
+    if (incomplete) {
+      result.failure = `workload incomplete: ${incomplete}`;
+      return result;
+    }
+    const rotations = result.workloadResult?.secretRotations ?? {};
 
     // The correctness gate: every store converges on the cluster, or the run failed.
     const settleStart = performance.now();
@@ -437,7 +397,7 @@ async function runOnce(workload: string, n: number, rep: number): Promise<RunRes
             last = `${f.source}/${f.resource} not live (${f.handle.state.status})`;
             return false;
           }
-          const why = divergence(f, state);
+          const why = divergence(f, state, rotations);
           if (why) {
             last = `${f.source}/${f.resource}: ${why}`;
             return false;
@@ -462,7 +422,7 @@ async function runOnce(workload: string, n: number, rep: number): Promise<RunRes
         host: diff(hostFor(source, m1.counters), hostFor(source, m0.counters)),
         hostConnect: hostFor(source, m0.counters),
         gauges: hostFor(source, m1.gauges),
-        divergence: list.map((f) => divergence(f, state)).find((d) => d !== undefined),
+        divergence: list.map((f) => divergence(f, state, rotations)).find((d) => d !== undefined),
       };
     }
   } finally {
@@ -614,7 +574,7 @@ function markdown(results: Results): string {
     `Workloads ${opts.workloads.join(", ")}; subscribers ${opts.subscribers.join(", ")}; ${opts.reps} repetitions; ` +
       `duration ${opts.durationMs} ms; seed ${opts.seed}; ${opts.reconnects} forced reconnects per workload; ` +
       `retryDelayMs ${opts.retryDelayMs}. Cells are median (min–max) over the repetitions that passed the ` +
-      "correctness gate; client and host counts cover the workload phase only, summed over the N subscribers " +
+      "workload and correctness gates; client and host counts cover the workload phase only, summed over the N subscribers " +
       "(each subscriber watches the Widgets and the Secrets, one connection and one store each).",
     "",
     `Refusal check: ${results.refusal.ok ? "passed" : "FAILED"} — ${JSON.stringify(results.refusal.outcomes)}; ` +
@@ -624,8 +584,8 @@ function markdown(results: Results): string {
   const failed = runs.filter((r) => !r.ok);
   out.push(
     failed.length === 0
-      ? `All ${runs.length} runs passed the correctness gate.`
-      : `**${failed.length} of ${runs.length} runs FAILED the correctness gate and are excluded:** ` +
+      ? `All ${runs.length} runs passed the workload and correctness gates.`
+      : `**${failed.length} of ${runs.length} runs FAILED a gate and are excluded:** ` +
           failed.map((r) => `${r.workload}/N=${r.subscribers}/rep ${r.rep}: ${r.failure}`).join("; "),
     "",
   );

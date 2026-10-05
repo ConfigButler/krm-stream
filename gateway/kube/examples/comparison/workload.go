@@ -190,17 +190,21 @@ func NewPlan(req WorkloadRequest, widgetCount, secretCount int) (Plan, error) {
 
 // WorkloadResult reports what a run actually did.
 type WorkloadResult struct {
-	Plan        map[StepKind]int `json:"planned"`
-	Done        map[StepKind]int `json:"done"`
-	Closed      int              `json:"connectionsClosed"`
-	Errors      []string         `json:"errors,omitempty"`
-	MaxLateMs   int64            `json:"maxLateMs"`
-	ElapsedMs   int64            `json:"elapsedMs"`
-	DurationMs  int              `json:"durationMs"`
-	Seed        uint64           `json:"seed"`
-	Rate        float64          `json:"rate"`
-	Reconnects  int              `json:"reconnects"`
-	StartedUnix int64            `json:"startedUnixMs"`
+	Plan   map[StepKind]int `json:"planned"`
+	Done   map[StepKind]int `json:"done"`
+	Closed int              `json:"connectionsClosed"`
+	Errors []string         `json:"errors,omitempty"`
+	// SecretRotations is, per Secret name, the resourceVersion of its last successful rotation. A
+	// projected store shows a rotation only as a redaction revision under the same key, so this is
+	// the version a subscriber must hold to prove it saw the final one.
+	SecretRotations map[string]string `json:"secretRotations,omitempty"`
+	MaxLateMs       int64             `json:"maxLateMs"`
+	ElapsedMs       int64             `json:"elapsedMs"`
+	DurationMs      int               `json:"durationMs"`
+	Seed            uint64            `json:"seed"`
+	Rate            float64           `json:"rate"`
+	Reconnects      int               `json:"reconnects"`
+	StartedUnix     int64             `json:"startedUnixMs"`
 }
 
 // run executes a plan in time order on one goroutine. A step that falls behind runs at once; how far
@@ -208,7 +212,7 @@ type WorkloadResult struct {
 func (o *objects) run(ctx context.Context, plan Plan, disconnect func(target string) int) WorkloadResult {
 	start := time.Now()
 	result := WorkloadResult{
-		Plan: plan.Counts(), Done: map[StepKind]int{},
+		Plan: plan.Counts(), Done: map[StepKind]int{}, SecretRotations: map[string]string{},
 		DurationMs: plan.Request.DurationMs, Seed: plan.Request.Seed, Rate: plan.Request.Rate,
 		Reconnects: plan.Request.Reconnects, StartedUnix: start.UnixMilli(),
 	}
@@ -235,9 +239,13 @@ func (o *objects) run(ctx context.Context, plan Plan, disconnect func(target str
 				"heartbeat": int64(step.Seq), "phase": []string{"Ready", "Progressing"}[step.Seq%2],
 			}}, "status")
 		case StepSecret:
-			err = o.patch(ctx, o.secretClient(), SecretName(step.Object), map[string]any{"data": map[string]any{
+			var rv string
+			rv, err = o.patchVersion(ctx, o.secretClient(), SecretName(step.Object), map[string]any{"data": map[string]any{
 				"token": base64.StdEncoding.EncodeToString(fmt.Appendf(nil, "rotated-%d-%d", plan.Request.Seed, step.Seq)),
 			}})
+			if err == nil {
+				result.SecretRotations[SecretName(step.Object)] = rv
+			}
 		case StepDisconnect:
 			result.Closed += disconnect(plan.Request.Target)
 		}

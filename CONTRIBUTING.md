@@ -66,6 +66,7 @@ the rule it protects.
 | `task e2e-browser` | Native `EventSource`, unbundled ESM and the native viewer and editor pages in Chromium. |
 | `task cluster-facts` | Record observed Kubernetes behavior for the supported cluster version. |
 | `task test-real-api` | Compose the save path and native viewing and editing against a real API server: gateway or host proxy, host endpoint and browser store. |
+| `task compare-browser` | The comparison page in Chromium against the real comparison host, on both entry points. |
 | `task compare-measure` | Measure native, full and spec sources, unshared and shared, under identical workloads against a real API server; `task compare-native-baseline BASELINE_REF=<sha>` compares the native connector with an earlier build. Results are evidence for the run, recorded in `docs/facts/`. |
 | `task test-cluster` | Exercise the Kubernetes backend against a real API server. |
 

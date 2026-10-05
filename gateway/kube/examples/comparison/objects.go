@@ -159,14 +159,21 @@ func (o *objects) reset(ctx context.Context) error {
 }
 
 func (o *objects) patch(ctx context.Context, client dynamic.ResourceInterface, name string, body map[string]any, subresource ...string) error {
+	_, err := o.patchVersion(ctx, client, name, body, subresource...)
+	return err
+}
+
+// patchVersion patches and returns the resourceVersion the API server gave the written object.
+func (o *objects) patchVersion(ctx context.Context, client dynamic.ResourceInterface, name string, body map[string]any, subresource ...string) (string, error) {
 	patch, err := json.Marshal(body)
 	if err != nil {
-		return err
+		return "", err
 	}
-	if _, err := client.Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}, subresource...); err != nil {
-		return fmt.Errorf("patch %s %v: %w", name, subresource, err)
+	written, err := client.Patch(ctx, name, types.MergePatchType, patch, metav1.PatchOptions{}, subresource...)
+	if err != nil {
+		return "", fmt.Errorf("patch %s %v: %w", name, subresource, err)
 	}
-	return nil
+	return written.GetResourceVersion(), nil
 }
 
 // StateObject is one object as the cluster holds it, for the measurement's correctness gate.
