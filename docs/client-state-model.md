@@ -19,12 +19,11 @@ The connector consumes and delivers state events independently of the editor.
 
 Do not mutate a `draft()` return value directly: reads are detached copies, and that bypasses edit
 policy and notifications. Independent sources/scopes need separate stores. Switching identity or view
-must not silently reuse drafts, redactions or snapshot state. Native watch integration is
-[requested](field-reports/third-our-identity.md#native-watch-connector). The first native slice uses the
-store read-only; this guide's editing and save examples currently use gateway views. Native editing
-requires a source-bound policy and host read/write contract in a later slice.
+must not silently reuse drafts, redactions or snapshot state. The native connector,
+`connectNativeWatch`, uses the store read-only; this guide's editing and save examples use gateway
+views. Native editing requires a source-bound policy and host read/write contract in a later slice.
 
-Keep the existing standalone `applyStreamEvent(store, event)` for the native viewer. A bound store
+The native viewer uses the existing standalone `applyStreamEvent(store, event)`. A bound store
 method is proposed editor cleanup in proposal 0009, not a current API or a prerequisite for native
 transport. No new store is needed.
 

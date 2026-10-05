@@ -7,11 +7,12 @@ and browser reconciliation; your application owns identity, authorization policy
 Choose scope, projection and sharing separately using [watching resources](why-a-gateway.md).
 Choose the source for the guarantees the page needs: native access retains original resources through
 an existing host proxy; the gateway adds projected views, redaction, suppression and optional sharing,
-delivered over SSE. Both should reuse a fetch-based frontend lifecycle.
+delivered over SSE. Both connectors share one fetch-based frontend lifecycle.
 
-The [first native slice](field-reports/third-our-identity.md#slice-1-a-native-viewer) is a small read-only
-LIST/WATCH connector with re-list recovery and a viewer. Native editing is separate and does not block
-that slice. Today the supported connector uses the gateway wiring below.
+For native access, a host that already proxies Kubernetes needs no gateway: point
+`connectNativeWatch` at a collection behind that proxy, as in the [README](../README.md#watch-native-resources-through-a-host-proxy)
+and the [native viewer example](../examples/native-viewer/README.md). It is read-only and re-lists on
+every reconnect; native editing is separate. The steps below wire the gateway source.
 
 ## 1. Mount the stream endpoint
 

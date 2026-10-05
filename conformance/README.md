@@ -1,8 +1,9 @@
 # conformance — the shared contract, executable
 
 These fixtures verify the current gateway SSE contract and browser state application. Editing cases
-add local drafts to that live-state contract; viewing does not require edit controls. Requested native
-watch support will need recovery tests of its own, not an assumption that these SSE fixtures prove it.
+add local drafts to that live-state contract; viewing does not require edit controls. Native watch
+support has recovery tests of its own (`packages/krm-stream/test/native.test.ts`); these SSE fixtures
+do not prove it.
 
 **One YAML file describes one scenario end to end**: the Kubernetes watch input, the gateway's wire
 output, and the client's resulting state after applying events and local edits. The Go and TypeScript

@@ -24,9 +24,9 @@ rather than duplicating them in this implementation plan.
 The [native-watch request](../field-reports/third-our-identity.md#native-watch-connector) extends this
 separation: native is the original-resource source through a host proxy; the gateway provides
 projected views over SSE. Share lifecycle and state application without converting native JSON to SSE.
-The first native slice is a read-only viewer using today's event consumer and standalone
-`applyStreamEvent`. It does not depend on the editor cleanup below or a new store. Native support
-is not implemented here; native editing follows separately.
+The first native slice, `connectNativeWatch`, is a read-only viewer using today's event consumer and
+standalone `applyStreamEvent`. It did not depend on the editor cleanup below or a new store; native
+editing follows separately.
 
 ## Implemented connector and correctness fixes
 

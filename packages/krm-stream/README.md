@@ -1,22 +1,20 @@
 # @configbutler/krm-stream
 
-`@configbutler/krm-stream` is the official dependency-free ESM client for consuming a KRM resource
-stream in a browser or JavaScript application. It provides:
+`@configbutler/krm-stream` is the official dependency-free ESM client for live Kubernetes resource
+state in a browser or JavaScript application, with optional editing. It provides:
 
-- `connectResourceStream`, the connector: it reads the stream over fetch, with session cookies or
-  bearer headers, and hands each resource state event to a callback, with bounded recovery.
+- `connectNativeWatch`, which reads a native Kubernetes collection through a host proxy with LIST
+  and WATCH, and `nativeCollectionURL` to address one.
+- `connectResourceStream`, which reads a gateway's projected views over SSE, and
+  `resourceStreamURL` for the v1 scope query format.
 - `LiveResourceStore` for server state, local drafts, conflicts, redactions, and merge patches, and
   `applyStreamEvent` to apply a state event to it.
-- `resourceStreamURL` for the v1 scope query format.
 
-Start with a watch-backed list or viewer; add draft reconciliation only when the page needs editing.
-The package is headless and does not choose a UI framework. Today it consumes gateway SSE through
-fetch, from the Go gateway or another v1 producer. A fetch-based native Kubernetes watch connector
-is [next work](../../docs/field-reports/third-our-identity.md#slice-1-a-native-viewer): a read-only
-LIST/WATCH source with re-list recovery and a small viewer, reusing the same lifecycle and store.
-Native retains original authorized resources; gateway SSE delivers projected views with redaction,
-suppression and optional sharing. The native connector is not implemented yet; editing and resume
-are later slices. Keep current `applyStreamEvent` unchanged for the viewer.
+Both connectors use fetch, share one connection lifecycle and hand each resource state event to a
+callback, with bounded recovery. Native access delivers original authorized resources; the gateway
+adds projected views, redaction, suppression and optional upstream watch sharing. Start with a
+watch-backed list or viewer; add draft reconciliation only when the page needs editing. The package
+is headless and does not choose a UI framework. Native viewing is read-only in this release.
 
 ```ts
 import { LiveResourceStore, readOnlyPolicy, applyStreamEvent, connectResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
@@ -29,6 +27,8 @@ const connection = connectResourceStream(
 connection.closed.catch(reportApplicationError);
 // Close connection and dispose rendering subscriptions on view teardown.
 ```
+
+See [native connections](#native-connections) for the same viewer over a host's Kubernetes proxy.
 
 ## Vendoring it without a bundler
 
@@ -75,7 +75,7 @@ unsubscribe();
 connection.close();
 ```
 
-`connectResourceStream` is the current gateway connector. It uses fetch for same-origin cookies or
+`connectResourceStream` is the gateway connector. It uses fetch for same-origin cookies or
 bearer headers; `credentials: "include"` opts into cross-origin cookies. It decodes and
 sequence-checks the stream, and calls your callback synchronously, exactly once per state event
 (`reset`, `added`, `modified`, `deleted`, `synced`), in stream order, without the wire `seq`.
@@ -118,6 +118,43 @@ its `message` instead of `stream: HTTP 403`.
 There is no official `EventSource` helper. It cannot send explicit authorization headers and leaves
 reconnect timing to the browser; a host-owned helper must handle protocol sequence gaps and terminal
 errors itself. Gateway framing still supports browser `EventSource` with session cookies (spec §7).
+
+### Native connections
+
+```ts
+const connection = connectNativeWatch(
+  nativeCollectionURL("/k8s", { version: "v1", resource: "configmaps", namespace: "app", name: "settings" }),
+  event => applyStreamEvent(store, event), // a LiveResourceStore(readOnlyPolicy) for this source only
+  { onError: (code, message, terminal) => showStreamError(code, message, terminal) },
+);
+```
+
+`connectNativeWatch` takes the same options and returns the same handle, states and completion
+guarantees as `connectResourceStream`. `nativeCollectionURL` builds core (`/api/v1`) and grouped
+(`/apis/<group>/<version>`) collection paths, namespaced or cluster-wide, with an optional
+`labelSelector`; `name` becomes `fieldSelector=metadata.name=<name>`, so a named object can be absent,
+deleted and recreated like any member. The host mounts the API server under the base, such as `/k8s`,
+and owns credentials, routing and authorization; the collection URL must not set `watch`,
+`resourceVersion`, `limit` or `continue`, which the connector controls.
+
+Each connection performs an ordinary LIST, validates every item's UID and name, and fills a missing
+item `apiVersion`/`kind` from a typed collection (`ConfigMapList` lists `ConfigMap`s; type metadata
+already present is kept). It delivers `reset` and an `added` per member, then opens a WATCH from the
+collection's `resourceVersion` with the same selectors, and delivers `synced` — publishing `live` —
+only once that WATCH is accepted. Watch events map to `added`, `modified` and `deleted` (with the
+identity of the deleted object); bookmarks change nothing. Every reconnect lists again, so prior
+state is kept until a replacement snapshot completes and prunes what it no longer lists: deletes and
+selector exits missed while disconnected, or a same-name object recreated with a new UID.
+
+HTTP or in-stream 410 (expired watch history), 408, 429, 5xx, network failures, EOF, and malformed or
+truncated frames are reported where applicable and consume the bounded retry budget; repeated expiry
+cannot re-list in a tight loop. A Kubernetes `Status` message reaches `onError`, and its
+`retryAfterSeconds` or an HTTP `Retry-After` sets the least the next reconnect waits. HTTP or in-stream
+401, 403 and other 4xx are terminal. This release does not paginate: a LIST with a continuation token
+is refused with a terminal error before anything is applied, because pruning from one page would
+remove the others. Native objects carry whatever the proxy returns, including Secret values and
+machinery fields; there is no projection, redaction or `seq`. Never fall back to native access after a
+gateway refuses a view.
 
 ## Optional editing
 

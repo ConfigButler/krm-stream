@@ -5,10 +5,10 @@ to Kubernetes-style `Backend` watches. It delivers live state for viewers and op
 It is transport-neutral until `Handler` or `ServeStream` adds the current SSE framing. Core has no
 Kubernetes client dependency; [`gateway/kube`](kube/) provides the client-go backend and authorizer.
 
-A fetch-based native browser connector is [requested work](../docs/field-reports/third-our-identity.md#native-watch-connector).
-Native is the original-resource source; this gateway delivers projected views over SSE. Native
-access alone does not provide these projected-view guarantees. A small native viewer can ship
-independently of native editing or changes to this gateway. See [watching resources](../docs/why-a-gateway.md) for the overall contract.
+The browser client can also read native collections through a host's Kubernetes proxy with
+`connectNativeWatch`, without this gateway. Native is the original-resource source; this gateway
+delivers projected views over SSE. Native access alone does not provide these projected-view
+guarantees, and native viewing required no change to this gateway. See [watching resources](../docs/why-a-gateway.md) for the overall contract.
 
 ```go
 handler := gateway.Handler(gateway.Options{

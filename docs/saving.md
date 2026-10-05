@@ -18,8 +18,8 @@ accepted write and application progress are separate states; neither a clean for
 proves a rollout or Git workflow completed. A definite 409 rejection differs from a lost response
 whose write outcome is unknown; do not blindly replay an ambiguous write.
 
-This guide describes projected editing through the current gateway. The requested native connector
-starts with read-only viewing. Native editing is a later slice requiring an explicit read/write and
+This guide describes projected editing through the current gateway. The native connector is
+read-only. Native editing is a later slice requiring an explicit read/write and
 edit-policy contract before sharing these recipes. A raw response must never be fed into a
 projected editor as recovery or save confirmation.
 
