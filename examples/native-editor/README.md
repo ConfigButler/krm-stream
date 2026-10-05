@@ -80,6 +80,8 @@ Add `entry=bundle` to load the single-file build.
   Typing into a field whose save is in flight becomes a conflict when the echo arrives: the server
   holds the saved value and the draft holds the later typing.
 - A refusal (401, 403, 422 or another 4xx) shows the Kubernetes `Status` and keeps the draft.
+- Values are edited in text areas, so line breaks survive. A browser text area normalizes `\r\n` to
+  `\n`, so editing a value that contains carriage returns writes it back without them.
 - A deleted or replaced object shows its unsaved edits from the recovery copy. A replacement opens
   only on request, without the old edits.
 - **Disconnect**, or leaving the page, closes the watch, unsubscribes and clears the echo timer. A
@@ -100,8 +102,8 @@ the page and plays the host proxy and API server, with a watch that stays open w
 [native-editor.spec.ts](../vanilla-browser/tests/native-editor.spec.ts). It covers a conditional
 save and its echo, typing while a save is in flight, 409 recovery and a later deliberate Save,
 explicit conflict resolution, a lost response and a 502 each settled by a GET before any further
-PATCH, an accepted write without an echo confirmed explicitly, refusals, UID replacement and
-disconnect.
+PATCH, an accepted write without an echo confirmed explicitly, refusals, multiline values, a deletion
+and a UID replacement each with copy-out, and disconnect.
 
 ## What it protects
 

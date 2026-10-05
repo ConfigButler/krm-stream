@@ -12,7 +12,7 @@ For the overall direction, see [watching resources](why-a-gateway.md).
 
 ## Browser client
 
-`connectResourceStream` is now the only connector. It takes a callback that receives each resource
+`connectResourceStream` is now the only gateway connector. It takes a callback that receives each resource
 state event, instead of a store:
 
 | 0.7 | Now |

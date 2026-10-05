@@ -93,6 +93,14 @@ class Host {
     this.#emit("MODIFIED", this.object!, deliver);
   }
 
+  /** Delete the object, with nothing in its place. */
+  remove() {
+    const old = this.object!;
+    old.metadata.resourceVersion = String(++this.#rv);
+    this.object = undefined;
+    this.#emit("DELETED", old, true);
+  }
+
   /** Delete the object and create another under the same name, with a new UID. */
   replace({ deliver = true } = {}) {
     const old = this.object!;
@@ -564,4 +572,45 @@ test("disconnect closes the watch, clears the echo timer and ignores a late answ
   await expect(page.locator("#outcome")).toHaveAttribute("data-kind", "closed");
   await expect(confirm(page)).toBeHidden();
   expect(host.calls.length, "nothing is requested after disconnect").toBe(requests);
+});
+
+test("multiline values keep their line breaks through editing and saving", async ({ page, entry, host }) => {
+  host.change((o) => {
+    o.data.script = "first\nsecond\n";
+  });
+  await open(page, host, entry);
+  const script = field(page, "data script");
+  await expect(script).toHaveValue("first\nsecond\n");
+  await script.click();
+  await page.keyboard.press("ControlOrMeta+End");
+  await page.keyboard.type("third");
+  await field(page, "annotation owner").fill("team-a\nteam-b");
+  await save(page).click();
+
+  await expect(outcome(page)).toHaveAttribute("data-kind", "echoed");
+  expect(host.patchBodies()).toEqual([
+    {
+      metadata: { annotations: { owner: "team-a\nteam-b" }, uid: "u1", resourceVersion: "2" },
+      data: { script: "first\nsecond\nthird" },
+    },
+  ]);
+  await expect(script).toHaveValue("first\nsecond\nthird");
+});
+
+test("a deleted object shows its unsaved edits at once, with nothing to open in its place", async ({
+  page,
+  entry,
+  host,
+}) => {
+  await open(page, host, entry);
+  await field(page, "data value").fill("mine");
+  host.remove();
+
+  // The deletion is the last event: no later render could fill the copy in.
+  await expect(page.locator("#removed")).toBeVisible();
+  await expect(page.locator("#recovery")).toHaveText('change data value: "base" → "mine"');
+  await expect(page.locator("#identity")).toContainText("Removed from the server.");
+  await expect(page.getByRole("button", { name: "Discard these edits and open the replacement" })).toBeHidden();
+  await expect(save(page)).toBeDisabled();
+  expect(host.objectCalls()).toEqual([]);
 });

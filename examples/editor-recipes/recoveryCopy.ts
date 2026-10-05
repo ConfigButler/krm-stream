@@ -31,8 +31,10 @@ export function retainRecoveryCopy(store: LiveResourceStore, uid: string, option
   const now = options.now ?? Date.now;
   let last: Omit<RecoveryCopy, "removedAt"> | null = null;
   let removedAt: number | undefined;
+  let disposed = false;
 
   const capture = () => {
+    if (disposed) return;
     if (!store.ids().includes(uid)) {
       // Removed (or never seen). Keep the last copy; there is no draft left to read.
       if (last && removedAt === undefined) removedAt = now();
@@ -51,18 +53,23 @@ export function retainRecoveryCopy(store: LiveResourceStore, uid: string, option
   const stop = store.subscribe(capture);
 
   return {
+    // Both readers capture first: a host listener subscribed before this recipe runs before its
+    // listener, and would otherwise read a removal the copy has not yet seen.
     /** The live object's draft is the one to edit; a copy exists only once the object is gone. */
     get removed(): boolean {
+      capture();
       return removedAt !== undefined;
     },
     /** The retained copy of a removed object, or null while it still exists, after expiry, after
      * dispose(), or when it was never in the store. Each call returns a fresh detached copy. */
     copy(): RecoveryCopy | null {
+      capture();
       if (!last || removedAt === undefined || now() - removedAt > retainMs) return null;
       return structuredClone({ ...last, removedAt });
     },
     /** Stop listening and drop the copy. Call when the editor for this UID is torn down. */
     dispose(): void {
+      disposed = true;
       stop();
       last = null;
     },

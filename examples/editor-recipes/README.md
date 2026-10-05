@@ -10,7 +10,8 @@ with `task test`, driving the store with stream events as `connectResourceStream
 A `deleted` event, or a snapshot that no longer contains an object, removes the object and its draft
 from the store. Once that has happened there is no draft left to read, so a copy must be taken while
 the object still exists. [`retainRecoveryCopy`](recoveryCopy.ts) keeps a detached copy of one fixed
-UID's draft and unsaved edits, refreshed on every store notification from the moment it starts:
+UID's draft and unsaved edits, refreshed on every store notification from the moment it starts.
+Its reads are current even inside a store listener the host subscribed before it:
 
 ```ts
 const recovery = retainRecoveryCopy(store, uid, { retainMs: 15 * 60_000 });

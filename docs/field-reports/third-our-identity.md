@@ -146,9 +146,9 @@ second save controller or new library API. `examples/vanilla-browser/tests/nativ
 a test server playing the host proxy. It covers a save and its echo, typing and focus during a save,
 409 recovery and a second deliberate save, explicit conflict resolution, a lost response and a 502
 each settled by a GET before any further PATCH, an accepted write without an echo confirmed
-explicitly, 403 and 422 refusals, UID replacement with copy-out, and disconnect cleanup. A manual
-run through `kubectl proxy` against the v1.36.4+k3s1 spike cluster saved and echoed on both entry
-points and rendered a real 422. The comparative frontend (order 6) remains separate.
+explicitly, 403 and 422 refusals, multiline values, deletion and UID replacement with copy-out, and
+disconnect cleanup. A manual run through `kubectl proxy` against the v1.36.4+k3s1 spike cluster
+saved and echoed on both entry points and rendered a real 422. The comparative frontend (order 6) remains separate.
 
 ## Follow-ups after the viewer
 

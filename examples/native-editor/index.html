@@ -41,8 +41,10 @@
       section { margin: 1.25rem 0; }
       fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
       .sub { opacity: .65; margin: 0 0 1rem; overflow-wrap: anywhere; }
-      button, input, select { font: inherit; }
-      input[type="text"] { width: 100%; box-sizing: border-box; }
+      button, input, select, textarea { font: inherit; }
+      /* A textarea, not an input: ConfigMap values and annotations can hold newlines, and an
+         <input> strips them from its value. */
+      td textarea { width: 100%; box-sizing: border-box; resize: vertical; }
       table { border-collapse: collapse; width: 100%; }
       th, td { text-align: left; padding: .3rem .5rem; vertical-align: top; border-top: 1px solid color-mix(in srgb, currentColor 15%, transparent); }
       th { font-weight: normal; white-space: nowrap; width: 1%; }
@@ -86,7 +88,7 @@
             <option value="annotation">annotation</option>
           </select>
           <input id="add-key" aria-label="New key" placeholder="key" required />
-          <input id="add-value" aria-label="New value" placeholder="value" />
+          <textarea id="add-value" aria-label="New value" placeholder="value" rows="1"></textarea>
           <button type="submit">Add</button>
         </form>
       </section>
@@ -428,7 +430,8 @@
           : [];
         reconcile($("fields"), fields, fieldRow, (tr, { path }) => {
           const value = String(get(draft, path) ?? "");
-          const input = tr.querySelector("input");
+          const input = tr.querySelector("textarea");
+          if (input) input.rows = Math.min(10, value.split("\n").length);
           if (input && input.value !== value) {
             // Only a server change reaches here: typing already updated the draft to match. Keep the
             // caret where it was if the person is in this field.
@@ -492,8 +495,7 @@
         const actions = document.createElement("td");
         actions.append(badge("edited", "edited"), badge("conflict", "conflict"));
         if (store.isEditable(uid, path)) {
-          const input = document.createElement("input");
-          input.type = "text";
+          const input = document.createElement("textarea");
           input.setAttribute("aria-label", label(path));
           input.addEventListener("input", () => store.setValue(uid, path, input.value));
           value.append(input);

@@ -90,7 +90,8 @@ request. The host authorizes, validates and conditionally writes it. A **merge p
 editable changes; `null` means deletion. Never write a whole projected object back with PUT.
 
 **Version rejection** means a precondition failed, not necessarily a field disagreement. Current
-recovery is a guarded projected read, review and another deliberate Save. A **reconciliation guard**
+recovery is a guarded read from the store's own source (a projected GET for a gateway view, a native
+GET through the host proxy for native objects), review and another deliberate Save. A **reconciliation guard**
 prevents a delayed read/response from overwriting newer watch state or crossing UID/snapshot recovery.
 
 **Dirty draft, accepted write and domain progress** are separate facts. Later typing survives Save;
