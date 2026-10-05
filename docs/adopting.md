@@ -5,10 +5,13 @@ currently supported gateway stream into an existing Go application. The library 
 and browser reconciliation; your application owns identity, authorization policy, credentials and writes.
 
 Choose scope, projection and sharing separately using [watching resources](why-a-gateway.md).
-The preferred transport direction is a native Kubernetes watch through a host proxy and fetch, with
-SSE retained for compatibility and existing projected streams. The native connector is
-[requested work](field-reports/third-our-identity.md#native-watch-connector); use the supported wiring
-below until its lifecycle, recovery and editing contracts are implemented.
+Choose the source for the guarantees the page needs: native access retains original resources through
+an existing host proxy; the gateway adds projected views, redaction, suppression and optional sharing,
+delivered over SSE. Both should reuse a fetch-based frontend lifecycle.
+
+The [first native slice](field-reports/third-our-identity.md#slice-1-a-native-viewer) is a small read-only
+LIST/WATCH connector with re-list recovery and a viewer. Native editing is separate and does not block
+that slice. Today the supported connector uses the gateway wiring below.
 
 ## 1. Mount the stream endpoint
 

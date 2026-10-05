@@ -13,8 +13,10 @@ is in [adopting](adopting.md). Watch sharing is an efficiency choice; it never g
 the service identity's access. Full/spec Secret redaction also does not replace scope authorization.
 
 These settings describe the current gateway. The requested native fetch connector uses a host proxy
-and the same session boundary, but needs its own recovery contract. SSE remains a compatibility path;
-changing framing must not bypass refusal or extend session lifetime.
+and the same session boundary. Native retains original authorized resources; gateway SSE delivers
+projected views. Neither source may bypass refusal or extend session lifetime. The first native
+slice is read-only and must stop on terminal authentication failure, with a new connection after
+access is restored; native editing is separate.
 
 ## Browser sessions
 

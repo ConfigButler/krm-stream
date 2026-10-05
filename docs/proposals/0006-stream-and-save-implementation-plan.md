@@ -1,20 +1,21 @@
 # Proposal 0006: Delivery plan for watch streams and optional editing
 
-**Status: active delivery plan, updated 2026-10-05.** Implementation baseline: the stacked branch
-through `b5cc779`. This is the single inventory of completed work, open work and ordering. Detailed
-contracts stay in the linked proposals and guides rather than becoming another roadmap.
+**Status: active delivery plan, updated 2026-10-05.** This is the single inventory of completed work,
+open work and ordering. The starting implementation includes connector separation, Go API cleanup
+and real-API save-composition tests. Detailed contracts stay in the linked proposals and guides
+rather than becoming another roadmap.
 
 Start with [watching resources](../why-a-gateway.md); add the [editor](../client-state-model.md) only
-where a page needs drafts. Native Kubernetes watches through fetch are the preferred direction;
-retain gateway SSE compatibility and the projected gateway's redaction, suppression and sharing.
+where a page needs drafts. Prioritize a read-only native fetch connector for hosts with a proxy;
+the gateway remains the projected source with redaction, suppression and sharing, delivered over SSE.
 Follow the [design rules](../../CONTRIBUTING.md#design-rules) and [release policy](../releasing.md).
 [Proposal 0005](0005-kubernetes-stream-and-save-semantics.md) owns the stream/save tradeoffs.
 
 ## Completed work
 
 “Implemented” below means present in this checkout; it does not establish that the current stack is
-merged, released or adopted by a host. Documentation changes are in the working tree. Final-commit
-validation and consumer dependency upgrades remain separate delivery steps.
+merged, released or adopted by a host. Final-commit validation and consumer dependency upgrades
+remain separate delivery steps.
 
 | Done now | Result | Reference |
 |---|---|---|
@@ -34,42 +35,35 @@ validation and consumer dependency upgrades remain separate delivery steps.
 The numbers express the recommended order of attention, not a requirement to finish every earlier row
 before starting a later one. Deliver separately reviewable changes and use the prerequisites below.
 
-| Order | Open work | Status / prerequisite | Completion result |
-|---|---|---|---|
-| 1 | Settle the native watch contract and comparison workload | Requested; start now using the existing event-based connector seam | Reviewed native view/edit contract, initial-list/resume rules, stale/live presentation, auth/expiry handling and SSE compatibility; one declared workload |
-| 2 | Finish the editor API cleanup in proposal 0009 | Proposed; can proceed alongside native design; coordinate shared state-input changes | Bound event input, removal of unguarded/duplicate APIs, simpler redaction reads, trimmed exports, migrated examples and upgrade guide |
-| 3 | Implement the native fetch connector with recovery acceptance | After native contract review; transport can use today's event consumer without waiting for editor cleanup | Native JSON directly becomes state events; paginated-list fallback, safe resume/resnapshot, terminal auth refusal, bounded recovery and disposal pass acceptance |
-| 4 | Measure and implement gateway upstream continuation | Design exists below; independent of native connector and editor cleanup | Reviewed reopen/time bounds, same-workload baseline, tests and measured continuity without routine downstream resets; safe fallback and authorization preserved |
-| 5 | Evaluate save progress during suppressed churn | Requested evaluation; existing real-API fixtures suffice; independent of native transport | Measured decision on bounded submitted-intent recovery first, then optional coalesced version delivery; baseline retained if benefit is insufficient |
-| 6 | Deliver the comparative frontend and measurements | Baseline gateway/shared-watch measurements can start now; native comparison follows order 3; editing uses the API selected in order 2 | One viewer plus optional editor compares native/full/spec and shared/unshared runs, including conflicts, expiry, reconnect and synthetic Secret disclosure checks |
-| 7 | Validate, release and adopt each ready change | Per change, after its own acceptance and final-commit CI; no release requires all tracks to finish | Matching npm/Go artifacts, migration guidance and host dependency updates with browser/session/RBAC acceptance |
+| Order | Open work | Dependencies and completion |
+|---|---|---|
+| 1 | Native viewer: a short contract, shared lifecycle refactor, LIST/WATCH connector, tests and minimal example in one focused PR | Use today's event consumer and read-only store; re-list on reconnect. Native editing, editor cleanup, resume and benchmarks do not gate this slice. Acceptance lives in the [request](../field-reports/third-our-identity.md#slice-1-a-native-viewer). |
+| 2 | Native editing | After the viewer; define source-bound edit policy and host validation, protect machinery fields and preserve save guards. Coordinate any public editor changes with proposal 0009. |
+| 3 | Native reconnect efficiency | After the viewer; evaluate resumable watches, streaming-list initialization and pagination with explicit membership/checkpoint tests. Do not claim these efficiencies for slice 1. |
+| 4 | Gateway upstream continuation | Independent track with a design below; review reopen/credential bounds, record a baseline, implement and measure. No dependency on native transport. |
+| 5 | Save progress during suppressed churn | Independent evaluation using existing real-API fixtures; bounded submitted-intent recovery first, optional version delivery second. Implementation depends on measured benefit and reviewed scope. |
+| 6 | Comparative frontend and measurements | Follow working native viewing; add editing after order 2. Compare native/full/spec and shared/unshared workloads; the larger project is outside slice 1. |
+| Separate | Editor API cleanup in proposal 0009 | Independently proposed. Keep current standalone `applyStreamEvent` in slice 1; neither bound methods nor a new read-only store are required for native transport. |
+| Per change | Validation, release and host adoption | Release ready increments under the existing lockstep policy; do not wait for every track. Check each change's final-commit CI, artifact/API notes and host acceptance. |
 
-Native design, implementation and comparison are specified in the
-[current request](../field-reports/third-our-identity.md#native-watch-connector). Editor cleanup is
-specified in [proposal 0009](0009-stream-and-editor-separation.md#proposed-editor-cleanup). Gateway
-continuation and save-progress evaluation retain their detailed sections below.
+### Next implementation
 
-### Dependencies and next steps
+Start the native viewer from the branch containing the implemented connector separation and Go API
+cleanup. Keep native frame parsing separate from SSE while sharing lifecycle and useful HTTP helpers.
+The short read-only contract and test results belong in the implementation PR; no additional
+editor-design review or comparison campaign must finish first.
 
-1. Review the native source/view and recovery contract, including the editor's machinery-field and
-   host-validation rules. Agree the test workload before adding another public connector.
-2. In parallel work tracks, review and finish the pending editor cleanup, review the existing gateway
-   continuation design and record gateway/save baselines. This describes scheduling; each change has
-   its own review and acceptance.
-3. Implement native transport after its contract is settled. The current event consumer is enough for
-   transport work; a dedicated read-only store and new package entry points are not prerequisites.
-   Finalize the supported editor input before publishing the native editing example or new editor APIs.
-4. Run the comparison against whichever implementations are ready, naming each tested revision and
-   feature set. Do not attribute native resume savings to gateway continuation or sharing savings to
-   suppression. Save-policy implementation requires a favorable evaluation and reviewed follow-up scope.
-5. Validate and release ready increments independently under the lockstep policy. Check consumer pins
-   and host acceptance before marking adoption complete. The existing implemented stack can be
-   validated/released without waiting for the new native feature.
+Preserve existing SSE behavior and public APIs during the lifecycle refactor. Slice 1 requires complete
+LIST membership, correct type/UID handling, an accepted WATCH before live readiness, transport-specific
+410 recovery, terminal refusals, bounded repeated failure and cancellation. Use unpaginated lists;
+reject unexpected continuation rather than pruning a partial snapshot. Add one small runnable native
+viewer and document the two sources. See the [request](../field-reports/third-our-identity.md#acceptance-for-slice-1).
 
-There are no assigned dates or owners in this plan. Open design decisions are native view identity and
-editable machinery, stale/live transitions on resume, gateway reopen deadlines/credential lifetime,
-and the save-recovery policy and version-delivery compatibility decision. Resolve them in their
-respective contract reviews; none authorizes a silent change to current projected-view semantics.
+Keep the current standalone state-input helper. Proposed editor removals remain in
+[proposal 0009](0009-stream-and-editor-separation.md#proposed-editor-cleanup), with brief API change notes
+when implemented. Native editing can follow the viewer without waiting for resume or streaming lists.
+Gateway continuation and save measurements can proceed independently. Retain the existing projected
+save flow and explicit protocol-version policy; neither needs redesign to deliver a native viewer.
 
 ## Deferred work
 
@@ -303,7 +297,7 @@ and sinks have bounded completion times. Exercise quiet and active streams; cycl
 meet a bounded quiet-stream revocation target. See [authorization lifecycle](../auth.md#session-validity-and-timed-checks)
 for configuration and host responsibilities.
 
-Order 5 evaluates submitted-intent recovery and coalesced version delivery without authorizing
+The save-progress track evaluates submitted-intent recovery and coalesced version delivery without authorizing
 implementation or changing default emissions. Independent content/delivery switches, downstream
 replay, write tickets and a general SSA abstraction remain deferred. Preserve current named-view
 semantics, host policy and the distinction between native browser and gateway upstream recovery.

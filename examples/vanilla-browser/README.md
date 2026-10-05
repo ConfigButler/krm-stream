@@ -30,5 +30,6 @@ Add `pace=0ms` for the fastest replay or use a positive value to inspect each ev
 The example uses today's projected SSE connector over fetch. For a read-only page, render server
 state with `LiveResourceStore(readOnlyPolicy)` as shown in the [README](../../README.md#watch-a-resource-view-today).
 Editing is an optional layer; the [editor model](../../docs/client-state-model.md) and
-[saving guide](../../docs/saving.md) describe its intended use. A native watch/view comparison is
-requested work, not a feature of this replay demo.
+[saving guide](../../docs/saving.md) describe its intended use. A small native viewer is the next
+slice; native editing and a larger source comparison follow separately. They are not features of
+this gateway replay demo.

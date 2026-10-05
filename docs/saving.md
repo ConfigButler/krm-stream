@@ -19,8 +19,9 @@ proves a rollout or Git workflow completed. A definite 409 rejection differs fro
 whose write outcome is unknown; do not blindly replay an ambiguous write.
 
 This guide describes projected editing through the current gateway. The requested native connector
-needs an explicit native read/write and edit-policy contract before sharing these recipes. A raw
-response must never be fed into a projected editor as recovery or save confirmation.
+starts with read-only viewing. Native editing is a later slice requiring an explicit read/write and
+edit-policy contract before sharing these recipes. A raw response must never be fed into a
+projected editor as recovery or save confirmation.
 
 The [conditional-save example](../examples/conditional-save/README.md) implements all of it: a
 compilable host endpoint, client reconciliation, race tests and a real-cluster 409 test.
@@ -158,7 +159,8 @@ and any receipt or Git workflow; connection state is not a save guarantee.
 |---|---|---|
 | `version-stale`, no field conflicts | “Configuration refreshed. Your edits are intact; review and save again.” | Capture a new intent on the next deliberate Save. Do not show an empty conflict panel. |
 | `draft-conflict` | Show local and current values at each conflicting field. | Offer explicit resolution: `revert` takes the server's value, the [keep-local recipe](../examples/editor-recipes/README.md#keep-the-local-value-in-a-conflict) keeps the person's. Keep the rest of the form visible. |
-| Connection retrying or `recovering` | “Reconnecting. Your unsaved changes are still here.” | Disable writes until live; after a refused GET, require a later accepted guarded read before another write. |
+| Connection `retrying` / `syncing` | “Reconnecting. Your unsaved changes are still here.” | Disable writes until live. |
+| Example editor outcome `recovering` | “Refreshing configuration. Your edits are still here.” | A usable base is not established; require an accepted guarded read before another write. This is not a connection status. |
 | `saved`, watch confirmation pending | “Saved to Kubernetes; waiting for live confirmation.” | Preserve later typing. Track any receipt separately from draft state. |
 | Session expiry or access denial | Explain sign-in or access outcome. | Handle identity-scoped recovery; do not retry terminal auth failures indefinitely or label them field conflicts. |
 | `unavailable`, deleted/recreated UID | “This configuration was removed. A replacement must be opened separately.” | Offer copy-out from a retained recovery copy; never apply the old draft to the replacement. |

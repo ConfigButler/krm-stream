@@ -1,6 +1,6 @@
 # Proposal 0010: Gateway API cleanup
 
-**Status: implemented on the stacked branch through `b5cc779`.** This is the decision record for
+**Status: implemented.** This is the decision record for
 PR #54. Use [the gateway README](../../gateway/README.md) for current setup and
 [upgrading from 0.7](../migrating.md#go-gateway) for the full migration table.
 
@@ -10,7 +10,8 @@ Keep one name per API, share stream configuration and remove repository-only run
 1.0. Preserve authorization, named projections, bounded HTTP delivery, shared-watch lifecycle and
 v1 wire behavior. The gateway remains the projected watch layer and current SSE delivery path;
 [native browser transport](../field-reports/third-our-identity.md#native-watch-connector) is separate
-requested work. SSE compatibility does not require duplicate Go APIs.
+requested work. The gateway remains the projected source over SSE; a native viewer does not require
+changes to its APIs or framing.
 
 | Area | Implemented result |
 |---|---|

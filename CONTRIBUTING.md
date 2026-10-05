@@ -17,8 +17,9 @@ Run `task fixtures-check`, `task test`, and `task lint` before opening a pull re
 
 Start with watch streams and authoritative resource views; add editing as an optional layer.
 The [README](README.md) explains current capabilities and the native-fetch direction. Current API
-examples must match this branch; native transport, editor cleanup and save-progress evaluation
-remain proposals until implemented.
+examples must match this branch. The next native slice is read-only LIST/WATCH using the existing
+lifecycle and state-input helper; editor cleanup, native editing and larger comparisons are separate.
+Native transport and save-progress evaluation remain proposals until implemented.
 
 - Keep the core gateway free of `client-go`; Kubernetes integration belongs in `gateway/kube`.
 - Keep the browser client framework-free and free of runtime dependencies.

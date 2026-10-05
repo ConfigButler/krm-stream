@@ -6,8 +6,9 @@ It is transport-neutral until `Handler` or `ServeStream` adds the current SSE fr
 Kubernetes client dependency; [`gateway/kube`](kube/) provides the client-go backend and authorizer.
 
 A fetch-based native browser connector is [requested work](../docs/field-reports/third-our-identity.md#native-watch-connector).
-The direction retains this gateway and SSE compatibility; native access alone does not provide these
-projected-view guarantees. See [watching resources](../docs/why-a-gateway.md) for the overall contract.
+Native is the original-resource source; this gateway delivers projected views over SSE. Native
+access alone does not provide these projected-view guarantees. A small native viewer can ship
+independently of native editing or changes to this gateway. See [watching resources](../docs/why-a-gateway.md) for the overall contract.
 
 ```go
 handler := gateway.Handler(gateway.Options{

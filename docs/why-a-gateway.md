@@ -60,7 +60,9 @@ recreated resource from an earlier object with the same name.
 
 The fetch connector exposes `connecting`, `syncing`, `live`, `retrying`, `closed`, `terminal` and
 `exhausted`. Apply state events synchronously before rendering completion. Retryable failures recover
-within the connector's bounded budget; 401/403 and terminal stream errors stop the connection.
+within the connector's bounded budget. For the current SSE connector, every HTTP 4xx except 408/429,
+terminal stream errors and a mismatched protocol header stop the connection. Native history-expiry
+410 needs different recovery; it must be classified by native transport, not this SSE rule.
 Dispose subscriptions and close the handle when their owner leaves. See the
 [client lifecycle reference](../packages/krm-stream/README.md#connections).
 
@@ -81,23 +83,26 @@ be bounded. Pair sharing with `kube.SubjectAccessReviewAuthorizer` for Kubernete
 See [shared-watch authorization](auth.md#shared-watch-authorization) and [operations](operations.md).
 Sharing reduces duplicate resource consumption; it does not supply a rate limiter or admission policy.
 
-## Native watch direction and SSE compatibility
+## Native and gateway sources
 
-The preferred direction is a fetch connector that consumes native Kubernetes watch JSON through a
-host proxy and reuses the frontend lifecycle and state-event input. An application with native API
-access should not need to wrap those frames in SSE to use the resource store. Native transport keeps
-upstream fields and does not provide the gateway's projection, redaction, suppression or sharing.
+Native access is the straightforward starting point for a host that already proxies Kubernetes.
+The requested native fetch connector adds lifecycle and state-store reuse while retaining original
+resource fields. The gateway adds defined views, redaction, suppression and watch sharing, delivered
+over SSE. Choose the guarantees the page needs. Native access alone does not provide those gateway
+capabilities, and `krm-raw/v1` still differs from native data.
 
-Keep the Go gateway and SSE as a supported compatibility path for consumers choosing that protocol,
-and as the existing delivery path for projected views. SSE is framing; fetch and `EventSource` are
-client mechanisms. Both native JSON and SSE can carry errors. The current fetch-based SSE connector
-already handles HTTP refusal, terminal in-stream errors, cancellation and bounded retries. Native
-`EventSource` has different header and retry limitations and cannot parse Kubernetes watch JSON.
+Both sources use fetch; native Kubernetes JSON and gateway SSE are different framing formats, and
+both can carry errors. The existing SSE connector already handles refusal, expiry, cancellation and
+bounded retries. Browser `EventSource` is a different client mechanism with header/retry limitations.
 
-A same-origin, cookie-authenticated host proxy can provide native access while retaining cluster
-credentials server-side. The [native connector request](field-reports/third-our-identity.md#native-watch-connector)
-is not implemented yet. Until its recovery and editing contracts pass acceptance, use the gateway
-connector described in [adoption](adopting.md). Applications must choose a source explicitly and never fall back to native access
-after a projected stream is refused.
+The [first native slice](field-reports/third-our-identity.md#slice-1-a-native-viewer) is a read-only
+viewer: ordinary LIST, then WATCH from the collection version, with a fresh LIST on every reconnect.
+It reuses the existing lifecycle and `LiveResourceStore(readOnlyPolicy)`. HTTP/in-stream 410 recovers
+within the bounded policy; terminal auth refusal never selects another source. An unexpected paginated
+response must be refused rather than marked complete. Native editing, resume and streaming lists follow
+separately; neither editor cleanup nor a comparative benchmark blocks the viewer.
 
-Use [adoption](adopting.md) for today's supported wiring and [saving](saving.md) when adding writes.
+Today use the [gateway wiring](adopting.md); native code snippets will be added with the implementation.
+A same-origin, cookie-authenticated host proxy keeps Kubernetes credentials server-side. Keep stores
+separate across sources, scopes and identities and never fall back from a refused projected source
+into native access. The native connector is not implemented by this documentation change.

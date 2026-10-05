@@ -20,14 +20,19 @@ The connector consumes and delivers state events independently of the editor.
 Do not mutate a `draft()` return value directly: reads are detached copies, and that bypasses edit
 policy and notifications. Independent sources/scopes need separate stores. Switching identity or view
 must not silently reuse drafts, redactions or snapshot state. Native watch integration is
-[requested](field-reports/third-our-identity.md#native-watch-connector); the current guidance assumes
-complete projected objects from the gateway.
+[requested](field-reports/third-our-identity.md#native-watch-connector). The first native slice uses the
+store read-only; this guide's editing and save examples currently use gateway views. Native editing
+requires a source-bound policy and host read/write contract in a later slice.
+
+Keep the existing standalone `applyStreamEvent(store, event)` for the native viewer. A bound store
+method is proposed editor cleanup in proposal 0009, not a current API or a prerequisite for native
+transport. No new store is needed.
 
 ## State per resource
 
 | Value | Meaning |
 |---|---|
-| `server(id)` | The latest delivered complete projected object. Every upsert replaces it. |
+| `server(id)` | The latest complete object delivered by the chosen source. Current gateway objects are projected; native objects retain upstream fields. Every upsert replaces it. |
 | `draft(id)` | The object rendered and edited by the UI. Editable regions are reconciled with server changes. |
 | `conflicts(id)` | Server values that changed concurrently with a different local edit. |
 | `redactions(id)` | Paths known to exist upstream but intentionally withheld by the selected projection. |

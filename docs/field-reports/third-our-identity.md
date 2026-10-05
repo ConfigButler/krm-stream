@@ -1,137 +1,106 @@
 # Watch streams, optional editing and native access
 
-**Current request, 2026-10-05.** Baseline: the stacked branch through PR #59 at `b5cc779`.
-This document records requested work. The [README](../../README.md), [watching guide](../why-a-gateway.md),
-[editor model](../client-state-model.md) and [saving guide](../saving.md) describe current use.
-[Proposal 0006](../proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order)
-consolidates completed work, delivery order, dependencies and deferred items.
+**Current request, 2026-10-05. Slice 1 is not implemented.** The implementation starting point includes
+connector separation, Go API cleanup and real-API save tests. Use [proposal 0006](../proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order)
+for completed work, delivery order and independent tracks.
 
 ## Identity and ownership
 
-krm-stream provides efficient live Kubernetes views for browser applications, with optional editing.
-Start with the watch: select an authorized scope, choose a view, maintain live resource state and
-recover safely. Add the editor when the page needs to preserve local work as the resource changes.
+krm-stream provides live Kubernetes resource state for browser applications, with optional editing.
+Its client adds connection lifecycle, recovery and a resource store. Its gateway adds named views,
+redaction, suppression and optional upstream watch sharing. Editing adds drafts, reconciliation,
+conflict review and captured save intent; the host owns every write.
 
-| Layer | Owns |
-|---|---|
-| Gateway | Scope and projection enforcement, redaction, suppression, optional upstream sharing and current SSE delivery |
-| Connector | Fetch/body decoding, connection state, errors, cancellation and bounded recovery |
-| Resource/editor store | Authoritative delivered objects, UID membership, snapshot pruning and optional draft reconciliation |
-| Host application | Credentials, login/session lifecycle, authorization policy, UI, writes and domain progress |
+| Source | Delivered content | Added value |
+|---|---|---|
+| Native through a host proxy — requested | Original Kubernetes resources the host authorizes, including Secret values and machinery fields | Reuse connection lifecycle and live state without adopting the gateway |
+| Gateway — supported today | Named projected views delivered over SSE | Selected disclosure, fewer downstream events and optional shared upstream watches |
 
-Projection controls delivered fields; suppression reduces downstream events; sharing reduces duplicate
-upstream watches. None replaces subscriber authorization or host resource limits. Full/spec views
-withhold core Secret values but disclose their paths and change revisions. They do not automatically
-redact every sensitive field in other resource kinds. See [watching resources](../why-a-gateway.md).
+Native is the straightforward entry point for a host that already proxies Kubernetes. Gateway SSE
+is the delivery format of the projected source, not a legacy label for its capabilities. Both sources
+use fetch and should share frontend lifecycle and state application. SSE and native JSON can both
+carry errors. The existing SSE connector already handles HTTP refusals and in-stream errors.
+
+Scope, projection, suppression and sharing have separate costs and guarantees; see
+[watching resources](../why-a-gateway.md). Full/spec redaction withholds core Secret values while
+revealing paths and change revisions. It does not classify arbitrary sensitive fields in other kinds.
+The host owns credentials, session validity, scope authorization, UI and resource limits.
 
 ## Native watch connector
 
-**Adoption reason:** the host already exposes native Kubernetes reads and watches through a
-session-authenticated proxy. A browser should consume those watches with fetch and reuse the resource
-lifecycle and editor without requiring an additional SSE wrapper. Native watch JSON is the preferred
-transport direction. Retain gateway SSE as a compatibility path for consumers seeking that protocol,
-and retain the projected gateway for redaction, suppression and watch sharing.
+**Adoption reason:** a host such as krm-foyer already exposes native collection URLs through its
+session-authenticated `/k8s` proxy. Its page should reuse krm-stream lifecycle and state without first
+wrapping native watch frames in SSE. Keep the projected gateway and its current v1 wire contract.
 
-SSE itself can carry errors. The current fetch-based SSE connector already handles HTTP refusals,
-in-stream errors, cancellation and bounded recovery. Browser `EventSource` has different header and
-retry limitations. The native request simplifies integration and framing; it does not claim that
-SSE cannot report an expired token. Compare error handling on both paths, including token/session
-expiry, and stop a refused connection until the host restores access.
+### Slice 1: a native viewer
 
-krm-foyer is the motivating host: its `/k8s` native proxy and `/stream/v1` gateway routes let a page
-choose either source under a session. Host integration and dependency upgrades remain separate work.
-Keep the Go gateway in this repository and preserve its existing v1 SSE contract.
+Deliver one small read-only connector, using the existing `ResourceStateEvent` consumer and
+`LiveResourceStore(readOnlyPolicy)`. Keep the standalone `applyStreamEvent` API for this slice;
+proposal 0009's bound-method/editor cleanup is independent. No second store, framework or native
+write endpoint is needed. A short contract, executable example and focused tests belong in this
+change; native editing and the larger comparison project do not gate it.
 
-### Contract before implementation
+- Use caller-supplied fetch or global fetch, same-origin credentials by default and cancellable reads.
+- Perform an ordinary collection LIST, then WATCH from its collection resourceVersion. Emit `reset`,
+  an `added` for each member and `synced` for a complete snapshot, including an empty collection.
+  Declare live only after snapshot application and watch acceptance; do not start the healthy-period
+  timer while the watch request is still opening.
+- Require a complete unpaginated LIST in slice 1. Do not request a page limit. If the response has a
+  nonempty continuation token, refuse the unsupported partial collection with a clear terminal error
+  before emitting `reset` or `synced`; it is not safe to prune from one page.
+- Validate collection items and identity before delivery. Supply missing item type metadata from a
+  concrete typed collection where valid, preserving fields already present; never guess kind from a
+  plural resource URL or label an item with the collection's `List` kind.
+- Decode native JSON frames across byte/chunk boundaries, including split UTF-8. Map resource events
+  to added/modified/deleted and derive deletion identity from the object. Bookmarks affect neither
+  membership nor an individual object's version; resume checkpoints are unnecessary for slice 1.
+- Every reconnect starts a fresh LIST. HTTP/in-stream 410 triggers bounded recovery to a fresh
+  snapshot. Do not route native 410 through the SSE transport's terminal HTTP classification.
+- HTTP/in-stream 401/403 and other 4xx except 408/429/410 are terminal. Retry transient failures,
+  408/429, 5xx, malformed/truncated frames and EOF with the existing bounded budget/backoff and hints.
+  Repeated 410/short EOF must not create an immediate re-list loop.
+- Share lifecycle and HTTP/error helpers where useful, without importing native framing through an
+  SSE encoder/decoder. No SSE sequence or gateway protocol-header check belongs to native transport.
+- Close/abort cancels LIST, WATCH, body reads and sleep; no subsequent events or live publication.
+  Host consumer/subscriber/error-handler exceptions preserve existing cleanup and rejected completion.
+- Use separate stores for separate sources, scopes and identities. Never fall back from a refused
+  projected source to native access. Raw/native objects have no gateway projection or redaction revisions.
 
-Provide a browser connector for a native Kubernetes collection URL through a host proxy. Use fetch,
-including caller-supplied fetch and same-origin cookies, without Node polyfills or browser Kubernetes
-credentials. Reuse the existing frontend lifecycle and state-event input. API names are not settled;
-one lifecycle does not require pretending the two wire protocols are the same.
+### Acceptance for slice 1
 
-- Expose initialization, live state, stale state during reconnect, terminal refusal, explicit closure
-  and retry exhaustion. Consumer callback failures follow the existing cleanup-and-reject rule.
-- Decode native watch frames directly into state events; do not encode them as SSE to parse them again.
-- Separate collection resume checkpoints from object edit preconditions. A bookmark cannot supply an
-  individual object's edit version. Advance checkpoints only after successful state application.
-- Represent native view identity explicitly, without inventing a gateway projection or redaction
-  revisions. Retain native fields for viewing; exclude machinery fields from accidental edits,
-  including the last-applied annotation. Define the host validation and native read/write contract.
-- Require explicit source selection. Never retry a refused projected stream through native access.
-  Source, target, scope, view or login-identity changes must not silently combine drafts or redactions.
-- Preserve save guards, submitted intent and later typing. A no-op or superseded write cannot wait
-  forever for an exact echo. Track dirty drafts, write acceptance and domain progress separately.
+Tests cover an empty collection; complete-list validation, unexpected continuation and type metadata;
+chunked frames; malformed/truncated input; initial/list/watch failures; HTTP/in-stream 410 and auth
+refusal; transient retries, exhaustion and retry hints; close during fetch/read/backoff; host callback
+exceptions; UID replacement and missed deletes or selector exits repaired by re-list. Verify live
+readiness, fresh snapshot pruning and preserved existing SSE lifecycle behavior.
 
-Start with a proposal and an executable example. Expose the connector only once recovery, state
-membership and editing contracts have passed acceptance. Keep the supported gateway connector in
-place until then; do not advertise a native API in adoption snippets.
+Add a minimal native viewer with identity, current fields and connection state. It makes no save
+claims and demonstrates cleanup. Show how to target an existing host proxy. If an existing real-API
+harness can exercise LIST/WATCH cheaply, add one focused integration case and report its actual run;
+a new cluster campaign is not a prerequisite. Existing tests still apply to any changed lifecycle.
 
-### Recovery acceptance
+## Follow-ups after the viewer
 
-| Scenario | Required result |
-|---|---|
-| Initial streaming list, including an empty collection | `reset`, initial members, then `synced` only at the initial-end bookmark |
-| EOF/read failure before the initial boundary | Restart initialization; an individual initial object's RV does not prove collection completeness |
-| Disconnect after initialization | Resume from the last applied event/bookmark; retain membership, with no reset or snapshot pruning for a successful resume |
-| HTTP or in-stream 410 | Start a fresh snapshot; retain old state as stale until completion, then prune missed deletes |
-| API explicitly lacks streaming-list support | Complete a paginated list, then watch from its collection RV; auth and transient failures are not feature refusal |
-| HTTP or in-stream 401/403 | Terminal for this connection; no retry loop or source fallback; a later accepted login can create another connection |
-| 429/5xx, network failure, repeated short EOF | Bounded backoff and retry budget honoring hints; no hot loop |
-| Close while reading or sleeping | Cancel request/backoff, release reader and deliver no later updates |
-| Chunked UTF-8/JSON, malformed/truncated frame | Parse complete frames across chunks; partial input never completes a snapshot |
-| Delete/recreate with the same name | New UID is separate; late responses cannot resurrect the old resource |
-| Label-scope entry/exit | Membership follows the watch, including removal without an upstream delete |
+Native editing is a separate slice: define the editable policy, exclude machinery and last-applied
+annotation changes, and bind host reads/writes to the same source and UID. Preserve later typing,
+submitted intent and reconciliation guards. A native response must not recover a projected editor.
+Keep [the editor model](../client-state-model.md) and [saving guide](../saving.md) as the detailed contracts.
 
-Cover repeated retry failure, expired list continuations, partial snapshots, scope/source changes and
-cancellation during recovery. Do not assume periodic bookmarks: idle watches still need recovery.
-Specify live/stale presentation during a successful resume without fabricating a `synced` snapshot.
+Resumable native watches, streaming-list initialization and pagination are later improvements with
+their own recovery tests. Slice 1 improves adoption and lifecycle reuse; re-listing on every reconnect
+does not claim resume efficiency. Gateway upstream continuation has a different checkpoint owner and
+can proceed independently. Neither implies browser replay for gateway SSE v1.
 
 ## Show the value of each path
 
-Use one small frontend and workload for native, `krm-full/v1` and `krm-spec/v1` views. Reuse rendering
-and editing where their contracts permit it. Show a read-only view first, then an editor with local
-image changes, unrelated replica changes and a real overlapping edit. No new dashboard or framework.
-
-| Operation | Native | Full | Spec |
-|---|---|---|---|
-| Initial load / spec edit | Original resource | Projected resource | Projected resource without status |
-| Status-only update | Update | Update | No object event |
-| Managed-fields-only update | Update | No object event | No object event |
-| Rotate a test Secret | Authorized reader gets value | Value absent; redaction revision changes | Value absent; redaction revision changes |
-| Reconnect after delete | Resume or resnapshot | Snapshot prunes absent UID | Snapshot prunes absent UID |
-
-Compare shared and unshared gateway runs separately, with identical scopes and multiple authorized
-subscribers. Sharing is independent of view selection; a native/full/spec table alone cannot establish
-upstream savings. Different scopes do not automatically share.
-
-Use synthetic Secret values and assert their absence from full/spec transcripts, including after
-reconnect. Verify unauthorized callers and expired sessions on both paths, and that shared identity
-or fallback cannot grant access. A host's separately authorized native route can disclose Secret
-values; view selection is not a universal field-permission system.
-
-Measure downstream bytes/events, store notifications/renders, snapshot size and apply time, upstream
-watches, gateway work and conditional-save outcomes under the same object counts and controller churn.
-Report reconnect costs and authorization work. Suppression reduces downstream work; sharing reduces
-upstream duplication; native resume can reduce snapshot work. Establish each benefit with measurements.
+After the viewer works, compare native/full/spec and shared/unshared gateway runs using the same
+objects and churn. Demonstrate Secret disclosure, downstream bytes/events, notifications/renders,
+snapshots, authorization work and upstream watches. Add editing once its native contract exists.
+Keep this comparison and the larger benchmark outside slice 1; begin with the small viewer.
 
 ## Save progress under suppressed churn
 
-A person editing spec should not repeatedly need a second Save when none of the relevant values
-changed. Keep low browser traffic and real conflict protection. The current supported recovery is a
-guarded projected read followed by review and another deliberate Save.
-
-[Proposal 0006, save-progress evaluation](../proposals/0006-stream-and-save-implementation-plan.md#5-save-progress-under-suppressed-churn)
-owns evaluation of bounded submitted-intent recovery and optional coalesced version delivery, reusing
-the real-API fixtures. It specifies guards, compatibility, measurements and acceptance; this request
-does not duplicate them or commit to a new wire event. The evaluation can retain today's baseline.
-
-## Relationship to upstream continuation and adoption
-
-Proposal 0006's upstream continuation runs inside the gateway's Kubernetes backend; the native
-connector resumes a browser-owned watch through a proxy. They have different checkpoint owners and
-authorization lifecycles. Share scenarios, not cursors. Neither adds browser resume to gateway SSE v1.
-
-After the native connector is released, a host can upgrade and exercise both routes under the same
-session, expiry and RBAC tests. Projected editors need projected recovery reads; a transparent native
-proxy is not itself a replacement for that host contract. Current branch APIs and future requests
-must remain distinct from a consumer's pinned dependency version.
+[Proposal 0006](../proposals/0006-stream-and-save-implementation-plan.md#5-save-progress-under-suppressed-churn)
+owns the independent evaluation of bounded submitted-intent recovery and optional coalesced version
+delivery. Current projected recovery remains a guarded read, review and another deliberate Save.
+It does not block the native viewer and does not authorize an automatic write policy in slice 1.

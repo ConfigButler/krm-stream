@@ -14,7 +14,7 @@ Efficient live Kubernetes views for browser applications, with optional editing.
 
 `krm-stream` helps applications watch Kubernetes resources while controllers and other users keep
 changing them. Its gateway delivers a defined resource view, withholds selected values, suppresses
-irrelevant updates and optionally shares upstream watches. Its headless TypeScript client maintains
+irrelevant updates and optionally shares upstream watches. Its headless TypeScript client adds connection lifecycle, recovery and
 live state and reconciles incoming changes with local drafts when a page needs editing.
 
 Your application supplies authentication, authorization policy, Kubernetes credentials, UI and writes.
@@ -43,23 +43,24 @@ Choose a view explicitly:
 All three remove `metadata.managedFields` and the last-applied-configuration annotation.
 `krm-raw/v1` is still a projection. A hidden Secret rotation produces a redaction update in full/spec.
 
-Each browser connection starts with a complete snapshot, then follows visible changes. On reconnect,
+Each current gateway connection starts with a complete snapshot, then follows visible changes. On reconnect,
 a fresh snapshot repairs missed changes and deletes; resources are pruned only when it completes.
 This is a live state feed: intermediate updates may be coalesced. See [watching resources](docs/why-a-gateway.md).
 
-## Transport direction and current support
+## Choose a source
 
-The preferred direction is to consume native Kubernetes watches through a host proxy using fetch,
-with one frontend lifecycle for state, errors, cancellation and bounded recovery. Hosts that already
-provide native API access should not need to translate it into SSE to reuse the client.
-Keep gateway SSE as a compatibility path for applications choosing that protocol, and retain the
-projected gateway for redaction, suppression and watch sharing.
+Start with the resource state and guarantees the page needs; framing is an implementation detail.
 
-**Today, the supported connector consumes gateway SSE through fetch.** The native watch connector
-is [requested work](docs/field-reports/third-our-identity.md#native-watch-connector), not an available API.
-SSE framing can carry errors; the current fetch connector handles HTTP refusals and in-stream errors,
-including authentication expiry. The native direction simplifies framing and integration rather than
-introducing error handling for the first time. No transport fallback may bypass a refused view.
+| Source | Use it for | Current support |
+|---|---|---|
+| Native through a host proxy | Original Kubernetes resources without adopting the gateway; credentials stay on the host | A focused read-only fetch connector is [next work](docs/field-reports/third-our-identity.md#native-watch-connector) |
+| Gateway | Named views, Secret-value redaction, suppression and optional upstream sharing | Supported today through the fetch/SSE connector |
+
+Native is the straightforward starting point for hosts that already proxy Kubernetes. Gateway SSE
+is the delivery format for projected views; its added capabilities remain useful. Both sources should
+reuse connection state, errors, cancellation, bounded recovery and state application.
+The first native slice lists then watches and re-lists on reconnect. Native editing, resume and a
+larger comparison example follow separately. No source fallback may bypass a refused view.
 
 ## Watch a resource view today
 

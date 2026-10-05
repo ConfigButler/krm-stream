@@ -1,6 +1,6 @@
 # Proposal 0009: Stream and editor separation
 
-**Status: partly implemented on the stacked branch through `b5cc779`.** One event-based connector,
+**Status: partly implemented.** One event-based connector,
 host-callback failure handling and the adopted-save snapshot-membership fix are implemented.
 Editor API cleanup remains proposed. A dedicated read-only store and separate entry points remain
 deferred. Current APIs are documented in the [client README](../../packages/krm-stream/README.md) and
@@ -22,9 +22,11 @@ together; [saving](../saving.md) owns the conditional-write contract. Keep those
 rather than duplicating them in this implementation plan.
 
 The [native-watch request](../field-reports/third-our-identity.md#native-watch-connector) extends this
-separation: prefer fetch consuming native Kubernetes frames where the host provides a proxy, with
-SSE retained as a compatibility path and the current gateway delivery format. Share lifecycle and
-state application without converting native JSON to SSE. Native support is not implemented here.
+separation: native is the original-resource source through a host proxy; the gateway provides
+projected views over SSE. Share lifecycle and state application without converting native JSON to SSE.
+The first native slice is a read-only viewer using today's event consumer and standalone
+`applyStreamEvent`. It does not depend on the editor cleanup below or a new store. Native support
+is not implemented here; native editing follows separately.
 
 ## Implemented connector and correctness fixes
 

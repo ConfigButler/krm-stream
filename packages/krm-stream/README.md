@@ -12,8 +12,11 @@ stream in a browser or JavaScript application. It provides:
 Start with a watch-backed list or viewer; add draft reconciliation only when the page needs editing.
 The package is headless and does not choose a UI framework. Today it consumes gateway SSE through
 fetch, from the Go gateway or another v1 producer. A fetch-based native Kubernetes watch connector
-is the [preferred direction and requested work](../../docs/field-reports/third-our-identity.md#native-watch-connector),
-with gateway SSE retained as a compatibility path. It is not an available connector yet.
+is [next work](../../docs/field-reports/third-our-identity.md#slice-1-a-native-viewer): a read-only
+LIST/WATCH source with re-list recovery and a small viewer, reusing the same lifecycle and store.
+Native retains original authorized resources; gateway SSE delivers projected views with redaction,
+suppression and optional sharing. The native connector is not implemented yet; editing and resume
+are later slices. Keep current `applyStreamEvent` unchanged for the viewer.
 
 ```ts
 import { LiveResourceStore, readOnlyPolicy, applyStreamEvent, connectResourceStream, resourceStreamURL } from "@configbutler/krm-stream";
@@ -72,7 +75,7 @@ unsubscribe();
 connection.close();
 ```
 
-`connectResourceStream` is the package's one connector. It uses fetch for same-origin cookies or
+`connectResourceStream` is the current gateway connector. It uses fetch for same-origin cookies or
 bearer headers; `credentials: "include"` opts into cross-origin cookies. It decodes and
 sequence-checks the stream, and calls your callback synchronously, exactly once per state event
 (`reset`, `added`, `modified`, `deleted`, `synced`), in stream order, without the wire `seq`.
