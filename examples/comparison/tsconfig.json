@@ -1,0 +1,16 @@
+{
+  // Typechecks the comparison page, the measurement driver and their tests with the client package's
+  // compiler and strictness. Nothing is emitted: build.mjs strips the page's types and node strips the driver's.
+  //
+  //   task test-compare
+  "extends": "../../packages/krm-stream/tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    // node runs the driver by stripping types: only erasable syntax.
+    "erasableSyntaxOnly": true,
+    "rootDir": "../..",
+    "types": ["node"],
+    "typeRoots": ["../../packages/krm-stream/node_modules/@types"]
+  },
+  "include": ["*.ts"]
+}

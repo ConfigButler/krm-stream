@@ -1,7 +1,7 @@
 # Watch streams, optional editing and native access
 
-**Request of 2026-10-05. Slice 1, the native viewer, slice 2, native editing, and native watch
-resumption are implemented; the other follow-ups below remain open.** It builds on the connector separation, Go API cleanup and real-API save tests. Use
+**Request of 2026-10-05. Slice 1, the native viewer, slice 2, native editing, native watch
+resumption and the comparison example are implemented; the other follow-ups below remain open.** It builds on the connector separation, Go API cleanup and real-API save tests. Use
 [proposal 0006](../proposals/0006-stream-and-save-implementation-plan.md#open-work-and-delivery-order)
 for completed work, delivery order and independent tracks.
 
@@ -156,7 +156,7 @@ Each is separate from the slices above and from the others:
 
 - Native resume — **implemented**, see [below](#native-watch-resumption); streaming lists and
   pagination remain open.
-- Comparative view and sharing measurements.
+- Comparative view and sharing measurements — **implemented**, see [below](#show-the-value-of-each-path).
 - Independent gateway continuation and save-progress evaluation.
 - The independently proposed editor API cleanup in proposal 0009.
 
@@ -206,10 +206,25 @@ and not implemented.
 
 ## Show the value of each path
 
-After the viewer works, compare native/full/spec and shared/unshared gateway runs using the same
-objects and churn. Demonstrate Secret disclosure, downstream bytes/events, notifications/renders,
-snapshots, authorization work and upstream watches. Include editing on both sources.
-Keep this comparison and the larger benchmark outside slice 1; begin with the small viewer.
+**Implemented** as the [comparison example](../../examples/comparison/README.md), with dated runs in
+[comparison-2026-10-05](../facts/comparison-2026-10-05.md). One host serves the same Widgets and
+Secrets through a credential-holding native proxy and `krm-full/v1` and `krm-spec/v1` gateway routes,
+unshared and shared, behind one session check; a refused session ends with a terminal refusal and
+never falls back to native. The page edits every source with the existing editors and keep-local
+recipe (later typing during a save, conflicts, recovery) and shows Secret disclosure, status-only
+suppression and hidden rotations. `measure.ts` runs identical quiet, burst, churn and
+forced-disconnect schedules with the real connectors and stores, rejects any run whose workload did
+not do everything it planned or whose stores did not converge with the cluster (projected Secret
+stores must hold each final rotation's version), and reports LIST/WATCH requests, snapshots, upstream watches, downstream bytes/events,
+store notifications, coalesced renders and authorizer/session checks. Every number in the report is
+real-API evidence from one disposable cluster; API-server-side RBAC on native requests, browser
+paint, memory/CPU and save progress under churn are not measured. A general dashboard or benchmark
+framework remains out of scope.
+
+The native before/after run in that report measures resumption under the same four workloads: with
+10 subscribers and 12 forced reconnects, LISTs fell from 120 to 0, resets from 120 to 0 and bytes to
+the browser from 1295 KiB to 723 KiB, with the same writes delivered and every store converged.
+Expiry still re-lists by design and was not part of those workloads.
 
 ## Save progress under suppressed churn
 

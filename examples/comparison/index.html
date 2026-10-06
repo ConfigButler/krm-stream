@@ -1,0 +1,142 @@
+<!doctype html>
+<!--
+  examples/comparison — the same Widgets and Secrets through native access and the gateway's
+  krm-full/v1 and krm-spec/v1 views, side by side, with editing on each, live counters and the host's
+  own metrics. Served by the comparison host (gateway/kube/examples/comparison):
+
+    task compare   →   http://127.0.0.1:8110/          (sets the session cookie, opens this page)
+
+  Query parameters:  [entry=bundle]  [variant=shared]
+
+  dist/page.js is page.ts compiled by build.mjs (`task build-compare-page`). See README.md.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>krm-stream — native, full and spec compared</title>
+    <script>
+      // Where "@configbutler/krm-stream" lives, for this page and the editors compiled into
+      // dist/page.js: the per-module build or, with ?entry=bundle, the single file.
+      {
+        const entry = new URLSearchParams(location.search).get("entry") === "bundle" ? "krm-stream.js" : "index.js";
+        const library = new URL(`../../packages/krm-stream/dist/${entry}`, location.href).href;
+        const map = document.createElement("script");
+        map.type = "importmap";
+        map.textContent = JSON.stringify({ imports: { "@configbutler/krm-stream": library } });
+        document.currentScript.after(map);
+      }
+    </script>
+    <style>
+      :root { color-scheme: light dark; }
+      body { font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; margin: 0; padding: 1rem 1.25rem; }
+      h1 { font-size: 1rem; margin: 0 0 .25rem; }
+      h2 { font-size: .85rem; margin: 0 0 .25rem; }
+      h3 { font-size: .72rem; text-transform: uppercase; letter-spacing: .08em; opacity: .65; margin: .8rem 0 .3rem; }
+      button, input, select { font: inherit; }
+      .sub, .muted { opacity: .65; }
+      .controls { display: flex; flex-wrap: wrap; gap: .4rem .8rem; align-items: center; margin: .6rem 0; }
+      .grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+      @media (max-width: 1100px) { .grid { grid-template-columns: 1fr; } }
+      .column { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 6px; padding: .6rem .75rem; min-width: 0; }
+      table { border-collapse: collapse; width: 100%; }
+      th, td { text-align: left; padding: .15rem .35rem; border-top: 1px solid color-mix(in srgb, currentColor 12%, transparent); overflow-wrap: anywhere; }
+      th { font-weight: normal; opacity: .7; }
+      fieldset { border: 0; padding: 0; margin: 0; min-width: 0; }
+      label { display: block; margin: .2rem 0; }
+      input.dirty { outline: 2px solid #2563eb; }
+      input.conflicted { outline: 2px solid #dc2626; }
+      ul { margin: 0; padding-left: 1.1rem; }
+      [data-role=error] { color: #dc2626; }
+      [data-role=state][data-status=live] { color: #16a34a; }
+      [data-disclosure=values] { color: #b45309; }
+      #admin-result, #refused-result { overflow-wrap: anywhere; }
+      .warn { color: #b45309; }
+    </style>
+  </head>
+  <body>
+    <h1>Native, krm-full/v1 and krm-spec/v1 — compared</h1>
+    <p class="sub" id="target"></p>
+    <p class="warn" id="protocol" role="alert"></p>
+
+    <div class="controls">
+      <label>gateway routes
+        <select id="variant">
+          <option value="unshared">unshared (one upstream watch per stream)</option>
+          <option value="shared">shared (one upstream watch per scope)</option>
+        </select>
+      </label>
+      <label>edit widget <select id="widget"></select></label>
+      <button id="competing" type="button" title="Another writer changes spec.note on the server">Competing write</button>
+    </div>
+    <div class="controls">
+      <label>workload <select id="workload"></select></label>
+      <label>duration ms <input id="duration" type="number" value="10000" min="1000" step="1000" size="6" /></label>
+      <button id="run" type="button">Run</button>
+      <button id="disconnect-native" type="button">Disconnect native</button>
+      <button id="disconnect-gateway" type="button">Disconnect gateway</button>
+      <button id="disconnect-all" type="button">Disconnect all</button>
+      <button id="reset-counters" type="button">Reset counters</button>
+    </div>
+    <p id="admin-result" class="muted" role="status"></p>
+
+    <div class="grid">
+      <section class="column" data-source="native"></section>
+      <section class="column" data-source="full"></section>
+      <section class="column" data-source="spec"></section>
+    </div>
+
+    <h3>Host metrics <span class="muted">(since the last reset; gateway rows count every route, whichever this page shows)</span></h3>
+    <table>
+      <thead><tr id="metrics-head"></tr></thead>
+      <tbody id="metrics"></tbody>
+    </table>
+    <p class="muted">
+      Kubernetes' own authorization of each forwarded native request happens inside the API server and
+      is not visible to this host.
+    </p>
+
+    <h3>A refused session</h3>
+    <p>
+      <button id="refused-open" type="button">Open the gateway as the refused session</button>
+      <span id="refused-result" role="status"></span>
+    </p>
+    <p class="muted">
+      Native requests made by the refused session: <strong id="refused-native">0</strong>. A refusal is final:
+      this page never retries a refused source through /k8s.
+    </p>
+
+    <template id="column">
+      <div>
+        <h2><span data-role="title"></span> <span class="muted" data-role="route"></span></h2>
+        <p>state: <strong data-role="state">connecting</strong> <span data-role="error"></span></p>
+        <p class="muted" data-role="counters"></p>
+
+        <h3>Widgets</h3>
+        <table>
+          <thead><tr><th>name</th><th>rv</th><th>replicas</th><th>revision</th><th>note</th><th>status</th></tr></thead>
+          <tbody data-role="rows"></tbody>
+        </table>
+
+        <h3>Edit the selected widget's spec</h3>
+        <fieldset data-role="editor" disabled>
+          <label>spec.note <input data-role="note" /></label>
+          <label>spec.replicas <input data-role="replicas" type="number" min="0" /></label>
+          <p class="muted" data-role="dirty"></p>
+          <ul data-role="conflicts"></ul>
+          <p><button data-role="save" type="button">Save</button> <span data-role="outcome" role="status"></span></p>
+        </fieldset>
+
+        <h3>Secrets</h3>
+        <ul data-role="secrets"></ul>
+      </div>
+    </template>
+
+    <p class="warn">
+      The native column shows Secret values: native access returns objects exactly as the API server
+      does. The gateway columns name redacted paths and their revisions, never values.
+    </p>
+
+    <script type="module" src="./dist/page.js"></script>
+  </body>
+</html>
