@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.10.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.9.0...gateway/kube/v0.10.0) (2026-10-06)
+
+
+### Features
+
+* **client:** resume native watches from a consumed checkpoint ([#66](https://github.com/ConfigButler/krm-stream/issues/66)) ([bc8a8fb](https://github.com/ConfigButler/krm-stream/commit/bc8a8fbdbe35cec33cec463bf66bf77d0fd687d3))
+* **examples:** compare native, full and spec sources with measurements ([#67](https://github.com/ConfigButler/krm-stream/issues/67)) ([1bad87d](https://github.com/ConfigButler/krm-stream/commit/1bad87d3a3ad28d0d1791cfaf1e580cf390aed0c))
+
 ## [0.9.0](https://github.com/ConfigButler/krm-stream/compare/gateway/kube/v0.8.0...gateway/kube/v0.9.0) (2026-10-05)
 
 
