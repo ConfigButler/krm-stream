@@ -34,6 +34,15 @@ See [quiet streams and saving](saving.md#why-a-quiet-stream-can-still-reject-a-s
 as bookmarks and errors. History can expire and initialization/recovery must establish a complete
 collection boundary. The current gateway handles these mechanics for its browser clients.
 
+**Bookmark** is a watch event that carries only a collection resource version: "the stream has
+reached here". It changes no object and is not an object's write version.
+
+**Checkpoint** is the collection resource version a watch can resume from: the last event the client
+applied, or the last bookmark. `connectNativeWatch` keeps one per connection handle, privately, and
+**resumes** a dropped WATCH from it instead of listing again; the server replays what followed. When
+the server reports the history expired (410), the checkpoint is discarded and a fresh snapshot
+recovers. Gateway browser connections do not resume: each starts a snapshot.
+
 **Scope** selects a target, resource kind, namespace, optional name and allowed labels. The host
 still authorizes the request; a selector does not grant permission.
 

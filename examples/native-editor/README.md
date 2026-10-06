@@ -71,6 +71,10 @@ Add `entry=bundle` to load the single-file build.
 
 - Save is enabled only while the watch is `live`, no request is in flight and no conflict is open.
   Typing continues during a save, and inputs keep focus and caret through watch events and reads.
+- A dropped or ended watch resumes from the last event applied, without a new snapshot: the draft
+  and any conflict stay, Save is disabled until the resumed watch is accepted, and changes made
+  meanwhile are merged in as ordinary watch events. After a 410 (expired history) the page lists
+  again; Save stays disabled until that snapshot's watch is accepted, and the draft survives it.
 - `saved` waits for the watch. The next version it delivers includes the write; fields still dirty
   then were typed after Save or not kept by the server. With no echo within `echoWaitMs`, the page
   offers **Confirm current state**, which calls `editor.confirm()`. A network failure or a 5xx
@@ -103,7 +107,8 @@ the page and plays the host proxy and API server, with a watch that stays open w
 save and its echo, typing while a save is in flight, 409 recovery and a later deliberate Save,
 explicit conflict resolution, a lost response and a 502 each settled by a GET before any further
 PATCH, an accepted write without an echo confirmed explicitly, refusals, multiline values, a deletion
-and a UID replacement each with copy-out, and disconnect.
+and a UID replacement each with copy-out, a draft kept through a resumed watch and through the
+re-list after an expiry, and disconnect.
 
 ## What it protects
 

@@ -72,7 +72,10 @@ export interface TransportHooks {
   opened(): void;
   /** A snapshot is starting. Called before the consumer sees its `reset`. */
   reset(): void;
-  /** The consumer has applied `synced` and the connection is still open: the stream is live. */
+  /** The stream is live, with the connection still open: either the consumer has applied `synced`,
+   * or a resumed watch was accepted and the consumer's state is already complete — it holds
+   * everything up to the watch's checkpoint, and the watch delivers what follows. A resumed watch
+   * calls neither `opened` nor `reset`, so it goes `connecting` → `live` without `syncing`. */
   synced(): void;
   /** A missing or duplicated event. The event beyond the gap was discarded; the connection ends. */
   gap(expected: number, received: number): void;

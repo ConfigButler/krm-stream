@@ -18,8 +18,9 @@ Run `task fixtures-check`, `task test`, and `task lint` before opening a pull re
 Start with watch streams and authoritative resource views; add editing as an optional layer.
 The [README](README.md) explains current capabilities and how to choose a native or gateway source.
 Current API examples must match this branch. Native viewing is LIST/WATCH on the shared
-connection lifecycle, and native editing writes conditional merge patches back through the same
-proxy; native resume, editor cleanup and larger comparisons are separate. Save-progress evaluation remains a proposal until implemented.
+connection lifecycle and resumes ordinary reconnects from a per-handle checkpoint, and native editing
+writes conditional merge patches back through the same proxy; streaming lists, pagination, editor
+cleanup and larger comparisons are separate. Save-progress evaluation remains a proposal until implemented.
 
 - Keep the core gateway free of `client-go`; Kubernetes integration belongs in `gateway/kube`.
 - Keep the browser client framework-free and free of runtime dependencies.

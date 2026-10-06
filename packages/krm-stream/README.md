@@ -136,26 +136,48 @@ guarantees as `connectResourceStream`. `nativeCollectionURL` builds core (`/api/
 `labelSelector`; `name` becomes `fieldSelector=metadata.name=<name>`, so a named object can be absent,
 deleted and recreated like any member. The host mounts the API server under the base, such as `/k8s`,
 and owns credentials, routing and authorization; the collection URL must not set `watch`,
-`resourceVersion`, `limit` or `continue`, which the connector controls.
+`resourceVersion`, `resourceVersionMatch`, `limit`, `continue`, `sendInitialEvents` or
+`allowWatchBookmarks`, which the connector controls.
 
-Each connection performs an ordinary LIST, validates every item's UID and name, and fills a missing
-item `apiVersion`/`kind` from a typed collection (`ConfigMapList` lists `ConfigMap`s; type metadata
-already present is kept). It delivers `reset` and an `added` per member, then opens a WATCH from the
-collection's `resourceVersion` with the same selectors, and delivers `synced` — publishing `live` —
-only once that WATCH is accepted. Watch events map to `added`, `modified` and `deleted` (with the
-identity of the deleted object); bookmarks change nothing. Every reconnect lists again, so prior
-state is kept until a replacement snapshot completes and prunes what it no longer lists: deletes and
-selector exits missed while disconnected, or a same-name object recreated with a new UID.
+The first connection performs an ordinary LIST, validates every item's UID and name, and fills a
+missing item `apiVersion`/`kind` from a typed collection (`ConfigMapList` lists `ConfigMap`s; type
+metadata already present is kept). It delivers `reset` and an `added` per member, then opens a WATCH
+from the collection's `resourceVersion` with the same selectors and `allowWatchBookmarks=true`, and
+delivers `synced` — publishing `live` — only once that WATCH is accepted. Watch events map to
+`added`, `modified` and `deleted` (with the identity of the deleted object). Bookmarks are never
+delivered and change no object.
 
-HTTP or in-stream 410 (expired watch history), 408, 429, 5xx, network failures, EOF, and malformed or
-truncated frames are reported where applicable and consume the bounded retry budget; repeated expiry
-cannot re-list in a tight loop. A Kubernetes `Status` message reaches `onError`, and its
-`retryAfterSeconds` or an HTTP `Retry-After` sets the least the next reconnect waits. HTTP or in-stream
-401, 403 and other 4xx are terminal. This release does not paginate: a LIST with a continuation token
-is refused with a terminal error before anything is applied, because pruning from one page would
-remove the others. Native objects carry whatever the proxy returns, including Secret values and
-machinery fields; there is no projection, redaction or `seq`. Never fall back to native access after a
-gateway refuses a view.
+From then on the handle keeps a checkpoint: the `resourceVersion` of the last event the consumer
+applied, or of the last bookmark. An EOF, a network failure, a watch cut off inside a frame, or a
+retryable refusal (408, 429 or 5xx, as an HTTP status or in the stream) **resumes** the WATCH from
+that checkpoint with the same selectors: no LIST, no `reset` and no `synced`. The state goes
+`connecting` → `live` once the resumed WATCH is accepted, without `syncing`, and the store keeps its
+members, drafts and conflicts. Whatever changed meanwhile arrives as ordinary events: updates as
+`modified`, deletes and selector exits as `deleted`, a same-name object recreated with a new UID as
+the old UID's `deleted` and the new one's `added`. This is sound for the same reason a live watch
+is: the store holds everything up to the checkpoint and the WATCH delivers everything after it, in
+order; a conditional save's `resourceVersion` precondition protects a write against anything
+stale. The checkpoint is private to one handle — never exposed, accepted from a caller or shared —
+so it is bound to that handle's URL, selectors and credentials. Resource versions are opaque: the
+checkpoint is replaced in stream order and never compared.
+
+HTTP or in-stream 410 (expired watch history) is reported as `RESYNC_REQUIRED` and discards the
+checkpoint, as do malformed frames and an in-stream error without a code. The next connection then
+lists again, and prior state is kept until that replacement snapshot completes and prunes what it no
+longer lists. An initialization interrupted before `synced` leaves no checkpoint either. While it
+recovers the state is `retrying`, `connecting` or `syncing`, never `live`, so an editor gated on
+`live` stays disabled. Every reconnect, resumed or not, consumes the bounded retry budget with
+backoff, so repeated expiry cannot re-list in a tight loop. A Kubernetes `Status` message reaches
+`onError`, and its `retryAfterSeconds` or an HTTP `Retry-After` sets the least the next reconnect
+waits. HTTP or in-stream 401, 403 and other 4xx are terminal, on a resumed WATCH too.
+
+This release neither paginates nor uses streaming lists (`sendInitialEvents`): a LIST with a
+continuation token is refused with a terminal error before anything is applied, because pruning
+from one page would remove the others. A resumed WATCH starts no snapshot, so a guarded read a host
+captured with `captureReconciliation` before it is not invalidated by the resume, exactly as on a
+live watch; only a snapshot invalidates one. Native objects carry whatever the proxy returns,
+including Secret values and machinery fields; there is no projection, redaction or `seq`. Never fall
+back to native access after a gateway refuses a view.
 
 A store fed by `connectNativeWatch` can be edited like any other. `nativeObjectURL(proxy, { ...scope,
 namespace, name })` addresses one member under the same proxy and collection, for a conditional JSON

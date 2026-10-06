@@ -4,7 +4,7 @@
 
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { type KRMObject, LiveResourceStore } from "../src/index.ts";
+import { applyStreamEvent, connectNativeWatch, type KRMObject, LiveResourceStore } from "../src/index.ts";
 
 const { nativeEditor, NativeRequestError } = await import("../../../examples/native-editor/editor.ts");
 
@@ -357,4 +357,88 @@ test("an accepted write is confirmed by its echo, or by a guarded read when no e
       ["PATCH", "2"],
     ],
   );
+});
+
+test("saving is refused while a native watch recovers from expiry, and works again once a resume is live", async () => {
+  // The watch side: a scripted proxy for LIST and WATCH, driving the real connector into the store.
+  const encoder = new TextEncoder();
+  const open = () => {
+    let controller!: ReadableStreamDefaultController<Uint8Array>;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        start: (c) => {
+          controller = c;
+        },
+      }),
+    );
+    return {
+      response,
+      push: (text: string) => controller.enqueue(encoder.encode(text)),
+      end: () => controller.close(),
+    };
+  };
+  const frame = (type: string, object: unknown) => `${JSON.stringify({ type, object })}\n`;
+  const list = (rv: string, ...items: KRMObject[]) =>
+    Response.json({ kind: "ConfigMapList", apiVersion: "v1", metadata: { resourceVersion: rv }, items });
+  const watches = [open(), open(), open()];
+  let relist!: () => void;
+  const relisted = new Promise<void>((resolve) => {
+    relist = resolve;
+  });
+  const watchRequests: string[] = [];
+  const steps: (() => Response | Promise<Response>)[] = [
+    () => list("1", native("1")),
+    () => watches[0]!.response,
+    // The replacement snapshot after the expiry is held, so the test can save while it is incomplete.
+    async () => {
+      await relisted;
+      return list("3", native("3", "base"));
+    },
+    () => watches[1]!.response,
+    () => watches[2]!.response,
+  ];
+  const watchFetch = (async (input: RequestInfo | URL) => {
+    watchRequests.push(String(input));
+    return steps[watchRequests.length - 1]!();
+  }) as typeof fetch;
+  const store = new LiveResourceStore();
+  const connection = connectNativeWatch(
+    "/k8s/api/v1/namespaces/app/configmaps?fieldSelector=metadata.name%3Dsettings",
+    (event) => applyStreamEvent(store, event),
+    { fetch: watchFetch, retryDelayMs: 0 },
+  );
+  const states: string[] = [];
+  connection.subscribe((state) => states.push(state.status));
+  const reached = async (lives: number) => {
+    while (states.filter((s) => s === "live").length < lives) await new Promise((resolve) => setTimeout(resolve, 1));
+  };
+  const live = () => connection.state.status === "live";
+  await reached(1);
+
+  store.setValue("u", ["data", "value"], "mine");
+  const { calls, request } = proxy(() => new Response(null, { status: 200 }));
+  const editor = nativeEditor(store, "u", source, request, live);
+
+  // The history expires: until the replacement snapshot completes, no write is attempted.
+  watches[0]!.push(frame("ERROR", { kind: "Status", code: 410, reason: "Expired", message: "too old" }));
+  watches[0]!.end();
+  while (watchRequests.length < 3) await new Promise((resolve) => setTimeout(resolve, 1));
+  assert.notEqual(connection.state.status, "live");
+  assert.equal(await editor.save(), "recovering");
+  assert.equal(calls.length, 0);
+  relist();
+  await reached(2);
+  assert.deepEqual(store.draft("u").data, { value: "mine" }, "the draft survived the re-list");
+  assert.equal(store.server("u").metadata.resourceVersion, "3");
+
+  // A routine EOF resumes from the checkpoint with no snapshot: the draft is untouched, and the save
+  // goes out once the resumed watch is live, at the version the store holds.
+  watches[1]!.end();
+  await reached(3);
+  assert.equal(watchRequests.length, 5, "no LIST for the resume");
+  assert.equal(new URL(watchRequests[4]!, "http://host").searchParams.get("resourceVersion"), "3");
+  assert.equal(await editor.save(), "saved");
+  assert.deepEqual(calls[0]!.body, { metadata: { uid: "u", resourceVersion: "3" }, data: { value: "mine" } });
+  connection.close();
+  await connection.closed;
 });

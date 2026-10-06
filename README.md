@@ -55,7 +55,7 @@ Start with the resource state and guarantees the page needs; framing is an imple
 
 | Source | What the page receives | Connector |
 |---|---|---|
-| Native through a host proxy | Original authorized resources, with the shared client lifecycle and store | `connectNativeWatch`: LIST, then WATCH, and a fresh LIST on every reconnect; edits are written back through the same proxy |
+| Native through a host proxy | Original authorized resources, with the shared client lifecycle and store | `connectNativeWatch`: LIST, then WATCH; a reconnect resumes the WATCH, and only an expired history lists again; edits are written back through the same proxy |
 | Gateway | Projected, redacted or suppressed views and optional upstream watch sharing | `connectResourceStream`, delivered over SSE |
 
 Native is the straightforward starting point for hosts that already proxy Kubernetes. It delivers
@@ -92,10 +92,11 @@ connection.close();
 
 The host mounts the API server's paths under a base such as `/k8s` and owns credentials, routing and
 which collections a user may read. The connector lists the complete collection, delivers it as a
-snapshot and becomes `live` once the WATCH from the collection's resourceVersion is accepted. Every
-reconnect lists again, and the store prunes only when that snapshot completes. HTTP or in-stream 410
-recovers within the bounded retry budget; 401, 403 and other 4xx are terminal. The connector does not
-paginate: a LIST that returns a continuation token is refused. The
+snapshot and becomes `live` once the WATCH from the collection's resourceVersion is accepted. A
+dropped or ended watch resumes from the last event applied, without a new snapshot, so drafts stay
+and missed changes arrive as events. HTTP or in-stream 410 (expired history) lists again within the
+bounded retry budget, and the store prunes only when that snapshot completes; 401, 403 and other 4xx
+are terminal. The connector does not paginate: a LIST that returns a continuation token is refused. The
 [native viewer example](examples/native-viewer/README.md) runs this against `kubectl proxy`.
 
 ## Watch a gateway view
