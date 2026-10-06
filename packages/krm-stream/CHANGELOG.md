@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.9.0...@configbutler/krm-stream-v0.10.0) (2026-10-06)
+
+
+### Features
+
+* **client:** resume native watches from a consumed checkpoint ([#66](https://github.com/ConfigButler/krm-stream/issues/66)) ([bc8a8fb](https://github.com/ConfigButler/krm-stream/commit/bc8a8fbdbe35cec33cec463bf66bf77d0fd687d3))
+
 ## [0.9.0](https://github.com/ConfigButler/krm-stream/compare/@configbutler/krm-stream-v0.8.0...@configbutler/krm-stream-v0.9.0) (2026-10-05)
 
 
