@@ -230,6 +230,15 @@ func TestGatewayRouteRefusesAndDisconnects(t *testing.T) {
 	if n := backend.watches.Load(); n != 0 {
 		t.Fatalf("a refused session opened %d upstream watches", n)
 	}
+	// The terminal frame is flushed before the handler returns and releases its connection, so
+	// wait for that release; otherwise the forced disconnect below can still count it.
+	deadline := time.Now().Add(5 * time.Second)
+	for openConnections(h.connections, "gateway") != 0 {
+		if time.Now().After(deadline) {
+			t.Fatal("the refused session's connection was never released")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 
 	// The viewer: a projected snapshot. The Secret's value is withheld, and its path is named.
 	res, r = open("v")
@@ -253,7 +262,7 @@ func TestGatewayRouteRefusesAndDisconnects(t *testing.T) {
 	if _, err := r.ReadString(0); err == nil {
 		t.Fatal("the stream survived a forced disconnect")
 	}
-	deadline := time.Now().Add(5 * time.Second)
+	deadline = time.Now().Add(5 * time.Second)
 	for h.metrics.Snapshot().Gauges["gateway.full.upstream_watches_active"] != 0 {
 		if time.Now().After(deadline) {
 			t.Fatal("the upstream watch was not stopped after its stream ended")
@@ -264,4 +273,17 @@ func TestGatewayRouteRefusesAndDisconnects(t *testing.T) {
 	if c["gateway.full.authorizer_refusals"] != 1 || c["sessions.gateway.refused"] != 1 || c["gateway.full.upstream_watch_calls"] != 1 {
 		t.Fatalf("counters: %v", c)
 	}
+}
+
+// openConnections reports how many connections of kind are still registered.
+func openConnections(c *connections, kind string) int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, conn := range c.conns {
+		if conn.kind == kind {
+			n++
+		}
+	}
+	return n
 }
